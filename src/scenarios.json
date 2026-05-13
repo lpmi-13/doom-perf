@@ -1,0 +1,32 @@
+[
+  {
+    "id": "cpu",
+    "title": "CPU Thread Storm",
+    "subtitle": "Run queue pressure and hot cores, rendered as dense columns of light.",
+    "resource": "CPU"
+  },
+  {
+    "id": "memory",
+    "title": "Memory Reservoir",
+    "subtitle": "High anonymous memory, low available memory, and swap flow in the drain.",
+    "resource": "Memory"
+  },
+  {
+    "id": "storage",
+    "title": "Storage Engine Room",
+    "subtitle": "Busy block device, deep queues, and wide latency ripples around the rotor.",
+    "resource": "Storage"
+  },
+  {
+    "id": "network",
+    "title": "Network Conduits",
+    "subtitle": "Near-line-rate packet flow with drops and retransmit sparks.",
+    "resource": "Network"
+  },
+  {
+    "id": "local",
+    "title": "Local System Feed",
+    "subtitle": "Live Linux stats and process samples from /proc on this machine.",
+    "resource": "Live"
+  }
+]

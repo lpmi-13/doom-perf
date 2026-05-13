@@ -1,0 +1,485 @@
+:root {
+  color-scheme: dark;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #09080c;
+  color: #f2e7cc;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  overflow: hidden;
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+    #09080c;
+  background-size: 6px 6px;
+}
+
+button {
+  font: inherit;
+}
+
+.shell {
+  min-height: 100vh;
+}
+
+.splash,
+.guide {
+  display: grid;
+  min-height: 100vh;
+  align-content: center;
+  gap: 24px;
+  padding: clamp(18px, 4vw, 52px);
+}
+
+.splash__copy,
+.guide__copy {
+  max-width: 850px;
+}
+
+.eyebrow {
+  margin: 0 0 8px;
+  color: #d7bd52;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin-top: 0;
+}
+
+h1 {
+  margin-bottom: 10px;
+  font-size: clamp(48px, 9vw, 116px);
+  line-height: 0.86;
+  letter-spacing: 0;
+  text-transform: uppercase;
+  text-shadow: 5px 5px 0 #211b22;
+}
+
+.lede {
+  max-width: 710px;
+  color: #cdbf9e;
+  font-size: clamp(17px, 2vw, 22px);
+  line-height: 1.4;
+}
+
+.scenarioGrid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(160px, 1fr));
+  gap: 12px;
+}
+
+.scenarioCard {
+  display: grid;
+  min-height: 188px;
+  align-content: start;
+  gap: 12px;
+  padding: 18px;
+  border: 1px solid #574838;
+  border-radius: 4px;
+  background: linear-gradient(160deg, rgba(59, 48, 52, 0.94), rgba(23, 20, 30, 0.98));
+  color: #f2e7cc;
+  text-align: left;
+  cursor: pointer;
+  image-rendering: pixelated;
+}
+
+.scenarioCard:hover,
+.scenarioCard:focus-visible {
+  border-color: #ffdf77;
+  outline: 2px solid rgba(255, 223, 119, 0.22);
+}
+
+.scenarioCard span {
+  width: max-content;
+  padding: 3px 7px;
+  border: 1px solid #d17838;
+  color: #ffdf77;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.scenarioCard strong {
+  font-size: 20px;
+  line-height: 1.05;
+}
+
+.scenarioCard small {
+  color: #bbae8f;
+  line-height: 1.4;
+}
+
+.sseNote {
+  max-width: 780px;
+  color: #bbae8f;
+  line-height: 1.5;
+}
+
+.keyGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(190px, 1fr));
+  gap: 12px;
+  max-width: 1080px;
+}
+
+.keyCard {
+  display: grid;
+  grid-template-columns: repeat(4, max-content);
+  align-content: start;
+  gap: 10px;
+  min-height: 148px;
+  padding: 18px;
+  border: 1px solid #574838;
+  border-radius: 4px;
+  background: linear-gradient(160deg, rgba(33, 27, 34, 0.98), rgba(13, 11, 16, 0.98));
+}
+
+.keyCard strong,
+.keyCard span {
+  grid-column: 1 / -1;
+}
+
+.keyCard strong {
+  color: #f2e7cc;
+  font-size: 18px;
+}
+
+.keyCard span {
+  color: #bbae8f;
+  line-height: 1.4;
+}
+
+kbd {
+  display: inline-grid;
+  min-width: 38px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid #d17838;
+  border-bottom-width: 3px;
+  border-radius: 4px;
+  background: #17141e;
+  color: #ffdf77;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 14px;
+}
+
+.guideActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.primaryButton,
+.secondaryButton {
+  min-height: 44px;
+  padding: 0 18px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.primaryButton {
+  border: 1px solid #ffdf77;
+  background: #d17838;
+  color: #09080c;
+  font-weight: 800;
+}
+
+.secondaryButton {
+  border: 1px solid #6d5b50;
+  background: #211b22;
+  color: #f2e7cc;
+}
+
+.experience {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 330px;
+  grid-template-rows: minmax(0, 1fr) 86px;
+  height: 100vh;
+}
+
+.viewport {
+  width: 100%;
+  height: 100%;
+  background: #09080c;
+  image-rendering: crisp-edges;
+  image-rendering: pixelated;
+}
+
+.panel {
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  gap: 16px;
+  min-width: 0;
+  padding: 18px;
+  border-left: 1px solid #3b3034;
+  background: #141116;
+  overflow: hidden;
+}
+
+.panel__top {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+h2 {
+  margin-bottom: 0;
+  font-size: 24px;
+  line-height: 1.1;
+}
+
+.roomHint {
+  margin: 6px 0 0;
+  color: #9b8d7a;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.iconButton {
+  width: 48px;
+  height: 36px;
+  border: 1px solid #6d5b50;
+  border-radius: 4px;
+  background: #211b22;
+  color: #ffdf77;
+  cursor: pointer;
+}
+
+.bars {
+  display: grid;
+  gap: 12px;
+}
+
+.metric {
+  display: grid;
+  gap: 5px;
+}
+
+.metric__head {
+  display: flex;
+  justify-content: space-between;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: #cdbf9e;
+}
+
+.meter {
+  height: 9px;
+  border: 1px solid #3b3034;
+  background: #09080c;
+}
+
+.meter span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #4aa0c8, #7dbd55, #d7bd52, #d17838, #c74438);
+}
+
+.meter--sat {
+  height: 5px;
+}
+
+.meter--sat span {
+  background: #ffdf77;
+}
+
+.readout {
+  border: 1px solid #3b3034;
+  border-radius: 4px;
+  padding: 12px;
+  background: #0d0b10;
+}
+
+dl {
+  display: grid;
+  gap: 9px;
+  margin: 0;
+}
+
+dl div {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+dt {
+  color: #9b8d7a;
+}
+
+dd {
+  margin: 0;
+  color: #f2e7cc;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.processes {
+  min-height: 0;
+  overflow: auto;
+}
+
+.processes h3 {
+  margin-bottom: 10px;
+  color: #d7bd52;
+  font-size: 13px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  text-transform: uppercase;
+}
+
+.process {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  margin-bottom: 7px;
+  padding: 8px;
+  border: 1px solid #2e2730;
+  background: #17141e;
+  overflow: hidden;
+}
+
+.process span,
+.process b {
+  position: relative;
+  z-index: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.process b {
+  color: #9b8d7a;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.process i {
+  position: absolute;
+  inset: auto auto 0 0;
+  height: 3px;
+  background: #d17838;
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.controls span {
+  padding: 4px 6px;
+  border: 1px solid #3b3034;
+  color: #9b8d7a;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+}
+
+.statusBar {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 90px repeat(5, minmax(90px, 1fr));
+  align-items: center;
+  border-top: 3px solid #574838;
+  background: linear-gradient(#211b22, #141116);
+}
+
+.statusBar > div {
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  height: 100%;
+  border-right: 1px solid #3b3034;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.statusBar span {
+  color: #9b8d7a;
+  font-size: 11px;
+}
+
+.statusBar b {
+  color: #f2e7cc;
+  font-size: 20px;
+}
+
+.face {
+  color: #7dbd55;
+  font-weight: 900;
+  font-size: 24px;
+}
+
+.face--warn {
+  color: #d7bd52;
+}
+
+.face--danger {
+  color: #c74438;
+}
+
+.is-hidden {
+  display: none;
+}
+
+.error {
+  color: #ffb2a7;
+}
+
+@media (max-width: 1050px) {
+  body {
+    overflow: auto;
+  }
+
+  .scenarioGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .experience {
+    grid-template-columns: 1fr;
+    grid-template-rows: 58vh auto auto;
+    min-height: 100vh;
+    height: auto;
+  }
+
+  .panel {
+    border-top: 1px solid #3b3034;
+    border-left: 0;
+  }
+
+  .statusBar {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 620px) {
+  .splash,
+  .guide {
+    align-content: start;
+  }
+
+  .scenarioGrid,
+  .keyGrid {
+    grid-template-columns: 1fr;
+  }
+
+  h1 {
+    font-size: 52px;
+  }
+
+  .statusBar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
