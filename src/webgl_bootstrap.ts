@@ -1,16 +1,13 @@
 import { renderGame } from "./engine-webgl/render/renderGame";
-import { renderHudOverlay } from "./engine-webgl/render/renderHudOverlay";
 import { loadWadFromUrl } from "./engine-webgl/wad/loadWadFromBlob";
 import type { Wad } from "./engine-webgl/interfaces/Wad";
 import { S_Init } from "./s_sound";
 import { S_LoadSoundRegistry } from "./s_sound_registry";
-import { createTelemetryClient, resolveTelemetrySource } from "./telemetry";
 
 export interface WebglBootstrapOptions {
   wadUrl: string;
   canvas: HTMLCanvasElement;
   mapName?: string;
-  telemetrySource?: string | null;
   onStatus?: (message: string) => void;
 }
 
@@ -83,7 +80,6 @@ export const bootstrapWebgl = async ({
   wadUrl,
   canvas,
   mapName,
-  telemetrySource = resolveTelemetrySource(),
   onStatus,
 }: WebglBootstrapOptions): Promise<void> => {
   onStatus?.("Loading WAD...");
@@ -131,16 +127,7 @@ export const bootstrapWebgl = async ({
   });
 
   onStatus?.(`Rendering ${activeMapName}...`);
-  const hudOverlay = renderHudOverlay(wad, canvas);
-  if (telemetrySource) {
-    const telemetryClient = createTelemetryClient(telemetrySource, (telemetry) => {
-      hudOverlay?.update({ telemetry });
-    });
-    window.addEventListener("beforeunload", () => telemetryClient.close(), { once: true });
-  }
-  const engine = renderGame(canvas, {
-    onHudUpdate: (state) => hudOverlay?.update(state),
-  });
+  const engine = renderGame(canvas);
   engine.loadWad(wad, map);
   onStatus?.("WebGL renderer started.");
 };

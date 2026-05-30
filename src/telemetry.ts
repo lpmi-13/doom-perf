@@ -21,7 +21,7 @@ export interface CpuTelemetry extends ResourceTelemetry {
   cores: CpuCoreTelemetry[];
 }
 
-export interface HudTelemetry {
+export interface TelemetrySnapshot {
   status: TelemetryStatus;
   source: string;
   updatedAt: number;
@@ -176,7 +176,7 @@ const normalizeTelemetry = (
   payload: unknown,
   source: string,
   status: TelemetryStatus = "live"
-): HudTelemetry | undefined => {
+): TelemetrySnapshot | undefined => {
   const obj = unwrapPayload(payload);
   if (!obj) {
     return undefined;
@@ -216,7 +216,7 @@ const normalizeTelemetry = (
   };
 };
 
-const emptyTelemetry = (source: string, status: TelemetryStatus): HudTelemetry => ({
+const emptyTelemetry = (source: string, status: TelemetryStatus): TelemetrySnapshot => ({
   status,
   source,
   updatedAt: Date.now(),
@@ -236,12 +236,21 @@ const parseMessage = (data: string): unknown | undefined => {
   }
 };
 
+const isLocalHost = (hostname: string) =>
+  hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+
+const isAllowedLocalTelemetryEndpoint = (url: URL) =>
+  isLocalHost(window.location.hostname) &&
+  (url.hostname === "localhost" || url.hostname === "127.0.0.1") &&
+  url.protocol === "http:" &&
+  url.port === "9999" &&
+  url.pathname === "/telemetry";
+
 export const resolveTelemetrySource = (): string | null => {
   const params = new URLSearchParams(window.location.search);
   const raw = params.get("telemetry") ?? params.get("telemetryUrl");
   if (!raw) {
-    const localHosts = new Set(["localhost", "127.0.0.1", "::1"]);
-    return localHosts.has(window.location.hostname) ? "http://127.0.0.1:9999/telemetry" : "/telemetry";
+    return isLocalHost(window.location.hostname) ? "http://127.0.0.1:9999/telemetry" : "/telemetry";
   }
   const value = raw.trim();
   if (!value || /^(0|false|off|none|disabled)$/i.test(value)) {
@@ -250,21 +259,39 @@ export const resolveTelemetrySource = (): string | null => {
   if (/^(same-origin|sameorigin|relative)$/i.test(value)) {
     return "/telemetry";
   }
-  return value;
+
+  let url: URL;
+  try {
+    url = new URL(value, window.location.href);
+  } catch {
+    console.warn(`Ignoring invalid telemetry source: ${value}`);
+    return null;
+  }
+
+  if (url.origin === window.location.origin) {
+    return `${url.pathname}${url.search}${url.hash}`;
+  }
+
+  if (isAllowedLocalTelemetryEndpoint(url)) {
+    return url.href;
+  }
+
+  console.warn(`Ignoring disallowed telemetry source: ${value}`);
+  return null;
 };
 
 export const createTelemetryClient = (
   source: string | null,
-  onTelemetry: (telemetry: HudTelemetry) => void
+  onTelemetry: (telemetry: TelemetrySnapshot) => void
 ): TelemetryClient => {
   if (!source) {
     onTelemetry(emptyTelemetry("disabled", "disabled"));
     return { close: () => undefined };
   }
 
-  let lastTelemetry: HudTelemetry | undefined;
+  let lastTelemetry: TelemetrySnapshot | undefined;
 
-  const publish = (telemetry: HudTelemetry) => {
+  const publish = (telemetry: TelemetrySnapshot) => {
     lastTelemetry = telemetry;
     onTelemetry(telemetry);
   };
@@ -374,7 +401,7 @@ const terminalTitle: Record<TerminalSign, string> = {
   load: "LOAD AVERAGE — 1m / 5m / 15m",
 };
 
-const renderTerminal = (sign: TerminalSign, telemetry: HudTelemetry): string => {
+const renderTerminal = (sign: TerminalSign, telemetry: TelemetrySnapshot): string => {
   if (sign === "cores") return formatCores(telemetry.cpu);
   if (sign === "runqueue") return formatRunQueue(telemetry.cpu);
   return formatUptime(telemetry.cpu);
@@ -445,14 +472,14 @@ export const createTerminalOverlay = () => {
 
   return {
     isOpen: () => current !== null,
-    open(sign: TerminalSign, telemetry: HudTelemetry) {
+    open(sign: TerminalSign, telemetry: TelemetrySnapshot) {
       current = sign;
       bar.textContent = terminalTitle[sign];
       body.textContent = renderTerminal(sign, telemetry);
       panel.style.display = "flex";
       requestAnimationFrame(resizeTerminalText);
     },
-    update(telemetry: HudTelemetry) {
+    update(telemetry: TelemetrySnapshot) {
       if (current) {
         body.textContent = renderTerminal(current, telemetry);
       }

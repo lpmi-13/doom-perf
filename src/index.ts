@@ -2,7 +2,7 @@ import { bootstrapEngine } from "./engine_bootstrap";
 import { D_DoomMain } from "./d_main";
 import { bootstrapWebgl } from "./webgl_bootstrap";
 import { createTelemetryClient, createTerminalOverlay, resolveTelemetrySource } from "./telemetry";
-import type { HudTelemetry, TerminalSign } from "./telemetry";
+import type { TelemetrySnapshot, TerminalSign } from "./telemetry";
 
 // World positions (CPU/north wing) of the wall terminal screens, matching
 // build-doomperf-map.mjs. Pressing USE/space within range opens that terminal.
@@ -84,7 +84,7 @@ const getEngine = () =>
 
 const clampRatio = (value: number) => Math.max(0, Math.min(1, value));
 
-const pushTelemetryToEngine = (engine: DoomPerfEngine | undefined, telemetry: HudTelemetry) => {
+const pushTelemetryToEngine = (engine: DoomPerfEngine | undefined, telemetry: TelemetrySnapshot) => {
   const displayCores = telemetry.cpu.cores.filter(({ id }) => id < doomPerfCpuCoreCapacity);
   const lastDisplayCore = displayCores.reduce((largest, { id }) => Math.max(largest, id), -1);
   engine?._DoomPerf_SetCpuCoreCount?.(lastDisplayCore + 1);
@@ -100,8 +100,8 @@ const pushTelemetryToEngine = (engine: DoomPerfEngine | undefined, telemetry: Hu
 
 const scenarioTelemetry = (
   engine: DoomPerfEngine | undefined,
-  liveTelemetry: HudTelemetry | undefined
-): HudTelemetry | undefined => {
+  liveTelemetry: TelemetrySnapshot | undefined
+): TelemetrySnapshot | undefined => {
   const mode = engine?._DoomPerf_GetSimMode?.() ?? 0;
   if (mode !== 1 && mode !== 2) {
     return undefined;
@@ -149,7 +149,6 @@ const start = async () => {
     await bootstrapWebgl({
       wadUrl,
       canvas,
-      telemetrySource,
       onStatus: (message) => console.log(message),
     });
     return;
@@ -158,8 +157,8 @@ const start = async () => {
   if (engineResponse.ok) {
     attachAudioUnlock();
     const terminal = createTerminalOverlay();
-    let lastLiveTelemetry: HudTelemetry | undefined;
-    let lastEffectiveTelemetry: HudTelemetry | undefined;
+    let lastLiveTelemetry: TelemetrySnapshot | undefined;
+    let lastEffectiveTelemetry: TelemetrySnapshot | undefined;
 
     const refreshEffectiveTelemetry = () => {
       const engine = getEngine();

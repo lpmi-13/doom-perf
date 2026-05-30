@@ -93,30 +93,7 @@ const weaponAmmo: Record<WeaponSlot, AmmoType | null> = {
   7: null,
 };
 
-const weaponSpritesBySlot: Record<WeaponSlot, string> = {
-  1: 'PISGA0',
-  2: 'SHTGA0',
-  3: 'CHGGA0',
-  4: 'LAUNA0',
-  5: 'PLSGA0',
-  6: 'BFGGA0',
-  7: 'SAWGA0',
-};
-
-export const renderGame = (canvas: HTMLCanvasElement, options: { onHudUpdate?: (state: {
-  ammo: number;
-  health: number;
-  armor: number;
-  keys: Array<string>;
-  facePatchName?: string;
-  weaponSpriteName?: string;
-  ammoCounts?: {
-    bullets: number;
-    shells: number;
-    rockets: number;
-    cells: number;
-  };
-}) => void } = {}) => {
+export const renderGame = (canvas: HTMLCanvasElement) => {
   const gl = createContext(canvas, {}, [
     'EXT_frag_depth'
   ]);
@@ -182,8 +159,6 @@ export const renderGame = (canvas: HTMLCanvasElement, options: { onHudUpdate?: (
   const pressedKeys = new Set<string>();
   const collectedThings = new Set<Thing>();
   const destroyedThings = new Set<Thing>();
-  let lastMoveTime = -Infinity;
-  let lastPlayerHitTime = -Infinity;
   let lastEnemyAttackTime = 0;
   const playerState = {
     health: 100,
@@ -420,10 +395,6 @@ export const renderGame = (canvas: HTMLCanvasElement, options: { onHudUpdate?: (
       moveY += rightY * moveAmount;
     }
 
-    if (moveX !== 0 || moveY !== 0) {
-      lastMoveTime = performance.now();
-    }
-
     const nextX = playerMapPos.x + moveX;
     const nextY = playerMapPos.y + moveY;
 
@@ -535,7 +506,6 @@ export const renderGame = (canvas: HTMLCanvasElement, options: { onHudUpdate?: (
       if (!distance || distance <= enemyStopDistance) {
         if (state && state.health > 0 && now - lastEnemyAttackTime > 800) {
           playerState.health = Math.max(0, playerState.health - 5);
-          lastPlayerHitTime = now;
           lastEnemyAttackTime = now;
         }
         return;
@@ -690,32 +660,6 @@ export const renderGame = (canvas: HTMLCanvasElement, options: { onHudUpdate?: (
       applyPickup(thingObj, thingType);
       collectedThings.add(thingObj);
       playSound(pickupSoundId, playerSoundOrigin);
-    });
-  };
-
-  const updateHud = () => {
-    const ammoType = weaponAmmo[playerState.activeWeapon];
-    const ammo = ammoType ? playerState.ammo[ammoType] : 0;
-    const now = performance.now();
-    let facePatchName = "STFST00";
-    if (now - lastPlayerHitTime < 500) {
-      facePatchName = "STFST02";
-    } else if (now - lastMoveTime < 300) {
-      facePatchName = "STFST01";
-    }
-    options.onHudUpdate?.({
-      ammo,
-      health: playerState.health,
-      armor: playerState.armor,
-      keys: Array.from(playerState.keys),
-      facePatchName,
-      weaponSpriteName: weaponSpritesBySlot[playerState.activeWeapon],
-      ammoCounts: {
-        bullets: playerState.ammo.bullets,
-        shells: playerState.ammo.shells,
-        rockets: playerState.ammo.rockets,
-        cells: playerState.ammo.cells,
-      },
     });
   };
 
@@ -992,8 +936,6 @@ export const renderGame = (canvas: HTMLCanvasElement, options: { onHudUpdate?: (
     playerState.keys.clear();
     collectedThings.clear();
     destroyedThings.clear();
-    lastMoveTime = -Infinity;
-    lastPlayerHitTime = -Infinity;
     lastEnemyAttackTime = 0;
 
     unbindControls = setupControls();
@@ -1209,7 +1151,6 @@ export const renderGame = (canvas: HTMLCanvasElement, options: { onHudUpdate?: (
     updatePlayerMovement(dt);
     updatePickups();
     updateEnemies(dt);
-    updateHud();
   
     if (wad && map) {
       drawScene();
