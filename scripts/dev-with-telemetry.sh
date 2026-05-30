@@ -11,6 +11,7 @@ telemetry_pid=$!
   --loader:.frag=text \
   --outdir=public/dist \
   --servedir=public \
+  --serve=127.0.0.1:8000 \
   --watch=forever &
 web_pid=$!
 

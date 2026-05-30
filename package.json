@@ -6,12 +6,12 @@
     "build:map": "node scripts/build-doomperf-map.mjs",
     "build": "esbuild src/index.ts --bundle --sourcemap --loader:.vert=text --loader:.frag=text --outdir=public/dist",
     "build:engine": "bash scripts/build-doom-wasm.sh",
-    "dev": "esbuild src/index.ts --bundle --sourcemap --loader:.vert=text --loader:.frag=text --outdir=public/dist --servedir=public --watch",
+    "dev": "esbuild src/index.ts --bundle --sourcemap --loader:.vert=text --loader:.frag=text --outdir=public/dist --servedir=public --serve=127.0.0.1:8000 --watch",
     "dev:telemetry": "bash scripts/dev-with-telemetry.sh"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",
-    "esbuild": "^0.20.2",
+    "esbuild": "^0.25.12",
     "typescript": "^5.4.0"
   },
   "dependencies": {
