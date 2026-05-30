@@ -54,8 +54,9 @@ const doomPerfMapWad = {
 const doomPerfCpuCoreCapacity = 64;
 console.log(`Loading WAD from ${wadUrl}.`);
 
-const engineScriptUrl = "/engine/doom.js";
-const engineWasmUrl = "/engine/doom.wasm";
+const engineAssetVersion = "sim-terminal-20260530";
+const engineScriptUrl = `/engine/doom.js?v=${engineAssetVersion}`;
+const engineWasmUrl = `/engine/doom.wasm?v=${engineAssetVersion}`;
 
 type DoomPerfEngine = {
   _DoomPerf_SetCpuCoreCount?: (count: number) => void;
