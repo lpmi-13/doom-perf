@@ -152,27 +152,31 @@ follows the same rootfs-image pattern as the `use-practice` playground:
   and `/healthz` to the local Go telemetry service on `127.0.0.1:9999`.
 - systemd starts `doomperf-telemetry`, `nginx`, and a bootstrap readiness check.
 - `playground/iximiuz/manifest.yaml` exposes a terminal tab and a Doom Perf
-  `http-port` tab on port `8080`.
+  `http-port` tab on port `8080`. The tab serves a launcher at `/`; the game
+  runs at `/game/` so it can be opened in a separate browser tab and receive
+  direct keyboard input outside the iximiuz iframe.
 
 Build and publish the rootfs image from the repository root:
 
 ```bash
-docker build -f playground/iximiuz/Dockerfile -t ghcr.io/lpmi-13/doom-perf-rootfs:v1 .
-docker push ghcr.io/lpmi-13/doom-perf-rootfs:v1
+docker build -f playground/iximiuz/Dockerfile -t ghcr.io/lpmi-13/doom-perf-rootfs:vTAG .
+docker push ghcr.io/lpmi-13/doom-perf-rootfs:vTAG
 ```
 
 Then publish or start the playground with `playground/iximiuz/manifest.yaml`.
-The Doom Perf tab should open through the iximiuz-generated HTTPS domain, and
-the browser should connect to telemetry using the same origin at `/telemetry`.
+The Doom Perf tab should open through the iximiuz-generated HTTPS domain. Click
+`Open Game` from that tab to launch `/game/` in a separate browser tab; the
+browser should connect to telemetry using the same origin at `/telemetry`.
 
 ## Architecture
 
 ```text
 Browser
   public/index.html
-    -> public/dist/index.js
-       -> patched Doom WASM engine
-       -> Doom Perf PWAD
+    -> public/game/index.html
+       -> public/dist/index.js
+          -> patched Doom WASM engine
+          -> Doom Perf PWAD
        -> telemetry EventSource
 
 Local telemetry service

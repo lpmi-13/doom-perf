@@ -16,6 +16,7 @@ done
 
 for asset in \
   /opt/doom-perf/public/index.html \
+  /opt/doom-perf/public/game/index.html \
   /opt/doom-perf/public/dist/index.js \
   /opt/doom-perf/public/engine/doom.js \
   /opt/doom-perf/public/engine/doom.wasm \

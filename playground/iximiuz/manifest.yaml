@@ -19,13 +19,14 @@ playground:
           welcome: |
             Doom Perf is served from this VM.
 
-            Open the "Doom Perf" tab to play the lab in your browser.
+            Open the "Doom Perf" tab, then click "Open Game" to launch it
+            in a separate browser tab with direct keyboard input.
 
             Useful checks:
               curl -fsS http://127.0.0.1:8080/healthz
               systemctl status doomperf-telemetry nginx
       drives:
-        - source: oci://ghcr.io/lpmi-13/doom-perf-rootfs:v1
+        - source: oci://ghcr.io/lpmi-13/doom-perf-rootfs:v2
           mount: /
           size: 20GiB
       network:
@@ -45,6 +46,7 @@ playground:
       name: Doom Perf
       machine: lab-01
       number: 8080
+      access: public
   initTasks:
     init_lab_01_1:
       name: init_lab_01_1

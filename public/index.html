@@ -4,29 +4,125 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-    <title>Doom Browser Host</title>
+    <title>Doom Perf</title>
     <style>
-      * { margin: 0; padding: 0; }
+      * { box-sizing: border-box; }
       html, body {
         width: 100%;
         height: 100%;
-        background: #000;
-        overflow: hidden;
+        margin: 0;
+        background: #050505;
+        color: #f4efe8;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       }
-      canvas#canvas {
-        display: block;
-        width: 100%;
-        height: 100%;
-        image-rendering: pixelated;
-        image-rendering: crisp-edges;
-        object-fit: contain;
-        background: #000;
+      body {
+        min-height: 100%;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        background:
+          linear-gradient(90deg, rgba(5, 5, 5, 0.9), rgba(5, 5, 5, 0.54)),
+          url("/assets/menu-bg.jpg") center / cover no-repeat;
+      }
+      main {
+        width: min(680px, 100%);
+        padding: 28px;
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        background: rgba(7, 8, 9, 0.82);
+        box-shadow: 0 20px 80px rgba(0, 0, 0, 0.45);
+      }
+      h1 {
+        margin: 0 0 10px;
+        font-size: 4rem;
+        line-height: 0.95;
+        letter-spacing: 0;
+        text-transform: uppercase;
+      }
+      p {
+        max-width: 54ch;
+        margin: 0 0 22px;
+        color: #d3cabd;
+        font-size: 1rem;
+        line-height: 1.55;
+      }
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        align-items: center;
+      }
+      a.button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 46px;
+        padding: 0 18px;
+        border: 1px solid #f24b2f;
+        background: #c9281d;
+        color: #fff7ef;
+        text-decoration: none;
+        font-weight: 700;
+        text-transform: uppercase;
+      }
+      a.button:focus-visible {
+        outline: 3px solid #ffcc5c;
+        outline-offset: 3px;
+      }
+      .note {
+        margin: 0;
+        color: #aaa095;
+        font-size: 0.9rem;
+      }
+      @media (max-width: 540px) {
+        body {
+          padding: 16px;
+        }
+        main {
+          padding: 22px;
+        }
+        h1 {
+          font-size: 2.4rem;
+        }
+        .actions {
+          align-items: stretch;
+          flex-direction: column;
+        }
+        a.button {
+          width: 100%;
+        }
       }
     </style>
+    <script>
+      const gamePath = "/game/" + window.location.search + window.location.hash;
+      let isTopLevel = false;
+      try {
+        isTopLevel = window.top === window.self;
+      } catch {
+        isTopLevel = false;
+      }
+      if (isTopLevel) {
+        window.location.replace(gamePath);
+      } else {
+        window.addEventListener("DOMContentLoaded", () => {
+          const openGame = document.getElementById("open-game");
+          if (openGame) {
+            openGame.href = gamePath;
+          }
+        });
+      }
+    </script>
   </head>
   <body>
-    <canvas id="canvas"></canvas>
-    <audio id="audio" preload="auto"></audio>
-    <script type="module" src="/dist/index.js?v=terminal-panel-20260530"></script>
+    <main>
+      <h1>Doom Perf</h1>
+      <p>
+        Open the lab in a separate browser tab so keyboard input goes directly
+        to the game instead of the embedded playground frame.
+      </p>
+      <div class="actions">
+        <a id="open-game" class="button" href="/game/" target="_blank" rel="noreferrer">Open Game</a>
+        <p class="note">Return to the playground tab for the shell.</p>
+      </div>
+    </main>
   </body>
 </html>

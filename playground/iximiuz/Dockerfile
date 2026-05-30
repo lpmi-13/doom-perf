@@ -64,6 +64,7 @@ RUN set -eu; \
   command -v nginx >/dev/null; \
   command -v doomperf-telemetry >/dev/null; \
   test -f /opt/doom-perf/public/index.html; \
+  test -f /opt/doom-perf/public/game/index.html; \
   test -f /opt/doom-perf/public/dist/index.js; \
   test -f /opt/doom-perf/public/engine/doom.js; \
   test -f /opt/doom-perf/public/engine/doom.wasm; \
