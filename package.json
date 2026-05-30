@@ -1,6 +1,6 @@
 {
-  "name": "java-doom-cli",
-  "private": true,
+  "name": "doom-perf",
+  "private": false,
   "type": "module",
   "scripts": {
     "build:map": "node scripts/build-doomperf-map.mjs",
