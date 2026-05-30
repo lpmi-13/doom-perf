@@ -1,0 +1,32 @@
+--- a/d_main.c
++++ b/d_main.c
+@@ -1021,8 +1021,8 @@ void D_DoomMain (void)
+     printf ("W_Init: Init WADfiles.\n");
+     W_InitMultipleFiles (wadfiles);
+     
+-
+-    // Check for -file in shareware
++    // Doom Perf supplies its authored diagnostic map as a project PWAD, so
++    // keep the normal fake-registered IWAD check but allow -file in shareware.
+     if (modifiedgame)
+     {
+ 	// These are the lumps that will be checked in IWAD,
+@@ -1034,10 +1034,6 @@ void D_DoomMain (void)
+ 	};
+ 	int i;
+ 	
+-	if ( gamemode == shareware)
+-	    I_Error("\nYou cannot -file with the shareware "
+-		    "version. Register!");
+-
+	// Check for fake IWAD with right name,
+	// but w/o all the lumps of the registered version. 
+	if (gamemode == registered)
+@@ -1057,7 +1053,7 @@ void D_DoomMain (void)
+ 	    "===========================================================================\n"
+ 	    );
+-	getchar ();
++	// Doom Perf: do not turn the modified-game pause into a browser input prompt.
+     }
+ 	
+ 

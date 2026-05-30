@@ -1,0 +1,40 @@
+--- a/g_game.c
++++ b/g_game.c
+@@ -236,7 +236,6 @@
+ // 
+ void G_BuildTiccmd (ticcmd_t* cmd) 
+ { 
+-    int		i; 
+     boolean	strafe;
+     boolean	bstrafe; 
+     int		speed;
+@@ -327,10 +326,9 @@
+     // buttons
+     cmd->chatchar = HU_dequeueChatChar(); 
+  
+-    if (gamekeydown[key_fire] || mousebuttons[mousebfire] 
+-	|| joybuttons[joybfire]) 
+-	cmd->buttons |= BT_ATTACK; 
+- 
++    // Doom Perf is an observer space: never turn fire input from Ctrl, mouse,
++    // or joystick into an attack command.
++
+     if (gamekeydown[key_use] || joybuttons[joybuse] ) 
+     { 
+ 	cmd->buttons |= BT_USE;
+@@ -339,15 +336,6 @@
+ 	dclicks = 0;                   
+     } 
+ 
+-    // chainsaw overrides 
+-    for (i=0 ; i<NUMWEAPONS-1 ; i++)        
+-	if (gamekeydown['1'+i]) 
+-	{ 
+-	    cmd->buttons |= BT_CHANGE; 
+-	    cmd->buttons |= i<<BT_WEAPONSHIFT; 
+-	    break; 
+-	}
+-    
+     // mouse
+     if (mousebuttons[mousebforward]) 
+ 	forward += forwardmove[speed];

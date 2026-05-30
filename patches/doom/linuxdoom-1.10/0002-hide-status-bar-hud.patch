@@ -1,0 +1,35 @@
+diff --git a/r_main.c b/r_main.c
+index ad942c7..96d702b 100644
+--- a/r_main.c
++++ b/r_main.c
+@@ -679,6 +679,10 @@ void R_ExecuteSetViewSize (void)
+ 
+     setsizeneeded = false;
+ 
++    // Doom Perf: always render the full 320x200 view so no status bar
++    //  region remains. The HUD is suppressed in ST_Drawer.
++    setblocks = 11;
++
+     if (setblocks == 11)
+     {
+ 	scaledviewwidth = SCREENWIDTH;
+diff --git a/st_stuff.c b/st_stuff.c
+index 16f2e3f..189627e 100644
+--- a/st_stuff.c
++++ b/st_stuff.c
+@@ -1114,11 +1114,10 @@ void ST_Drawer (boolean fullscreen, boolean refresh)
+     // Do red-/gold-shifts from damage/items
+     ST_doPaletteStuff();
+ 
+-    // If just after ST_Start(), refresh all
+-    if (st_firsttime) ST_doRefresh();
+-    // Otherwise, update as little as possible
+-    else ST_diffDraw();
+-
++    // Doom Perf: suppress the status bar HUD entirely (health, armor,
++    //  ammo, face, keys, arms). The view is rendered full screen so no
++    //  status bar region needs repainting. Palette shifts above are kept.
++    return;
+ }
+ 
+ void ST_loadGraphics(void)

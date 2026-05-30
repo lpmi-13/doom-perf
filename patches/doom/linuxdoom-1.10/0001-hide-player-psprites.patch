@@ -1,0 +1,18 @@
+diff --git a/r_things.c b/r_things.c
+index c201fff..6fe744b 100644
+--- a/r_things.c
++++ b/r_things.c
+@@ -979,11 +979,8 @@ void R_DrawMasked (void)
+ 	if (ds->maskedtexturecol)
+ 	    R_RenderMaskedSegRange (ds, ds->x1, ds->x2);
+     
+-    // draw the psprites on top of everything
+-    //  but does not draw on side views
+-    if (!viewangleoffset)		
+-	R_DrawPlayerSprites ();
++    // Keep the player view clear for Doom Perf overlays.
++    //  First-person weapon and muzzle flash psprites are presentation only.
+ }
+ 
+ 
+-

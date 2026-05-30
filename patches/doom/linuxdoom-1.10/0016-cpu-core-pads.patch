@@ -1,0 +1,80 @@
+diff --git a/r_draw.c b/r_draw.c
+--- a/r_draw.c
++++ b/r_draw.c
+@@ -668,6 +668,11 @@
+     return -(yfrac >> FRACBITS);
+ }
+ 
++// World-space centres of the 8 ring pillars (north wing, identity rotation),
++// matching ringOrder in build-doomperf-map.mjs so pad i sits under pillar i.
++static const int doomperf_pad_u[8] = { -96, 0, 96, 96, 96, 0, -96, -96 };
++static const int doomperf_pad_v[8] = { 1024, 1024, 1024, 1120, 1216, 1216, 1216, 1120 };
++
+ static byte
+ R_DoomPerfCpuCorePixel
+ ( fixed_t		xfrac,
+@@ -676,42 +681,33 @@
+ {
+     int			worldx;
+     int			worldy;
+-    int			gridx;
+-    int			gridy;
+-    int			cellx;
+-    int			celly;
++    int			count;
+     int			core;
+-    int			localx;
+-    int			localy;
+-    int			diamond;
++    int			dist;
++    int			util;
+ 
+     worldx = R_DoomPerfCpuWorldX(xfrac);
+     worldy = R_DoomPerfCpuWorldY(yfrac);
+-    gridx = worldx - DOOMPERF_CPU_GRID_X0;
+-    gridy = worldy - DOOMPERF_CPU_GRID_Y0;
+-    if (gridx < 0 || gridy < 0
+-	|| gridx >= DOOMPERF_CPU_GRID_COLUMNS * DOOMPERF_CPU_GRID_CELL_SIZE
+-	|| gridy >= DOOMPERF_CPU_GRID_COLUMNS * DOOMPERF_CPU_GRID_CELL_SIZE)
+-	return background;
+-
+-    cellx = gridx / DOOMPERF_CPU_GRID_CELL_SIZE;
+-    celly = gridy / DOOMPERF_CPU_GRID_CELL_SIZE;
+-    core = celly * DOOMPERF_CPU_GRID_COLUMNS + cellx;
+-    localx = gridx & (DOOMPERF_CPU_GRID_CELL_SIZE - 1);
+-    localy = gridy & (DOOMPERF_CPU_GRID_CELL_SIZE - 1);
+-
+-    if (core >= R_DoomPerfCoreCount())
+-	return background;
+-
+-    // The active core is a bright diamond with a hard metal outline. Colour
+-    // moves from cool blue through yellow to red as utilization rises.
+-    diamond = R_DoomPerfAbs(localx - 15) + R_DoomPerfAbs(localy - 15);
+-    if (diamond <= 10)
+-	return R_DoomPerfCpuColor(R_DoomPerfCorePermille(core));
+-    if (diamond <= 13)
+-	return DOOMPERF_CPU_CORE_FRAME;
+-    if (diamond <= 15)
++    count = R_DoomPerfCoreCount();
++    if (count > 8)
++	count = 8;
++
++    // A glowing pad disc per live core, centred under its ring pillar. The
++    // pillar occludes the centre, so what shows is a coloured base with a
++    // bright rim in the gaps around each column. Colour tracks utilization.
++    for (core = 0; core < count; core++)
++    {
++	dist = R_DoomPerfAbs(worldx - doomperf_pad_u[core])
++	     + R_DoomPerfAbs(worldy - doomperf_pad_v[core]);
++	if (dist > 40)
++	    continue;
++	util = R_DoomPerfCorePermille(core);
++	if (dist >= 34)
++	    return DOOMPERF_CPU_CORE_FRAME;
++	if (dist >= 12)
++	    return R_DoomPerfCpuColor(util);
+ 	return DOOMPERF_CPU_CORE_DARK;
++    }
+     return background;
+ }
+ 

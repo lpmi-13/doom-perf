@@ -1,0 +1,70 @@
+--- a/r_data.c
++++ b/r_data.c
+@@ -603,18 +603,22 @@
+ void R_InitSpriteLumps (void)
+ {
+     int		i;
++    int		stock_sprite_lumps;
+     patch_t	*patch;
+ 	
+     firstspritelump = W_GetNumForName ("S_START") + 1;
+     lastspritelump = W_GetNumForName ("S_END") - 1;
+     
+-    numspritelumps = lastspritelump - firstspritelump + 1;
++    stock_sprite_lumps = lastspritelump - firstspritelump + 1;
++    // Doom Perf PWAD sign sprites replace IWAD names outside the sprite range.
++    // Reserve metadata slots for those appended replacement lumps too.
++    numspritelumps = numlumps - firstspritelump;
+     spritewidth = Z_Malloc (numspritelumps*4, PU_STATIC, 0);
+     spriteoffset = Z_Malloc (numspritelumps*4, PU_STATIC, 0);
+     spritetopoffset = Z_Malloc (numspritelumps*4, PU_STATIC, 0);
+ 	
+-    for (i=0 ; i< numspritelumps ; i++)
++    for (i=0 ; i< stock_sprite_lumps ; i++)
+     {
+ 	if (!(i&63))
+ 	    printf (".");
+ 
+--- a/r_things.c
++++ b/r_things.c
+@@ -101,7 +101,31 @@
+ //
+ // R_InstallSpriteLump
+ // Local function for R_InitSprites.
+ //
++static void R_DoomPerfInitPatchedSpriteLump (int lump)
++{
++    int		index;
++    patch_t	*patch;
++
++    if (lump >= firstspritelump && lump <= lastspritelump)
++	return;
++
++    index = lump - firstspritelump;
++    if (index < 0 || index >= numspritelumps)
++	I_Error ("R_DoomPerfInitPatchedSpriteLump: "
++		 "sprite lump %i is outside metadata range", lump);
++
++    patch = W_CacheLumpNum (lump, PU_CACHE);
++    spritewidth[index] = SHORT(patch->width)<<FRACBITS;
++    spriteoffset[index] = SHORT(patch->leftoffset)<<FRACBITS;
++    spritetopoffset[index] = SHORT(patch->topoffset)<<FRACBITS;
++}
++
++
++//
++// R_InstallSpriteLump
++// Local function for R_InitSprites.
++//
+ void
+ R_InstallSpriteLump
+ ( int		lump,
+@@ -115,6 +140,8 @@
+ 	I_Error("R_InstallSpriteLump: "
+ 		"Bad frame characters in lump %i", lump);
+ 	
++    R_DoomPerfInitPatchedSpriteLump (lump);
++
+     if ((int)frame > maxframe)
+ 	maxframe = frame;
+ 		

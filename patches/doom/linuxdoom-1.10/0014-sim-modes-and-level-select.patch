@@ -1,0 +1,184 @@
+diff --git a/m_menu.c b/m_menu.c
+--- a/m_menu.c
++++ b/m_menu.c
+@@ -230,6 +230,10 @@
+ void M_StopMessage(void);
+ void M_ClearMenus (void);
+ 
++// Doom Perf data-source selection ("level select").
++void M_ChooseMode(int choice);
++void M_DrawMode(void);
++
+ 
+ 
+ 
+@@ -259,6 +263,37 @@
+     0
+ };
+ 
++//
++// Doom Perf DATA-SOURCE ("LEVEL") SELECT
++// Picking an item sets doomperf_sim_mode (read by the CPU room renderer) and
++// starts the lab map. Item names are empty so M_Drawer skips patch lookups;
++// M_DrawMode paints the labels with the small font instead.
++//
++enum
++{
++    mode_live = 0,
++    mode_simutil,
++    mode_simsat,
++    mode_end
++} mode_e;
++
++menuitem_t ModeMenu[]=
++{
++    {1,"",M_ChooseMode,'l'},
++    {1,"",M_ChooseMode,'u'},
++    {1,"",M_ChooseMode,'s'}
++};
++
++menu_t  ModeDef =
++{
++    mode_end,
++    &MainDef,
++    ModeMenu,
++    M_DrawMode,
++    60,96,
++    0
++};
++
+ 
+ //
+ // EPISODE SELECT
+@@ -866,7 +901,26 @@
+ 	M_StartMessage(NEWGAME,NULL,false);
+ 	return;
+     }
+-	
++
++    M_SetupNextMenu(&ModeDef);
++}
++
++//
++// Doom Perf data-source / "level" selection.
++//
++void M_DrawMode(void)
++{
++    M_WriteText(60, 72, "SELECT DATA SOURCE");
++    M_WriteText(ModeDef.x, ModeDef.y + LINEHEIGHT*mode_live, "LIVE STATS");
++    M_WriteText(ModeDef.x, ModeDef.y + LINEHEIGHT*mode_simutil, "SIM: HIGH CPU UTILIZATION");
++    M_WriteText(ModeDef.x, ModeDef.y + LINEHEIGHT*mode_simsat, "SIM: HIGH CPU SATURATION");
++}
++
++void M_ChooseMode(int choice)
++{
++    // 0 = live telemetry, 1 = simulated high utilization,
++    // 2 = simulated high saturation (read by the CPU room renderer).
++    doomperf_sim_mode = choice;
+     G_DeferedInitNew(hurtme,1,1);
+     M_ClearMenus ();
+ }
+diff --git a/r_draw.c b/r_draw.c
+--- a/r_draw.c
++++ b/r_draw.c
+@@ -576,6 +576,47 @@
+ }
+ 
+ 
++// Doom Perf: effective CPU telemetry. doomperf_sim_mode (set by the level-
++// select menu) overrides the live browser telemetry with canned scenarios so
++// the CPU room can be demonstrated without a real workload:
++//   0 = live (browser telemetry)
++//   1 = simulated high utilization (cores pinned near 100%)
++//   2 = simulated high saturation (busy cores + an overloaded run queue)
++static int R_DoomPerfCoreCount (void)
++{
++    if (doomperf_sim_mode != 0)
++	return DOOMPERF_CPU_GRID_COLUMNS;
++    return doomperf_cpu_core_count;
++}
++
++static int R_DoomPerfCorePermille (int core)
++{
++    switch (doomperf_sim_mode)
++    {
++      case 1:
++	return 880 + ((leveltime * 2 + core * 97) % 120);
++      case 2:
++	return 700 + ((leveltime + core * 53) % 200);
++      default:
++	return (core >= 0 && core < doomperf_cpu_core_count)
++	    ? doomperf_cpu_cores[core] : 0;
++    }
++}
++
++static int R_DoomPerfRunQueuePermille (void)
++{
++    switch (doomperf_sim_mode)
++    {
++      case 1:
++	return 150;
++      case 2:
++	return 840 + ((leveltime * 3) % 160);
++      default:
++	return doomperf_cpu_run_queue_pressure;
++    }
++}
++
++
+ // Rising-streak procedural pixel for the eight CPU core pillars. Each pillar
+ // is driven by per-core utilization (in permille). The texture column index
+ // is supplied by r_segs.c so streaks stay locked to the wall surface.
+@@ -594,9 +635,7 @@
+     core_id = doomperf_cpu_column_display - 1;
+     if (core_id < 0 || core_id >= DOOMPERF_CPU_GRID_COLUMNS)
+ 	return DOOMPERF_CPU_CORE_DARK;
+-    util = (core_id < doomperf_cpu_core_count)
+-	? doomperf_cpu_cores[core_id]
+-	: 0;
++    util = R_DoomPerfCorePermille(core_id);
+ 
+     // Density and streak parameters scale with utilization so a busy core
+     // packs more rising particles travelling faster with longer trails.
+@@ -661,14 +700,14 @@
+     localx = gridx & (DOOMPERF_CPU_GRID_CELL_SIZE - 1);
+     localy = gridy & (DOOMPERF_CPU_GRID_CELL_SIZE - 1);
+ 
+-    if (core >= doomperf_cpu_core_count)
++    if (core >= R_DoomPerfCoreCount())
+ 	return background;
+ 
+     // The active core is a bright diamond with a hard metal outline. Colour
+     // moves from cool blue through yellow to red as utilization rises.
+     diamond = R_DoomPerfAbs(localx - 15) + R_DoomPerfAbs(localy - 15);
+     if (diamond <= 10)
+-	return R_DoomPerfCpuColor(doomperf_cpu_cores[core]);
++	return R_DoomPerfCpuColor(R_DoomPerfCorePermille(core));
+     if (diamond <= 13)
+ 	return DOOMPERF_CPU_CORE_FRAME;
+     if (diamond <= 15)
+@@ -689,7 +728,9 @@
+     int			thread;
+     int			pulse;
+     int			active_width;
++    int			pressure;
+ 
++    pressure = R_DoomPerfRunQueuePermille();
+     localx = R_DoomPerfCpuWorldX(xfrac) - DOOMPERF_CPU_RUN_QUEUE_X0;
+     localy = R_DoomPerfCpuWorldY(yfrac) - DOOMPERF_CPU_RUN_QUEUE_Y0;
+     if (localx < 0 || localy < 0
+@@ -711,11 +752,11 @@
+     if (lane_x < 3 || lane_x > 20)
+ 	return DOOMPERF_CPU_CORE_DARK;
+ 
+-    active_width = doomperf_cpu_run_queue_pressure ? 2 + doomperf_cpu_run_queue_pressure / 85 : 0;
++    active_width = pressure ? 2 + pressure / 85 : 0;
+     thread = R_DoomPerfAbs(lane_x - 11);
+-    pulse = (localy - leveltime * (1 + doomperf_cpu_run_queue_pressure / 250) + lane * 17) & 31;
++    pulse = (localy - leveltime * (1 + pressure / 250) + lane * 17) & 31;
+     if (thread <= active_width && pulse < 18)
+-	return R_DoomPerfCpuPressureColor(doomperf_cpu_run_queue_pressure);
++	return R_DoomPerfCpuPressureColor(pressure);
+     if ((localy & 31) < 3 && thread < 8)
+ 	return DOOMPERF_CPU_CORE_FRAME;
+     if (thread < 9)

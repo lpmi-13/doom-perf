@@ -1,0 +1,4 @@
+- see if there are example doom-style sprites we can use as models of the look-and-feel for the additional elements we want to add.
+- have the music be different in each room.
+- eventually move this code over into doom-perf folder.
+- investigate swapping the IWAD from shareware Doom1.WAD to Freedoom Phase 1 (free/bundleable, full texture set, keeps ExMy/E1M1 so no map rename; revalidate texture/flat names + check procedural palette indices render correctly).

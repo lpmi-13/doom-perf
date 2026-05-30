@@ -1,3 +1,23 @@
+# macOS
+.DS_Store
+
+# Dependencies
 node_modules/
+
+# Build outputs
 dist/
-.vite/
+
+# Staged Doom source for the patch-based engine build
+.build/
+
+# Local base IWADs. Doom Perf map PWADs under public/maps/ are authored here.
+public/wads/*.wad
+public/wads/*.WAD
+
+# IDE
+.idea/
+*.swp
+*.swo
+
+# Playwright screencaps
+playwright-*

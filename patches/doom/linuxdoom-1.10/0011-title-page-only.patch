@@ -1,0 +1,14 @@
+--- a/d_main.c
++++ b/d_main.c
+@@ -421,8 +421,9 @@
+ //
+ void D_PageTicker (void)
+ {
+-    if (--pagetic < 0)
+-	D_AdvanceDemo ();
++    // Doom Perf keeps a single opening page. Do not advance TITLEPIC into
++    // Doom's attract-loop demos, credits, or shareware ordering screen.
++    return;
+ }
+ 
+ 

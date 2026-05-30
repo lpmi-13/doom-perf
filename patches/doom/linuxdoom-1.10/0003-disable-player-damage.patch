@@ -1,0 +1,16 @@
+diff --git a/p_inter.c b/p_inter.c
+index eea30f1..abf88e3 100644
+--- a/p_inter.c
++++ b/p_inter.c
+@@ -790,6 +790,11 @@ P_DamageMobj
+     if (target->health <= 0)
+ 	return;
+ 
++    // Doom Perf: the observer is immune to all damage so exploration is
++    //  never interrupted by hazards (lava, crushers, etc.).
++    if (target->player)
++	return;
++
+     if ( target->flags & MF_SKULLFLY )
+     {
+ 	target->momx = target->momy = target->momz = 0;

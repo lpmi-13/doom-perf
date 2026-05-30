@@ -1,0 +1,99 @@
+--- a/m_menu.c
++++ b/m_menu.c
+@@ -239,22 +239,13 @@
+ {
+     newgame = 0,
+     options,
+-    loadgame,
+-    savegame,
+-    readthis,
+-    quitdoom,
+     main_end
+ } main_e;
+ 
+ menuitem_t MainMenu[]=
+ {
+     {1,"M_NGAME",M_NewGame,'n'},
+-    {1,"M_OPTION",M_Options,'o'},
+-    {1,"M_LOADG",M_LoadGame,'l'},
+-    {1,"M_SAVEG",M_SaveGame,'s'},
+-    // Another hickup with Special edition.
+-    {1,"M_RDTHIS",M_ReadThis,'r'},
+-    {1,"M_QUITG",M_QuitDOOM,'q'}
++    {1,"M_OPTION",M_Options,'o'}
+ };
+ 
+ menu_t  MainDef =
+@@ -339,7 +331,6 @@
+ enum
+ {
+     endgame,
+-    messages,
+     detail,
+     scrnsize,
+     option_empty1,
+@@ -352,7 +343,6 @@
+ menuitem_t OptionsMenu[]=
+ {
+     {1,"M_ENDGAM",	M_EndGame,'e'},
+-    {1,"M_MESSG",	M_ChangeMessages,'m'},
+     {1,"M_DETAIL",	M_ChangeDetail,'g'},
+     {2,"M_SCRNSZ",	M_SizeDisplay,'s'},
+     {-1,"",0},
+@@ -876,10 +866,8 @@
+ 	return;
+     }
+ 	
+-    if ( gamemode == commercial )
+-	M_SetupNextMenu(&NewDef);
+-    else
+-	M_SetupNextMenu(&EpiDef);
++    G_DeferedInitNew(hurtme,1,1);
++    M_ClearMenus ();
+ }
+ 
+ 
+@@ -948,17 +936,13 @@
+ //
+ char    detailNames[2][9]	= {"M_GDHIGH","M_GDLOW"};
+-char	msgNames[2][9]		= {"M_MSGOFF","M_MSGON"};
+ 
+ 
+ void M_DrawOptions(void)
+ {
+     V_DrawPatchDirect (108,15,0,W_CacheLumpName("M_OPTTTL",PU_CACHE));
+ 	
+     V_DrawPatchDirect (OptionsDef.x + 175,OptionsDef.y+LINEHEIGHT*detail,0,
+ 		       W_CacheLumpName(detailNames[detailLevel],PU_CACHE));
+ 
+-    V_DrawPatchDirect (OptionsDef.x + 120,OptionsDef.y+LINEHEIGHT*messages,0,
+-		       W_CacheLumpName(msgNames[showMessages],PU_CACHE));
+-
+     M_DrawThermo(OptionsDef.x,OptionsDef.y+LINEHEIGHT*(mousesens+1),
+ 		 10,mouseSensitivity);
+@@ -1578,10 +1562,6 @@
+ 	    M_EndGame(0);
+ 	    return true;
+ 				
+-	  case KEY_F8:            // Toggle messages
+-	    M_ChangeMessages(0);
+-	    S_StartSound(NULL,sfx_swtchn);
+-	    return true;
+ 				
+ 	  case KEY_F9:            // Quickload
+ 	    S_StartSound(NULL,sfx_swtchn);
+@@ -1856,14 +1836,8 @@
+     {
+       case commercial:
+-	// This is used because DOOM 2 had only one HELP
+-        //  page. I use CREDIT as second page now, but
+-	//  kept this hack for educational purposes.
+-	MainMenu[readthis] = MainMenu[quitdoom];
+-	MainDef.numitems--;
+-	MainDef.y += 8;
+ 	NewDef.prevMenu = &MainDef;
+ 	ReadDef1.routine = M_DrawReadThis1;
+ 	ReadDef1.x = 330;
+ 	ReadDef1.y = 165;
+ 	ReadMenu1[0].routine = M_FinishReadThis;
+ 	break;

@@ -1,0 +1,22 @@
+--- a/p_mobj.c
++++ b/p_mobj.c
+@@ -771,7 +771,18 @@
+     {
+ 	return;
+     }
+-    
++
++    // Doom Perf: strip pickups, keys, barrels, gore, teleport landings, and
++    //  almost all decorative map things. Player starts are handled at the top
++    //  of this function; a small prop allowlist lets generated resource rooms
++    //  keep shareware-IWAD stock props without reintroducing gameplay items.
++    if (mthing->type != 34	// Doom Perf CPU core utilization sign
++	&& mthing->type != 35	// Doom Perf CPU run-queue sign
++	&& mthing->type != 46	// tall red torch
++	&& mthing->type != 48	// Doom Perf CPU load-pressure sign
++	&& mthing->type != 2028)	// tech pillar
++	return;
++
+     // spawn it
+     x = mthing->x << FRACBITS;
+     y = mthing->y << FRACBITS;

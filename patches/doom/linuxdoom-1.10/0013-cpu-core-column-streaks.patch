@@ -1,0 +1,144 @@
+diff --git a/r_draw.c b/r_draw.c
+--- a/r_draw.c
++++ b/r_draw.c
+@@ -95,6 +95,14 @@
+ // just for profiling 
+ int			dccount;
+ 
++// Doom Perf: CPU core pillar streaks. r_segs.c sets these globals before
++// each colfunc() call; R_DrawColumn switches into a procedural rising-streak
++// pattern when active. The streak helper is defined further below alongside
++// the other R_DoomPerfCpu* functions.
++int			doomperf_cpu_column_display = 0;
++int			doomperf_cpu_column_texture_x = 0;
++static byte R_DoomPerfCpuStreakPixel (int ty);
++
+ //
+ // A column is a vertical slice/span from a wall texture that,
+ //  given the DOOM style restrictions on the view orientation,
+@@ -137,9 +145,12 @@
+     // This is as fast as it gets.
+     do 
+     {
+-	// Re-map color indices from wall texture column
+-	//  using a lighting/special effects LUT.
+-	*dest = dc_colormap[dc_source[(frac>>FRACBITS)&127]];
++	if (doomperf_cpu_column_display)
++	    *dest = dc_colormap[R_DoomPerfCpuStreakPixel((frac>>FRACBITS)&127)];
++	else
++	    // Re-map color indices from wall texture column
++	    //  using a lighting/special effects LUT.
++	    *dest = dc_colormap[dc_source[(frac>>FRACBITS)&127]];
+ 	
+ 	dest += SCREENWIDTH; 
+ 	frac += fracstep;
+@@ -569,6 +580,50 @@
+     return DOOMPERF_CPU_CORE_RED;
+ }
+ 
++
++// Rising-streak procedural pixel for the eight CPU core pillars. Each pillar
++// is driven by per-core utilization (in permille). The texture column index
++// is supplied by r_segs.c so streaks stay locked to the wall surface.
++static byte R_DoomPerfCpuStreakPixel (int ty)
++{
++    int			core_id;
++    int			util;
++    int			tx;
++    int			seed;
++    int			density;
++    int			speed;
++    int			trail_len;
++    int			head_y;
++    int			offset;
++
++    core_id = doomperf_cpu_column_display - 1;
++    if (core_id < 0 || core_id >= 16)
++	return DOOMPERF_CPU_CORE_DARK;
++    util = (core_id < doomperf_cpu_core_count)
++	? doomperf_cpu_cores[core_id]
++	: 0;
++
++    // Density and streak parameters scale with utilization so a busy core
++    // packs more rising particles travelling faster with longer trails.
++    tx = doomperf_cpu_column_texture_x & 63;
++    seed = tx * 31 + core_id * 13 + (tx >> 2) * 7;
++    density = 5 + util / 50;
++    if (((seed * 17) & 31) >= density)
++	return DOOMPERF_CPU_CORE_DARK;
++
++    // Head descends from ty=127 toward ty=0 over time so streaks rise.
++    // Trail extends behind the head (toward higher ty).
++    speed = 1 + util / 200;
++    trail_len = 24 + util / 12;
++    head_y = (127 - ((leveltime * speed + seed * 11) & 127)) & 127;
++    offset = (ty - head_y + 128) & 127;
++    if (offset < 2)
++	return DOOMPERF_CPU_CORE_FRAME;
++    if (offset < trail_len)
++	return R_DoomPerfCpuColor(util);
++    return DOOMPERF_CPU_CORE_DARK;
++}
++
+ static int R_DoomPerfCpuWorldX (fixed_t xfrac)
+ {
+     return xfrac >> FRACBITS;
+diff --git a/r_segs.c b/r_segs.c
+--- a/r_segs.c
++++ b/r_segs.c
+@@ -40,6 +40,25 @@
+ #include "r_sky.h"
+ 
+ 
++// Doom Perf: CPU core pillars carry linedef tags 101..108. Before each
++// colfunc() call we inspect curline->linedef->tag and set the column
++// display globals consumed by R_DrawColumn.
++extern int doomperf_cpu_column_display;
++extern int doomperf_cpu_column_texture_x;
++
++static void R_DoomPerfBeginColumn (int texturecolumn)
++{
++    int		tag;
++
++    tag = curline->linedef->tag;
++    if (tag >= 101 && tag <= 116)
++	doomperf_cpu_column_display = tag - 100;
++    else
++	doomperf_cpu_column_display = 0;
++    doomperf_cpu_column_texture_x = texturecolumn;
++}
++
++
+ // OPTIMIZE: closed two sided lines as single sided
+ 
+ // True if any of the segs textures might be visible.
+@@ -284,7 +303,9 @@
+ 	    dc_yh = yh;
+ 	    dc_texturemid = rw_midtexturemid;
+ 	    dc_source = R_GetColumn(midtexture,texturecolumn);
++	    R_DoomPerfBeginColumn(texturecolumn);
+ 	    colfunc ();
++	    doomperf_cpu_column_display = 0;
+ 	    ceilingclip[rw_x] = viewheight;
+ 	    floorclip[rw_x] = -1;
+ 	}
+@@ -306,7 +327,9 @@
+ 		    dc_yh = mid;
+ 		    dc_texturemid = rw_toptexturemid;
+ 		    dc_source = R_GetColumn(toptexture,texturecolumn);
++		    R_DoomPerfBeginColumn(texturecolumn);
+ 		    colfunc ();
++		    doomperf_cpu_column_display = 0;
+ 		    ceilingclip[rw_x] = mid;
+ 		}
+ 		else
+@@ -336,7 +359,9 @@
+ 		    dc_texturemid = rw_bottomtexturemid;
+ 		    dc_source = R_GetColumn(bottomtexture,
+ 					    texturecolumn);
++		    R_DoomPerfBeginColumn(texturecolumn);
+ 		    colfunc ();
++		    doomperf_cpu_column_display = 0;
+ 		    floorclip[rw_x] = mid;
+ 		}
+ 		else

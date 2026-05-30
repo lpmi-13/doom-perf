@@ -1,0 +1,19 @@
+diff --git a/p_mobj.c b/p_mobj.c
+index 209d161..40476c8 100644
+--- a/p_mobj.c
++++ b/p_mobj.c
+@@ -764,10 +764,10 @@ void P_SpawnMapThing (mapthing_t* mthing)
+     if (deathmatch && mobjinfo[i].flags & MF_NOTDMATCH)
+ 	return;
+ 		
+-    // don't spawn any monsters if -nomonsters
+-    if (nomonsters
+-	&& ( i == MT_SKULL
+-	     || (mobjinfo[i].flags & MF_COUNTKILL)) )
++    // Doom Perf: pure exploratory space — never spawn monsters or lost
++    //  souls, regardless of the -nomonsters flag.
++    if ( i == MT_SKULL
++	 || (mobjinfo[i].flags & MF_COUNTKILL) )
+     {
+ 	return;
+     }

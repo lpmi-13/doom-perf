@@ -1,0 +1,65 @@
+diff --git a/p_tick.c b/p_tick.c
+--- a/p_tick.c
++++ b/p_tick.c
+@@ -30,9 +30,47 @@
+ 
+ #include "doomstat.h"
+ 
++#include "m_fixed.h"
++#include "r_state.h"
++
+ 
+ int	leveltime;
+ 
++// Doom Perf: the CPU core ring has 8 physical pillars (sector tags 201..208).
++// Each tic we raise a pillar into a solid column if its core exists and sink
++// it flush with the walkway otherwise, so exactly N pillars are visible (one
++// per logical CPU in live mode, or 8 in the simulations). The heights match
++// the pillar/walkway floors emitted by build-doomperf-map.mjs.
++#define DOOMPERF_PILLAR_TAG_BASE	201
++#define DOOMPERF_PILLAR_COUNT		8
++#define DOOMPERF_PILLAR_TOP		(288 * FRACUNIT)
++#define DOOMPERF_PILLAR_BASE		(0 * FRACUNIT)
++
++void DoomPerf_UpdatePillars (void)
++{
++    int		effective;
++    int		i;
++    int		idx;
++
++    if (doomperf_sim_mode != 0)
++	effective = DOOMPERF_PILLAR_COUNT;
++    else
++    {
++	effective = doomperf_cpu_core_count;
++	if (effective > DOOMPERF_PILLAR_COUNT)
++	    effective = DOOMPERF_PILLAR_COUNT;
++    }
++
++    for (i = 0; i < numsectors; i++)
++    {
++	idx = sectors[i].tag - DOOMPERF_PILLAR_TAG_BASE;
++	if (idx < 0 || idx >= DOOMPERF_PILLAR_COUNT)
++	    continue;
++	sectors[i].floorheight =
++	    (idx < effective) ? DOOMPERF_PILLAR_TOP : DOOMPERF_PILLAR_BASE;
++    }
++}
++
+ //
+ // THINKERS
+ // All thinkers should be allocated by Z_Malloc
+@@ -145,10 +183,12 @@
+     }
+     
+ 		
++    DoomPerf_UpdatePillars ();
++
+     for (i=0 ; i<MAXPLAYERS ; i++)
+ 	if (playeringame[i])
+ 	    P_PlayerThink (&players[i]);
+-			
++
+     P_RunThinkers ();
+     P_UpdateSpecials ();
+     P_RespawnSpecials ();

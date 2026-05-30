@@ -1,0 +1,85 @@
+diff --git a/r_draw.c b/r_draw.c
+--- a/r_draw.c
++++ b/r_draw.c
+@@ -102,6 +102,7 @@
+ int			doomperf_cpu_column_display = 0;
+ int			doomperf_cpu_column_texture_x = 0;
+ static byte R_DoomPerfCpuStreakPixel (int ty);
++static byte R_DoomPerfCpuGaugePixel (int gauge, int ty);
+ 
+ //
+ // A column is a vertical slice/span from a wall texture that,
+@@ -145,7 +146,10 @@
+     // This is as fast as it gets.
+     do 
+     {
+-	if (doomperf_cpu_column_display)
++	if (doomperf_cpu_column_display >= 17)
++	    *dest = dc_colormap[R_DoomPerfCpuGaugePixel(doomperf_cpu_column_display - 17,
++							(frac>>FRACBITS)&127)];
++	else if (doomperf_cpu_column_display)
+ 	    *dest = dc_colormap[R_DoomPerfCpuStreakPixel((frac>>FRACBITS)&127)];
+ 	else
+ 	    // Re-map color indices from wall texture column
+@@ -658,6 +662,48 @@
+     return DOOMPERF_CPU_CORE_DARK;
+ }
+ 
++// Vertical load-average gauge for the three pillars in the LOAD room. gauge
++// 0/1/2 = 1m/5m/15m. Each pillar's 128-tall lower wall fills from the bottom
++// (ty 127) proportional to the load average; a full bar is 2x the logical CPU
++// count, so the "load == cores" line sits at the middle (ty 64). Filled pixels
++// below that line are green (headroom), above it red (overcommit); the line and
++// the left/right edges are framed bright.
++static byte R_DoomPerfCpuGaugePixel (int gauge, int ty)
++{
++    int			load;
++    int			cores;
++    int			max_milli;
++    int			fill_ty;
++    int			threshold_ty;
++    int			tx;
++
++    if (gauge < 0 || gauge > 2)
++	return DOOMPERF_CPU_CORE_DARK;
++
++    cores = R_DoomPerfCoreCount();
++    if (cores < 1)
++	cores = 1;
++    max_milli = cores * 2 * 1000;
++    load = doomperf_load[gauge];
++    if (load > max_milli)
++	load = max_milli;
++
++    tx = doomperf_cpu_column_texture_x & 127;
++    if (tx < 3 || tx > 124)
++	return DOOMPERF_CPU_CORE_FRAME;
++
++    fill_ty = 127 - (load * 127) / max_milli;
++    threshold_ty = 127 - (cores * 1000 * 127) / max_milli;
++
++    if (ty == threshold_ty)
++	return DOOMPERF_CPU_CORE_FRAME;
++    if (ty < fill_ty)
++	return DOOMPERF_CPU_CORE_DARK;
++    if (ty < threshold_ty)
++	return DOOMPERF_CPU_CORE_RED;
++    return DOOMPERF_CPU_CORE_GREEN;
++}
++
+ static int R_DoomPerfCpuWorldX (fixed_t xfrac)
+ {
+     return xfrac >> FRACBITS;
+diff --git a/r_segs.c b/r_segs.c
+--- a/r_segs.c
++++ b/r_segs.c
+@@ -53,6 +53,9 @@
+     tag = curline->linedef->tag;
+     if (tag >= 101 && tag <= 116)
+ 	doomperf_cpu_column_display = tag - 100;
++    else if (tag >= 121 && tag <= 123)
++	// LOAD room gauges: encode display as 17/18/19 (gauge 0/1/2 = 1m/5m/15m).
++	doomperf_cpu_column_display = tag - 104;
+     else
+ 	doomperf_cpu_column_display = 0;
+     doomperf_cpu_column_texture_x = texturecolumn;

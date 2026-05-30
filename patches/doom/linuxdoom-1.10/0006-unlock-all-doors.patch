@@ -1,0 +1,105 @@
+diff --git a/p_doors.c b/p_doors.c
+index b22dd15..19a8223 100644
+--- a/p_doors.c
++++ b/p_doors.c
+@@ -215,47 +215,9 @@ EV_DoLockedDoor
+ 	
+     if (!p)
+ 	return 0;
+-		
+-    switch(line->special)
+-    {
+-      case 99:	// Blue Lock
+-      case 133:
+-	if ( !p )
+-	    return 0;
+-	if (!p->cards[it_bluecard] && !p->cards[it_blueskull])
+-	{
+-	    p->message = PD_BLUEO;
+-	    S_StartSound(NULL,sfx_oof);
+-	    return 0;
+-	}
+-	break;
+-	
+-      case 134: // Red Lock
+-      case 135:
+-	if ( !p )
+-	    return 0;
+-	if (!p->cards[it_redcard] && !p->cards[it_redskull])
+-	{
+-	    p->message = PD_REDO;
+-	    S_StartSound(NULL,sfx_oof);
+-	    return 0;
+-	}
+-	break;
+-	
+-      case 136:	// Yellow Lock
+-      case 137:
+-	if ( !p )
+-	    return 0;
+-	if (!p->cards[it_yellowcard] &&
+-	    !p->cards[it_yellowskull])
+-	{
+-	    p->message = PD_YELLOWO;
+-	    S_StartSound(NULL,sfx_oof);
+-	    return 0;
+-	}
+-	break;	
+-    }
+ 
++    // Doom Perf: all doors are unlocked — open remote locked doors
++    //  (blue/red/yellow) without requiring any key.
+     return EV_DoDoor(line,type);
+ }
+ 
+@@ -365,47 +327,19 @@ EV_VerticalDoor
+ 
+     //	Check for locks
+     player = thing->player;
+-		
++
++    // Doom Perf: all doors are unlocked — keep the player-only guard on the
++    //  blue/yellow/red manual locked doors but never require a key.
+     switch(line->special)
+     {
+       case 26: // Blue Lock
+       case 32:
+-	if ( !player )
+-	    return;
+-	
+-	if (!player->cards[it_bluecard] && !player->cards[it_blueskull])
+-	{
+-	    player->message = PD_BLUEK;
+-	    S_StartSound(NULL,sfx_oof);
+-	    return;
+-	}
+-	break;
+-	
+       case 27: // Yellow Lock
+       case 34:
+-	if ( !player )
+-	    return;
+-	
+-	if (!player->cards[it_yellowcard] &&
+-	    !player->cards[it_yellowskull])
+-	{
+-	    player->message = PD_YELLOWK;
+-	    S_StartSound(NULL,sfx_oof);
+-	    return;
+-	}
+-	break;
+-	
+       case 28: // Red Lock
+       case 33:
+ 	if ( !player )
+ 	    return;
+-	
+-	if (!player->cards[it_redcard] && !player->cards[it_redskull])
+-	{
+-	    player->message = PD_REDK;
+-	    S_StartSound(NULL,sfx_oof);
+-	    return;
+-	}
+ 	break;
+     }
+ 	
