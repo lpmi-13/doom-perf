@@ -14,10 +14,12 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
 const sampleInterval = time.Second
+const defaultMaxTelemetryStreams = 64
 
 type resourceUSE struct {
 	Utilization float64 `json:"utilization"`
@@ -119,14 +121,25 @@ type sampler struct {
 	oomKills  uint64
 }
 
+type telemetryHub struct {
+	mu          sync.Mutex
+	maxStreams  int
+	subscribers map[chan []byte]struct{}
+	latest      []byte
+	sampler     sampler
+}
+
 func main() {
 	addr := os.Getenv("DOOM_TELEMETRY_ADDR")
 	if addr == "" {
 		addr = "127.0.0.1:9999"
 	}
 
+	hub := newTelemetryHub(telemetryStreamLimit())
+	hub.start(context.Background())
+
 	mux := http.NewServeMux()
-	mux.HandleFunc("/telemetry", streamTelemetry)
+	mux.HandleFunc("/telemetry", streamTelemetry(hub))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
@@ -144,40 +157,102 @@ func main() {
 	}
 }
 
-func streamTelemetry(w http.ResponseWriter, r *http.Request) {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
-		return
+func telemetryStreamLimit() int {
+	raw := strings.TrimSpace(os.Getenv("DOOM_TELEMETRY_MAX_STREAMS"))
+	if raw == "" {
+		return defaultMaxTelemetryStreams
+	}
+	limit, err := strconv.Atoi(raw)
+	if err != nil || limit < 1 {
+		log.Printf("invalid DOOM_TELEMETRY_MAX_STREAMS=%q; using %d", raw, defaultMaxTelemetryStreams)
+		return defaultMaxTelemetryStreams
+	}
+	return limit
+}
+
+func newTelemetryHub(maxStreams int) *telemetryHub {
+	if maxStreams < 1 {
+		maxStreams = defaultMaxTelemetryStreams
+	}
+	return &telemetryHub{
+		maxStreams:  maxStreams,
+		subscribers: make(map[chan []byte]struct{}),
+		sampler: sampler{
+			cpuCores: make(map[int]cpuCounter),
+			disk:     make(map[string]diskCounter),
+			net:      make(map[string]netCounter),
+		},
+	}
+}
+
+func (h *telemetryHub) start(ctx context.Context) {
+	go func() {
+		h.sampleAndPublish()
+		ticker := time.NewTicker(sampleInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				h.sampleAndPublish()
+			}
+		}
+	}()
+}
+
+func (h *telemetryHub) subscribe() (<-chan []byte, func(), bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if len(h.subscribers) >= h.maxStreams {
+		return nil, nil, false
 	}
 
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Cache-Control", "no-cache, no-transform")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("X-Accel-Buffering", "no")
-
-	s := &sampler{
-		cpuCores: make(map[int]cpuCounter),
-		disk:     make(map[string]diskCounter),
-		net:      make(map[string]netCounter),
+	events := make(chan []byte, 2)
+	h.subscribers[events] = struct{}{}
+	if h.latest != nil {
+		events <- h.latest
 	}
-	writeEvent(r.Context(), w, flusher, s)
 
-	ticker := time.NewTicker(sampleInterval)
-	defer ticker.Stop()
-	for {
+	var once sync.Once
+	unsubscribe := func() {
+		once.Do(func() {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			if _, ok := h.subscribers[events]; ok {
+				delete(h.subscribers, events)
+				close(events)
+			}
+		})
+	}
+	return events, unsubscribe, true
+}
+
+func (h *telemetryHub) publish(event []byte) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	next := append([]byte(nil), event...)
+	h.latest = next
+	for events := range h.subscribers {
 		select {
-		case <-r.Context().Done():
-			return
-		case <-ticker.C:
-			writeEvent(r.Context(), w, flusher, s)
+		case events <- next:
+		default:
+			select {
+			case <-events:
+			default:
+			}
+			select {
+			case events <- next:
+			default:
+			}
 		}
 	}
 }
 
-func writeEvent(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, s *sampler) {
-	snapshot, err := s.sample(time.Now())
+func (h *telemetryHub) sampleAndPublish() {
+	snapshot, err := h.sampler.sample(time.Now())
 	if err != nil {
 		log.Printf("telemetry sample failed: %v", err)
 		return
@@ -189,11 +264,43 @@ func writeEvent(ctx context.Context, w http.ResponseWriter, flusher http.Flusher
 		return
 	}
 
-	if _, err := fmt.Fprintf(w, "event: telemetry\ndata: %s\n\n", payload); err != nil {
-		return
-	}
-	if ctx.Err() == nil {
-		flusher.Flush()
+	h.publish([]byte(fmt.Sprintf("event: telemetry\ndata: %s\n\n", payload)))
+}
+
+func streamTelemetry(hub *telemetryHub) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+			return
+		}
+
+		events, unsubscribe, ok := hub.subscribe()
+		if !ok {
+			http.Error(w, "too many telemetry streams", http.StatusTooManyRequests)
+			return
+		}
+		defer unsubscribe()
+
+		w.Header().Set("Cache-Control", "no-cache, no-transform")
+		w.Header().Set("Connection", "keep-alive")
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("X-Accel-Buffering", "no")
+
+		for {
+			select {
+			case <-r.Context().Done():
+				return
+			case event, ok := <-events:
+				if !ok {
+					return
+				}
+				if _, err := w.Write(event); err != nil {
+					return
+				}
+				flusher.Flush()
+			}
+		}
 	}
 }
 
