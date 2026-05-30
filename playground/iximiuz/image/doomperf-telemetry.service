@@ -4,7 +4,14 @@ After=network.target
 
 [Service]
 Type=simple
-User=root
+DynamicUser=yes
+User=doomperf-telemetry
+Group=doomperf-telemetry
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
 Environment=DOOM_TELEMETRY_ADDR=127.0.0.1:9999
 ExecStart=/usr/local/bin/doomperf-telemetry
 Restart=on-failure
