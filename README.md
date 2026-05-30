@@ -36,7 +36,7 @@ What currently works:
   - `SIM: HIGH CPU SATURATION`
 - CPU room instruments for per-core utilization, run queue pressure, and load
   average pressure.
-- Interactive terminal overlay near CPU signs for core, run queue, and load
+- Interactive terminal overlay near CPU wall terminals for core, run queue, and load
   readouts.
 - Alternate `?renderer=webgl` path that renders the WAD with the TypeScript
   WebGL renderer and overlays telemetry in the Doom status bar.
@@ -130,11 +130,40 @@ The current live feed includes:
 - `/proc/net/dev` for network throughput, drops, and errors
 
 The browser accepts either `telemetry` events or JSON `message` events. With no
-query parameter it uses:
+query parameter it uses local telemetry on `localhost` and same-origin
+telemetry everywhere else:
 
 ```text
-http://127.0.0.1:9999/telemetry
+http://127.0.0.1:9999/telemetry  # localhost development
+/telemetry                       # production / iximiuz Labs
 ```
+
+Use `?telemetry=same-origin` to force the production path locally, or
+`?telemetry=off` to disable telemetry.
+
+## iximiuz Labs Deployment
+
+The iximiuz Labs playground scaffold lives under `playground/iximiuz/`. It
+follows the same rootfs-image pattern as the `use-practice` playground:
+
+- `playground/iximiuz/Dockerfile` builds the browser bundle and telemetry
+  binary, then installs them into an iximiuz Ubuntu 24.04 rootfs image.
+- Nginx listens on `0.0.0.0:8080`, serves `public/`, and proxies `/telemetry`
+  and `/healthz` to the local Go telemetry service on `127.0.0.1:9999`.
+- systemd starts `doomperf-telemetry`, `nginx`, and a bootstrap readiness check.
+- `playground/iximiuz/manifest.yaml` exposes a terminal tab and a Doom Perf
+  `http-port` tab on port `8080`.
+
+Build and publish the rootfs image from the repository root:
+
+```bash
+docker build -f playground/iximiuz/Dockerfile -t ghcr.io/lpmi-13/doom-perf-rootfs:v1 .
+docker push ghcr.io/lpmi-13/doom-perf-rootfs:v1
+```
+
+Then publish or start the playground with `playground/iximiuz/manifest.yaml`.
+The Doom Perf tab should open through the iximiuz-generated HTTPS domain, and
+the browser should connect to telemetry using the same origin at `/telemetry`.
 
 ## Architecture
 

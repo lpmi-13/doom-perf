@@ -240,11 +240,15 @@ export const resolveTelemetrySource = (): string | null => {
   const params = new URLSearchParams(window.location.search);
   const raw = params.get("telemetry") ?? params.get("telemetryUrl");
   if (!raw) {
-    return "http://127.0.0.1:9999/telemetry";
+    const localHosts = new Set(["localhost", "127.0.0.1", "::1"]);
+    return localHosts.has(window.location.hostname) ? "http://127.0.0.1:9999/telemetry" : "/telemetry";
   }
   const value = raw.trim();
   if (!value || /^(0|false|off|none|disabled)$/i.test(value)) {
     return null;
+  }
+  if (/^(same-origin|sameorigin|relative)$/i.test(value)) {
+    return "/telemetry";
   }
   return value;
 };

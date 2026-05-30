@@ -16,10 +16,6 @@ const labelTextureSize = {
   width: 256,
   height: 192,
 };
-const cpuSignPatchSize = {
-  width: 88,
-  height: 80,
-};
 const doorWidth = 192;
 const cpuCoreDisplay = {
   u1: -128,
@@ -57,25 +53,32 @@ for (let c = 4; c >= 0; c -= 2) ringOrder.push([c, 4]);
 ringOrder.push([0, 2]);
 const ringPillarIndex = new Map(ringOrder.map(([c, r], i) => [`${c},${r}`, i]));
 
-const cpuStationSigns = {
+const cpuRoomBounds = {
+  main: { u1: -320, v1: 896, u2: 320, v2: 1496 },
+  runQueue: { u1: -768, v1: 896, u2: -384, v2: 1496 },
+  load: { u1: 384, v1: 896, u2: 768, v2: 1496 },
+  sideEntry: { v1: 1024, v2: 1216 },
+};
+
+const cpuTerminalScreens = {
   core: {
     lines: ["CPU CORES", "UTIL"],
-    spritePatch: "CANDA0",
-    thingType: 34,
+    texture: "DPCTERM",
+    patch: "DPLCTRM",
     labelColor: 200,
     role: "utilization",
   },
   runQueue: {
     lines: ["RUN QUEUE", "SAT"],
-    spritePatch: "CBRAA0",
-    thingType: 35,
+    texture: "DPRQTERM",
+    patch: "DPLRQTRM",
     labelColor: 231,
     role: "saturation",
   },
   load: {
     lines: ["LOAD", "AVG"],
-    spritePatch: "ELECA0",
-    thingType: 48,
+    texture: "DPLDTERM",
+    patch: "DPLDTRM",
     labelColor: 112,
     role: "saturation",
   },
@@ -290,14 +293,14 @@ const addResourceArea = (direction) => {
     kind: "entry",
     light: 192,
   });
-  areaRect(direction, "foyer", { u1: -320, v1: 704, u2: 320, v2: 960 }, {
+  areaRect(direction, "foyer", { u1: -320, v1: 704, u2: 320, v2: hasCpuCoreDisplay ? cpuRoomBounds.main.v1 : 960 }, {
     ...base,
     kind: "foyer",
     light: 216,
   });
   if (hasCpuCoreDisplay) {
-    // Core ring: a lit metal frame surrounds a 9x9 grid platform whose ceiling
-    // vaults upward. The 16 perimeter pillars are solid streak columns (one per
+    // Core ring: a lit metal frame surrounds a 5x5 grid platform whose ceiling
+    // vaults upward. The 8 perimeter pillars are solid streak columns (one per
     // logical CPU, viewed from the south edge); the cells between them are
     // walkway/gaps so the ring reads as distinct free-standing columns. The
     // frame is lit rather than a dark pit (Doom's low light levels render as a
@@ -311,11 +314,17 @@ const addResourceArea = (direction) => {
       ceilingFlat: "CEIL5_1",
       light: frameLight,
     };
-    areaRect(direction, "main-frame-south", { u1: -320, v1: 960, u2: 320, v2: ringV0 }, frame);
-    areaRect(direction, "main-frame-north", { u1: -320, v1: ringV0 + ringCells * ringCell, u2: 320, v2: 1280 }, frame);
-    areaRect(direction, "main-frame-west", { u1: -320, v1: ringV0, u2: ringU0, v2: ringV0 + ringCells * ringCell }, frame);
-    areaRect(direction, "main-frame-east", { u1: ringU0 + ringCells * ringCell, v1: ringV0, u2: 320, v2: ringV0 + ringCells * ringCell }, frame);
-    // 9x9 platform grid: pillar cells (solid streak columns, tagged 101+i for
+    areaRect(direction, "main-frame-south", { u1: cpuRoomBounds.main.u1, v1: cpuRoomBounds.main.v1, u2: cpuRoomBounds.main.u2, v2: ringV0 }, frame);
+    areaRect(direction, "main-frame-north-west", { u1: cpuRoomBounds.main.u1, v1: ringV0 + ringCells * ringCell, u2: -128, v2: cpuRoomBounds.main.v2 }, frame);
+    areaRect(direction, "main-terminal", { u1: -128, v1: ringV0 + ringCells * ringCell, u2: 128, v2: cpuRoomBounds.main.v2 }, {
+      ...frame,
+      labelSide: "top",
+      labelTexture: cpuTerminalScreens.core.texture,
+    });
+    areaRect(direction, "main-frame-north-east", { u1: 128, v1: ringV0 + ringCells * ringCell, u2: cpuRoomBounds.main.u2, v2: cpuRoomBounds.main.v2 }, frame);
+    areaRect(direction, "main-frame-west", { u1: cpuRoomBounds.main.u1, v1: ringV0, u2: ringU0, v2: ringV0 + ringCells * ringCell }, frame);
+    areaRect(direction, "main-frame-east", { u1: ringU0 + ringCells * ringCell, v1: ringV0, u2: cpuRoomBounds.main.u2, v2: ringV0 + ringCells * ringCell }, frame);
+    // 5x5 platform grid: pillar cells (solid streak columns, tagged 101+i for
     // the renderer and 201+i for the sink hook) and walkway/gap cells.
     const ringFloor = {
       ...accent,
@@ -358,18 +367,35 @@ const addResourceArea = (direction) => {
       light: frameLight,
       ceiling: 144,
     };
-    areaRect(direction, "rq-entry", { u1: -384, v1: 1080, u2: -320, v2: 1200 }, corridor);
-    areaRect(direction, "load-entry", { u1: 320, v1: 1080, u2: 384, v2: 1200 }, corridor);
+    areaRect(direction, "rq-entry", {
+      u1: cpuRoomBounds.runQueue.u2,
+      v1: cpuRoomBounds.sideEntry.v1,
+      u2: cpuRoomBounds.main.u1,
+      v2: cpuRoomBounds.sideEntry.v2,
+    }, corridor);
+    areaRect(direction, "load-entry", {
+      u1: cpuRoomBounds.main.u2,
+      v1: cpuRoomBounds.sideEntry.v1,
+      u2: cpuRoomBounds.load.u1,
+      v2: cpuRoomBounds.sideEntry.v2,
+    }, corridor);
     // ===== LEFT room: RUN QUEUE conveyor (light 144) + sky window =====
-    areaRect(direction, "rq-room", { u1: -704, v1: 960, u2: -384, v2: 1280 }, {
+    const runQueueFloor = {
       ...base,
       kind: "run-queue",
       wall: "METAL1",
       floorFlat: "FLOOR1_7",
       ceilingFlat: "CEIL5_1",
       light: cpuRunQueueDisplay.light,
+    };
+    areaRect(direction, "rq-room-west", { ...cpuRoomBounds.runQueue, u2: -704 }, runQueueFloor);
+    areaRect(direction, "rq-terminal", { ...cpuRoomBounds.runQueue, u1: -704, u2: -448 }, {
+      ...runQueueFloor,
+      labelSide: "top",
+      labelTexture: cpuTerminalScreens.runQueue.texture,
     });
-    areaRect(direction, "rq-view", { u1: -768, v1: 1080, u2: -704, v2: 1200 }, {
+    areaRect(direction, "rq-room-east", { ...cpuRoomBounds.runQueue, u1: -448 }, runQueueFloor);
+    areaRect(direction, "rq-view", { u1: cpuRoomBounds.runQueue.u1 - 64, v1: 1080, u2: cpuRoomBounds.runQueue.u1, v2: 1200 }, {
       kind: "outside",
       resource,
       floor: 72,
@@ -403,16 +429,22 @@ const addResourceArea = (direction) => {
       ceilingFlat: "CEIL5_1",
       light: 176,
     };
-    areaRect(direction, "load-walk-w", { u1: 384, v1: 960, u2: 512, v2: 1280 }, loadWalk);
-    areaRect(direction, "load-margin-s", { u1: 512, v1: 960, u2: 640, v2: 1000 }, loadWalk);
+    areaRect(direction, "load-walk-w", { u1: cpuRoomBounds.load.u1, v1: cpuRoomBounds.load.v1, u2: 512, v2: 1240 }, loadWalk);
+    areaRect(direction, "load-margin-s", { u1: 512, v1: cpuRoomBounds.load.v1, u2: 640, v2: 1000 }, loadWalk);
     areaRect(direction, "load-gauge-15m", { u1: 512, v1: 1000, u2: 640, v2: 1048 }, { ...loadGauge, lineTag: 123 });
     areaRect(direction, "load-gap-1", { u1: 512, v1: 1048, u2: 640, v2: 1096 }, loadWalk);
     areaRect(direction, "load-gauge-5m", { u1: 512, v1: 1096, u2: 640, v2: 1144 }, { ...loadGauge, lineTag: 122 });
     areaRect(direction, "load-gap-2", { u1: 512, v1: 1144, u2: 640, v2: 1192 }, loadWalk);
     areaRect(direction, "load-gauge-1m", { u1: 512, v1: 1192, u2: 640, v2: 1240 }, { ...loadGauge, lineTag: 121 });
-    areaRect(direction, "load-margin-n", { u1: 512, v1: 1240, u2: 640, v2: 1280 }, loadWalk);
-    areaRect(direction, "load-walk-e", { u1: 640, v1: 960, u2: 704, v2: 1280 }, loadWalk);
-    areaRect(direction, "load-view", { u1: 704, v1: 1080, u2: 768, v2: 1200 }, {
+    areaRect(direction, "load-walk-e", { u1: 640, v1: cpuRoomBounds.load.v1, u2: cpuRoomBounds.load.u2, v2: 1240 }, loadWalk);
+    areaRect(direction, "load-north-west", { u1: cpuRoomBounds.load.u1, v1: 1240, u2: 448, v2: cpuRoomBounds.load.v2 }, loadWalk);
+    areaRect(direction, "load-terminal", { u1: 448, v1: 1240, u2: 704, v2: cpuRoomBounds.load.v2 }, {
+      ...loadWalk,
+      labelSide: "top",
+      labelTexture: cpuTerminalScreens.load.texture,
+    });
+    areaRect(direction, "load-north-east", { u1: 704, v1: 1240, u2: cpuRoomBounds.load.u2, v2: cpuRoomBounds.load.v2 }, loadWalk);
+    areaRect(direction, "load-view", { u1: cpuRoomBounds.load.u2, v1: 1080, u2: cpuRoomBounds.load.u2 + 64, v2: 1200 }, {
       kind: "outside",
       resource,
       floor: 72,
@@ -507,22 +539,12 @@ const addResourceArea = (direction) => {
   }
 
   if (hasCpuCoreDisplay) {
-    // Decorative torches/lamps framing the core chamber.
-    addAreaThing(direction, 46, -272, 1016);
-    addAreaThing(direction, 46, 272, 1016);
-    addAreaThing(direction, 46, -272, 1224);
-    addAreaThing(direction, 46, 272, 1224);
-    addAreaThing(direction, 2028, -272, 1120);
-    addAreaThing(direction, 2028, 272, 1120);
-    // Instrument consoles: spacebar near one opens its terminal (see the
-    // terminalSigns world positions in src/index.ts). The cores console sits on
-    // the south approach so the player needn't circle the ring.
-    addAreaThing(direction, cpuStationSigns.core.thingType, 272, 990);
-    addAreaThing(direction, cpuStationSigns.runQueue.thingType, -432, 1120);
-    addAreaThing(direction, cpuStationSigns.load.thingType, 448, 1040);
-    // Decorative labels flanking the two side-room entryways.
-    addAreaThing(direction, cpuStationSigns.runQueue.thingType, -300, 1060);
-    addAreaThing(direction, cpuStationSigns.load.thingType, 300, 1060);
+    // Decorative torches stay in the corners so the side entries and wall
+    // terminal screens have clear sightlines and walk-up space.
+    addAreaThing(direction, 46, -288, 936);
+    addAreaThing(direction, 46, 288, 936);
+    addAreaThing(direction, 46, -288, 1456);
+    addAreaThing(direction, 46, 288, 1456);
   }
 };
 
@@ -680,8 +702,6 @@ const sideTextures = (sector, other, overrideTexture) => {
   };
 };
 
-const edgeLength = ({ a: [x1, y1], b: [x2, y2] }) => Math.abs(x2 - x1) + Math.abs(y2 - y1);
-
 // Door label offset: the label texture is wider than the door and the door
 // edge is split into segments by global grid cuts. Centre one word across the
 // whole door by giving each segment a continuous offset measured from the
@@ -702,6 +722,25 @@ const doorTextureOffsetFor = (edge, sector, other) => {
   return Math.floor(pad + dist);
 };
 
+const overrideTextureOffsetFor = (edge, sector) => {
+  const texW = labelTextureSize.width;
+  const horizontal = edge.a[1] === edge.b[1];
+  if (horizontal) {
+    const pad = Math.max(0, (texW - (sector.x2 - sector.x1)) / 2);
+    const dist = edge.b[0] >= edge.a[0] ? edge.a[0] - sector.x1 : sector.x2 - edge.a[0];
+    return Math.floor(pad + dist);
+  }
+  const pad = Math.max(0, (texW - (sector.y2 - sector.y1)) / 2);
+  const dist = edge.b[1] >= edge.a[1] ? edge.a[1] - sector.y1 : sector.y2 - edge.a[1];
+  return Math.floor(pad + dist);
+};
+
+const textureOffsetFor = (edge, sector, other, overrideTexture) => {
+  if (isDoorPair(sector, other)) return doorTextureOffsetFor(edge, sector, other);
+  if (overrideTexture) return overrideTextureOffsetFor(edge, sector);
+  return 0;
+};
+
 for (const group of edgeGroups.values()) {
   if (group.length > 2) {
     throw new Error(`More than two sectors share edge ${segmentKey(group[0].a, group[0].b)}`);
@@ -716,7 +755,7 @@ for (const group of edgeGroups.values()) {
     frontTextures.top,
     frontTextures.bottom,
     frontTextures.mid,
-    doorTextureOffsetFor(frontEdge, front, back)
+    textureOffsetFor(frontEdge, front, back, frontEdge.overrideTexture)
   );
   const backTextures = back ? sideTextures(back, front, backEdge.overrideTexture) : undefined;
   const backSide = back && backTextures
@@ -725,7 +764,7 @@ for (const group of edgeGroups.values()) {
       backTextures.top,
       backTextures.bottom,
       backTextures.mid,
-      doorTextureOffsetFor(backEdge, back, front)
+      textureOffsetFor(backEdge, back, front, backEdge.overrideTexture)
     )
     : -1;
   let flags = back ? lineFlags.twoSided : lineFlags.blocking;
@@ -1059,89 +1098,53 @@ const buildLabelPatch = (text, color) => {
   return buildPatch(pixels, width, height);
 };
 
-const drawDiamond = (pixels, width, height, centerX, centerY, radius, color) => {
-  for (let y = -radius; y <= radius; y += 1) {
-    const rowRadius = radius - Math.abs(y);
-    drawRect(
-      pixels,
-      width,
-      height,
-      centerX - rowRadius,
-      centerY + y,
-      centerX + rowRadius + 1,
-      centerY + y + 1,
-      color
-    );
-  }
-};
-
-const buildCpuSignPatch = ({ lines, labelColor, role }) => {
-  const { width, height } = cpuSignPatchSize;
+const buildTerminalPatch = ({ lines, labelColor, role }) => {
+  const { width, height } = labelTextureSize;
   const pixels = new Uint8Array(width * height);
-  const transparent = 255;
-  const board = {
-    left: 6,
-    top: 6,
-    right: width - 6,
-    bottom: lines.length === 3 ? 58 : 52,
-  };
-  pixels.fill(transparent);
+  pixels.fill(5);
 
-  // A heavy console face with a forked post keeps the labels off the map surfaces.
-  drawRect(pixels, width, height, board.left + 3, board.top + 3, board.right + 3, board.bottom + 3, 8);
-  drawRect(pixels, width, height, board.left, board.top, board.right, board.bottom, 96);
-  drawRect(pixels, width, height, board.left + 2, board.top + 2, board.right - 2, board.bottom - 2, labelColor);
-  drawRect(pixels, width, height, board.left + 4, board.top + 4, board.right - 4, board.bottom - 4, 0);
-  drawRect(pixels, width, height, board.left + 7, board.top + 7, board.right - 7, board.top + 9, 112);
-  drawRect(pixels, width, height, board.left + 7, board.bottom - 10, board.right - 7, board.bottom - 8, 96);
-  drawRect(pixels, width, height, board.left + 1, board.top + 11, board.left + 3, board.bottom - 11, 8);
-  drawRect(pixels, width, height, board.right - 3, board.top + 11, board.right - 1, board.bottom - 11, 8);
+  drawRect(pixels, width, height, 10, 12, width - 10, height - 10, 8);
+  drawRect(pixels, width, height, 6, 8, width - 14, height - 14, 96);
+  drawRect(pixels, width, height, 14, 16, width - 22, height - 22, 0);
+  drawRect(pixels, width, height, 20, 22, width - 28, 28, labelColor);
+  drawRect(pixels, width, height, 20, height - 34, width - 28, height - 28, 96);
+
   [
-    [board.left + 4, board.top + 4],
-    [board.right - 7, board.top + 4],
-    [board.left + 4, board.bottom - 7],
-    [board.right - 7, board.bottom - 7],
+    [15, 17],
+    [width - 32, 17],
+    [15, height - 36],
+    [width - 32, height - 36],
   ].forEach(([x, y]) => {
-    drawRect(pixels, width, height, x, y, x + 3, y + 3, 231);
-    drawRect(pixels, width, height, x + 1, y + 1, x + 2, y + 2, 96);
+    drawRect(pixels, width, height, x, y, x + 8, y + 8, 231);
+    drawRect(pixels, width, height, x + 2, y + 2, x + 6, y + 6, 96);
   });
 
-  const firstTextY = lines.length === 3 ? 17 : 19;
-  lines.forEach((line, index) => {
-    drawCenteredText(pixels, width, height, line, firstTextY + index * 9, 1, index === lines.length - 1 ? labelColor : 200, board.left + 6, board.right - 6);
-  });
+  drawCenteredText(pixels, width, height, lines[0], 54, 2, 200, 28, width - 36);
+  drawCenteredText(pixels, width, height, lines[1], 80, 2, labelColor, 28, width - 36);
+  drawCenteredText(pixels, width, height, "READY", 126, 1, 112, 28, width - 36);
 
   if (role === "utilization") {
-    [0, 1, 2, 3].forEach((column) => {
-      const x = board.left + 21 + column * 10;
-      const color = [112, 200, 231, labelColor][column];
-      drawDiamond(pixels, width, height, x, board.bottom - 9, 3, 8);
-      drawDiamond(pixels, width, height, x, board.bottom - 10, 3, color);
-    });
-  } else {
-    for (let rung = 0; rung < 5; rung += 1) {
-      const x = board.left + 17 + rung * 9;
-      const rungHeight = 2 + (rung % 3) * 2;
-      drawRect(pixels, width, height, x + 1, board.bottom - 13 - rungHeight, x + 6, board.bottom - 8, 8);
-      drawRect(pixels, width, height, x, board.bottom - 14 - rungHeight, x + 5, board.bottom - 10, rung % 2 ? labelColor : 231);
+    for (let row = 0; row < 2; row += 1) {
+      for (let column = 0; column < 4; column += 1) {
+        const x = 76 + column * 28;
+        const y = 108 + row * 12;
+        const color = [200, 112, 231, labelColor][(row * 4 + column) % 4];
+        drawRect(pixels, width, height, x + 2, y + 2, x + 18, y + 9, 8);
+        drawRect(pixels, width, height, x, y, x + 16, y + 7, color);
+      }
     }
+  } else {
+    [0, 1, 2, 3, 4].forEach((bar) => {
+      const x = 70 + bar * 24;
+      const barHeight = 10 + bar * 4;
+      drawRect(pixels, width, height, x + 2, 120 - barHeight + 2, x + 14, 122, 8);
+      drawRect(pixels, width, height, x, 120 - barHeight, x + 12, 120, bar % 2 ? labelColor : 231);
+    });
   }
 
-  const postTop = board.bottom - 1;
-  drawRect(pixels, width, height, 36, postTop, 41, height - 9, 8);
-  drawRect(pixels, width, height, 47, postTop, 52, height - 9, 8);
-  drawRect(pixels, width, height, 38, postTop, 42, height - 10, 96);
-  drawRect(pixels, width, height, 46, postTop, 50, height - 10, 96);
-  drawRect(pixels, width, height, 40, height - 14, 48, height - 9, labelColor);
-  drawRect(pixels, width, height, 26, height - 9, 62, height - 5, 8);
-  drawRect(pixels, width, height, 30, height - 12, 58, height - 8, 96);
-  drawRect(pixels, width, height, 34, height - 8, 54, height - 4, 112);
-
-  return buildPatch(pixels, width, height, {
-    leftOffset: Math.floor(width / 2),
-    topOffset: height - 4,
-    transparent,
-  });
+  drawRect(pixels, width, height, width - 48, height - 30, width - 36, height - 28, 112);
+  drawRect(pixels, width, height, width - 35, height - 30, width - 28, height - 28, labelColor);
+  return buildPatch(pixels, width, height);
 };
 
 const buildCpuColumnPatch = () => {
@@ -1185,6 +1188,11 @@ const textureConfigs = [
     patch: "DPLCOLM",
     build: buildCpuColumnPatch,
   },
+  ...Object.values(cpuTerminalScreens).map((config) => ({
+    texture: config.texture,
+    patch: config.patch,
+    build: () => buildTerminalPatch(config),
+  })),
 ];
 
 const buildPNames = () =>
@@ -1252,7 +1260,6 @@ const buildWad = (lumps) => {
 const mapLumps = [
   lump("PNAMES", buildPNames()),
   ...textureConfigs.map(({ patch, build }) => lump(patch, build())),
-  ...Object.values(cpuStationSigns).map((config) => lump(config.spritePatch, buildCpuSignPatch(config))),
   lump("TEXTURE2", buildTexture2()),
   lump("E1M1"),
   lump("THINGS", buildThings()),

@@ -1,0 +1,15 @@
+[Unit]
+Description=Bootstrap Doom Perf Lab
+After=network.target doomperf-telemetry.service nginx.service
+Wants=doomperf-telemetry.service nginx.service
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/opt/iximiuz-labs/bootstrap-doom-perf.sh
+RemainAfterExit=yes
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

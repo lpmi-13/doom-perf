@@ -1,0 +1,10 @@
+.git
+.agents
+.build
+.claude
+.codex
+node_modules
+playwright-*
+doom*-screenshot*.png
+doom-with-music.png
+nohup.out

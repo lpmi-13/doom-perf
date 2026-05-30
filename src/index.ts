@@ -4,14 +4,14 @@ import { bootstrapWebgl } from "./webgl_bootstrap";
 import { createTelemetryClient, createTerminalOverlay, resolveTelemetrySource } from "./telemetry";
 import type { HudTelemetry, TerminalSign } from "./telemetry";
 
-// World positions (CPU/north wing) of the interactive instrument signs, matching
+// World positions (CPU/north wing) of the wall terminal screens, matching
 // build-doomperf-map.mjs. Pressing USE/space within range opens that terminal.
 const terminalSigns: { sign: TerminalSign; x: number; y: number }[] = [
-  { sign: "cores", x: 272, y: 990 },
-  { sign: "runqueue", x: -432, y: 1120 },
-  { sign: "load", x: 448, y: 1040 },
+  { sign: "cores", x: 0, y: 1436 },
+  { sign: "runqueue", x: -576, y: 1436 },
+  { sign: "load", x: 576, y: 1436 },
 ];
-const terminalRange = 112;
+const terminalRange = 128;
 
 const canvas = document.getElementById("canvas") as HTMLCanvasElement | null;
 const audio = document.getElementById("audio") as HTMLAudioElement | null;

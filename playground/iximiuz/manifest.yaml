@@ -1,0 +1,67 @@
+kind: playground
+name: doom-perf-lab
+base: flexbox
+title: Doom Perf Lab
+description: Explore host CPU telemetry as an interactive Doom diagnostics lab.
+categories:
+  - linux
+  - observability
+  - performance
+playground:
+  networks:
+    - name: local
+      subnet: 172.16.0.0/24
+  machines:
+    - name: lab-01
+      users:
+        - name: root
+        - name: laborant
+          default: true
+          welcome: |
+            Doom Perf is served from this VM.
+
+            Open the "Doom Perf" tab to play the lab in your browser.
+
+            Useful checks:
+              curl -fsS http://127.0.0.1:8080/healthz
+              systemctl status doomperf-telemetry nginx
+      drives:
+        - source: oci://ghcr.io/lpmi-13/doom-perf-rootfs:v1
+          mount: /
+          size: 20GiB
+      network:
+        interfaces:
+          - address: 172.16.0.2/24
+            network: local
+      resources:
+        cpuCount: 4
+        ramSize: 4GiB
+  tabs:
+    - id: terminal-lab-01
+      kind: terminal
+      name: lab-01
+      machine: lab-01
+    - id: doom-perf
+      kind: http-port
+      name: Doom Perf
+      machine: lab-01
+      number: 8080
+  initTasks:
+    init_lab_01_1:
+      name: init_lab_01_1
+      machine: lab-01
+      init: true
+      user: root
+      timeout_seconds: 300
+      run: |-
+        #!/bin/bash
+        set -euo pipefail
+
+        /opt/iximiuz-labs/wait-doom-perf-ready.sh
+  accessControl:
+    canList:
+      - anyone
+    canRead:
+      - anyone
+    canStart:
+      - anyone

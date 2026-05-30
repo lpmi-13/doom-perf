@@ -1,0 +1,14 @@
+[Unit]
+Description=Doom Perf Telemetry SSE
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Environment=DOOM_TELEMETRY_ADDR=127.0.0.1:9999
+ExecStart=/usr/local/bin/doomperf-telemetry
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
