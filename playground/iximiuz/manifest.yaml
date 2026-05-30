@@ -1,12 +1,11 @@
 kind: playground
-name: doom-perf-lab
+name: doom-perf-c0bd32e1
 base: flexbox
 title: Doom Perf Lab
 description: Explore host CPU telemetry as an interactive Doom diagnostics lab.
 categories:
   - linux
   - observability
-  - performance
 playground:
   networks:
     - name: local
@@ -35,7 +34,7 @@ playground:
             network: local
       resources:
         cpuCount: 4
-        ramSize: 4GiB
+        ramSize: 8GiB
   tabs:
     - id: terminal-lab-01
       kind: terminal
