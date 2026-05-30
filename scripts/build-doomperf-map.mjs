@@ -16,6 +16,12 @@ const labelTextureSize = {
   width: 256,
   height: 192,
 };
+const terminalTextureSize = {
+  width: 256,
+  height: 128,
+};
+const terminalPanelDepth = 16;
+const terminalPanelFloor = 32;
 const doorWidth = 192;
 const cpuCoreDisplay = {
   u1: -128,
@@ -315,9 +321,13 @@ const addResourceArea = (direction) => {
       light: frameLight,
     };
     areaRect(direction, "main-frame-south", { u1: cpuRoomBounds.main.u1, v1: cpuRoomBounds.main.v1, u2: cpuRoomBounds.main.u2, v2: ringV0 }, frame);
+    const mainTerminalPanelV = cpuRoomBounds.main.v2 - terminalPanelDepth;
     areaRect(direction, "main-frame-north-west", { u1: cpuRoomBounds.main.u1, v1: ringV0 + ringCells * ringCell, u2: -128, v2: cpuRoomBounds.main.v2 }, frame);
-    areaRect(direction, "main-terminal", { u1: -128, v1: ringV0 + ringCells * ringCell, u2: 128, v2: cpuRoomBounds.main.v2 }, {
+    areaRect(direction, "main-terminal-walk", { u1: -128, v1: ringV0 + ringCells * ringCell, u2: 128, v2: mainTerminalPanelV }, frame);
+    areaRect(direction, "main-terminal", { u1: -128, v1: mainTerminalPanelV, u2: 128, v2: cpuRoomBounds.main.v2 }, {
       ...frame,
+      floor: terminalPanelFloor,
+      ceiling: terminalPanelFloor + terminalTextureSize.height,
       labelSide: "top",
       labelTexture: cpuTerminalScreens.core.texture,
     });
@@ -389,8 +399,12 @@ const addResourceArea = (direction) => {
       light: cpuRunQueueDisplay.light,
     };
     areaRect(direction, "rq-room-west", { ...cpuRoomBounds.runQueue, u2: -704 }, runQueueFloor);
-    areaRect(direction, "rq-terminal", { ...cpuRoomBounds.runQueue, u1: -704, u2: -448 }, {
+    const rqTerminalPanelV = cpuRoomBounds.runQueue.v2 - terminalPanelDepth;
+    areaRect(direction, "rq-terminal-walk", { ...cpuRoomBounds.runQueue, u1: -704, u2: -448, v2: rqTerminalPanelV }, runQueueFloor);
+    areaRect(direction, "rq-terminal", { ...cpuRoomBounds.runQueue, u1: -704, u2: -448, v1: rqTerminalPanelV }, {
       ...runQueueFloor,
+      floor: terminalPanelFloor,
+      ceiling: terminalPanelFloor + terminalTextureSize.height,
       labelSide: "top",
       labelTexture: cpuTerminalScreens.runQueue.texture,
     });
@@ -438,8 +452,12 @@ const addResourceArea = (direction) => {
     areaRect(direction, "load-gauge-1m", { u1: 512, v1: 1192, u2: 640, v2: 1240 }, { ...loadGauge, lineTag: 121 });
     areaRect(direction, "load-walk-e", { u1: 640, v1: cpuRoomBounds.load.v1, u2: cpuRoomBounds.load.u2, v2: 1240 }, loadWalk);
     areaRect(direction, "load-north-west", { u1: cpuRoomBounds.load.u1, v1: 1240, u2: 448, v2: cpuRoomBounds.load.v2 }, loadWalk);
-    areaRect(direction, "load-terminal", { u1: 448, v1: 1240, u2: 704, v2: cpuRoomBounds.load.v2 }, {
+    const loadTerminalPanelV = cpuRoomBounds.load.v2 - terminalPanelDepth;
+    areaRect(direction, "load-terminal-walk", { u1: 448, v1: 1240, u2: 704, v2: loadTerminalPanelV }, loadWalk);
+    areaRect(direction, "load-terminal", { u1: 448, v1: loadTerminalPanelV, u2: 704, v2: cpuRoomBounds.load.v2 }, {
       ...loadWalk,
+      floor: terminalPanelFloor,
+      ceiling: terminalPanelFloor + terminalTextureSize.height,
       labelSide: "top",
       labelTexture: cpuTerminalScreens.load.texture,
     });
@@ -1099,35 +1117,37 @@ const buildLabelPatch = (text, color) => {
 };
 
 const buildTerminalPatch = ({ lines, labelColor, role }) => {
-  const { width, height } = labelTextureSize;
+  const { width, height } = terminalTextureSize;
   const pixels = new Uint8Array(width * height);
   pixels.fill(5);
 
-  drawRect(pixels, width, height, 10, 12, width - 10, height - 10, 8);
-  drawRect(pixels, width, height, 6, 8, width - 14, height - 14, 96);
-  drawRect(pixels, width, height, 14, 16, width - 22, height - 22, 0);
-  drawRect(pixels, width, height, 20, 22, width - 28, 28, labelColor);
-  drawRect(pixels, width, height, 20, height - 34, width - 28, height - 28, 96);
+  const screenTop = 8;
+  const screenBottom = height - 8;
+  drawRect(pixels, width, height, 10, screenTop + 4, width - 10, screenBottom + 2, 8);
+  drawRect(pixels, width, height, 6, screenTop, width - 14, screenBottom - 2, 96);
+  drawRect(pixels, width, height, 14, screenTop + 8, width - 22, screenBottom - 10, 0);
+  drawRect(pixels, width, height, 20, screenTop + 14, width - 28, screenTop + 20, labelColor);
+  drawRect(pixels, width, height, 20, screenBottom - 26, width - 28, screenBottom - 20, 96);
 
   [
-    [15, 17],
-    [width - 32, 17],
-    [15, height - 36],
-    [width - 32, height - 36],
+    [15, screenTop + 9],
+    [width - 32, screenTop + 9],
+    [15, screenBottom - 28],
+    [width - 32, screenBottom - 28],
   ].forEach(([x, y]) => {
     drawRect(pixels, width, height, x, y, x + 8, y + 8, 231);
     drawRect(pixels, width, height, x + 2, y + 2, x + 6, y + 6, 96);
   });
 
-  drawCenteredText(pixels, width, height, lines[0], 54, 2, 200, 28, width - 36);
-  drawCenteredText(pixels, width, height, lines[1], 80, 2, labelColor, 28, width - 36);
-  drawCenteredText(pixels, width, height, "READY", 126, 1, 112, 28, width - 36);
+  drawCenteredText(pixels, width, height, lines[0], screenTop + 28, 2, 200, 28, width - 36);
+  drawCenteredText(pixels, width, height, lines[1], screenTop + 54, 2, labelColor, 28, width - 36);
+  drawCenteredText(pixels, width, height, "READY", screenTop + 96, 1, 112, 28, width - 36);
 
   if (role === "utilization") {
     for (let row = 0; row < 2; row += 1) {
       for (let column = 0; column < 4; column += 1) {
         const x = 76 + column * 28;
-        const y = 108 + row * 12;
+        const y = screenTop + 78 + row * 12;
         const color = [200, 112, 231, labelColor][(row * 4 + column) % 4];
         drawRect(pixels, width, height, x + 2, y + 2, x + 18, y + 9, 8);
         drawRect(pixels, width, height, x, y, x + 16, y + 7, color);
@@ -1137,13 +1157,14 @@ const buildTerminalPatch = ({ lines, labelColor, role }) => {
     [0, 1, 2, 3, 4].forEach((bar) => {
       const x = 70 + bar * 24;
       const barHeight = 10 + bar * 4;
-      drawRect(pixels, width, height, x + 2, 120 - barHeight + 2, x + 14, 122, 8);
-      drawRect(pixels, width, height, x, 120 - barHeight, x + 12, 120, bar % 2 ? labelColor : 231);
+      const baseY = screenTop + 96;
+      drawRect(pixels, width, height, x + 2, baseY - barHeight + 2, x + 14, baseY + 2, 8);
+      drawRect(pixels, width, height, x, baseY - barHeight, x + 12, baseY, bar % 2 ? labelColor : 231);
     });
   }
 
-  drawRect(pixels, width, height, width - 48, height - 30, width - 36, height - 28, 112);
-  drawRect(pixels, width, height, width - 35, height - 30, width - 28, height - 28, labelColor);
+  drawRect(pixels, width, height, width - 48, screenBottom - 22, width - 36, screenBottom - 20, 112);
+  drawRect(pixels, width, height, width - 35, screenBottom - 22, width - 28, screenBottom - 20, labelColor);
   return buildPatch(pixels, width, height);
 };
 
@@ -1191,6 +1212,8 @@ const textureConfigs = [
   ...Object.values(cpuTerminalScreens).map((config) => ({
     texture: config.texture,
     patch: config.patch,
+    width: terminalTextureSize.width,
+    height: terminalTextureSize.height,
     build: () => buildTerminalPatch(config),
   })),
 ];
@@ -1202,12 +1225,12 @@ const buildPNames = () =>
     ...textureConfigs.map(({ patch }) => ascii8(patch))
   );
 
-const buildTextureDefinition = (textureName, patchIndex) =>
+const buildTextureDefinition = ({ texture, width = labelTextureSize.width, height = labelTextureSize.height }, patchIndex) =>
   record(
-    ascii8(textureName),
+    ascii8(texture),
     i32(0),
-    i16(labelTextureSize.width),
-    i16(labelTextureSize.height),
+    i16(width),
+    i16(height),
     i32(0),
     i16(1),
     i16(0),
@@ -1218,8 +1241,8 @@ const buildTextureDefinition = (textureName, patchIndex) =>
   );
 
 const buildTexture2 = () => {
-  const definitions = textureConfigs.map(({ texture }, index) =>
-    buildTextureDefinition(texture, basePatchCount + index)
+  const definitions = textureConfigs.map((config, index) =>
+    buildTextureDefinition(config, basePatchCount + index)
   );
   let offset = 4 + definitions.length * 4;
   const offsets = definitions.map((definition) => {

@@ -77,6 +77,118 @@ void DoomPerf_SetLoad(int index, int milliLoad)
     doomperf_load[index] = milliLoad;
 }
 
+static int DoomPerf_EffectiveCoreCountValue(void)
+{
+    if (doomperf_sim_mode != 0)
+        return 8;
+    return doomperf_cpu_core_count;
+}
+
+static int DoomPerf_EffectiveCpuCoreValue(int index)
+{
+    switch (doomperf_sim_mode)
+    {
+    case 1:
+        return 880 + ((leveltime * 2 + index * 97) % 120);
+    case 2:
+        return 700 + ((leveltime + index * 53) % 200);
+    default:
+        return (index >= 0 && index < doomperf_cpu_core_count)
+            ? doomperf_cpu_cores[index] : 0;
+    }
+}
+
+static int DoomPerf_EffectiveRunQueuePressureValue(void)
+{
+    switch (doomperf_sim_mode)
+    {
+    case 1:
+        return 150;
+    case 2:
+        return 840 + ((leveltime * 3) % 160);
+    default:
+        return doomperf_cpu_run_queue_pressure;
+    }
+}
+
+static int DoomPerf_EffectiveLoadValue(int index)
+{
+    if (index < 0 || index > 2)
+        return 0;
+
+    switch (doomperf_sim_mode)
+    {
+    case 1:
+        if (index == 0)
+            return 7600 + ((leveltime * 5) % 400);
+        if (index == 1)
+            return 7000 + ((leveltime * 3) % 350);
+        return 6200 + ((leveltime * 2) % 300);
+    case 2:
+        if (index == 0)
+            return 14800 + ((leveltime * 5) % 800);
+        if (index == 1)
+            return 13800 + ((leveltime * 3) % 700);
+        return 12600 + ((leveltime * 2) % 600);
+    default:
+        return doomperf_load[index];
+    }
+}
+
+static int DoomPerf_EffectiveLoadPressureValue(void)
+{
+    int cores = DoomPerf_EffectiveCoreCountValue();
+    int load = DoomPerf_EffectiveLoadValue(0);
+    int overcommit;
+
+    if (doomperf_sim_mode == 1)
+        return 0;
+
+    if (cores < 1)
+        cores = 1;
+
+    overcommit = load - cores * 1000;
+    if (overcommit <= 0)
+        return 0;
+    return DoomPerf_ClampPermille((overcommit * 1000) / (cores * 1000));
+}
+
+EMSCRIPTEN_KEEPALIVE
+int DoomPerf_GetSimMode(void)
+{
+    return doomperf_sim_mode;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int DoomPerf_GetEffectiveCpuCoreCount(void)
+{
+    return DoomPerf_EffectiveCoreCountValue();
+}
+
+EMSCRIPTEN_KEEPALIVE
+int DoomPerf_GetEffectiveCpuCore(int index)
+{
+    return DoomPerf_ClampPermille(DoomPerf_EffectiveCpuCoreValue(index));
+}
+
+EMSCRIPTEN_KEEPALIVE
+int DoomPerf_GetEffectiveCpuRunQueuePressure(void)
+{
+    return DoomPerf_ClampPermille(DoomPerf_EffectiveRunQueuePressureValue());
+}
+
+EMSCRIPTEN_KEEPALIVE
+int DoomPerf_GetEffectiveCpuLoadPressure(void)
+{
+    return DoomPerf_EffectiveLoadPressureValue();
+}
+
+EMSCRIPTEN_KEEPALIVE
+int DoomPerf_GetEffectiveLoad(int index)
+{
+    return DoomPerf_EffectiveLoadValue(index);
+}
+
 // Doom Perf: expose the player's world position so the browser can detect
 // proximity to the instrument signs and pop a terminal overlay on USE.
 EMSCRIPTEN_KEEPALIVE

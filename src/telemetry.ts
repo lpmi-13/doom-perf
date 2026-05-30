@@ -390,37 +390,38 @@ export const createTerminalOverlay = () => {
   style.textContent = `
     .doomTerminal {
       position: fixed;
-      left: 50%;
-      top: 50%;
-      transform: translate(-50%, -50%);
+      inset: 5vh 5vw;
       z-index: 10;
-      width: 560px;
-      max-width: 90vw;
-      border: 2px solid #2f7a2f;
+      box-sizing: border-box;
+      flex-direction: column;
+      border: 3px solid #2f7a2f;
       background: rgba(2, 10, 2, 0.94);
       color: #51e07a;
-      font: 14px/1.45 "DejaVu Sans Mono", "Courier New", monospace;
-      box-shadow: 0 0 0 2px #000, 0 0 24px rgba(40, 255, 120, 0.25);
+      font: var(--doom-terminal-font-size, 22px)/1.35 "DejaVu Sans Mono", "Courier New", monospace;
+      box-shadow: 0 0 0 3px #000, 0 0 36px rgba(40, 255, 120, 0.35);
       image-rendering: pixelated;
     }
     .doomTerminal__bar {
+      flex: 0 0 auto;
       background: #103a10;
       color: #b6ffcb;
-      padding: 5px 10px;
+      padding: 0.7em 0.9em;
       letter-spacing: 1px;
       text-transform: uppercase;
-      font-size: 12px;
+      font-size: 0.72em;
       border-bottom: 1px solid #2f7a2f;
     }
     .doomTerminal__body {
+      flex: 1 1 auto;
       margin: 0;
-      padding: 12px 14px;
+      padding: 1em 1.1em;
       white-space: pre;
-      overflow-x: auto;
+      overflow: auto;
     }
     .doomTerminal__hint {
-      padding: 5px 10px;
-      font-size: 11px;
+      flex: 0 0 auto;
+      padding: 0.65em 0.9em;
+      font-size: 0.66em;
       color: #2f9a4f;
       border-top: 1px solid #1d4d1d;
     }
@@ -431,6 +432,16 @@ export const createTerminalOverlay = () => {
   const bar = panel.querySelector(".doomTerminal__bar") as HTMLElement;
   const body = panel.querySelector(".doomTerminal__body") as HTMLElement;
   let current: TerminalSign | null = null;
+  const resizeTerminalText = () => {
+    const { width, height } = panel.getBoundingClientRect();
+    if (width <= 0 || height <= 0) return;
+    const nextSize = Math.max(18, Math.min(30, Math.floor(Math.min(width / 58, height / 34))));
+    panel.style.setProperty("--doom-terminal-font-size", `${nextSize}px`);
+  };
+  if (typeof ResizeObserver !== "undefined") {
+    new ResizeObserver(resizeTerminalText).observe(panel);
+  }
+  window.addEventListener("resize", resizeTerminalText);
 
   return {
     isOpen: () => current !== null,
@@ -438,7 +449,8 @@ export const createTerminalOverlay = () => {
       current = sign;
       bar.textContent = terminalTitle[sign];
       body.textContent = renderTerminal(sign, telemetry);
-      panel.style.display = "block";
+      panel.style.display = "flex";
+      requestAnimationFrame(resizeTerminalText);
     },
     update(telemetry: HudTelemetry) {
       if (current) {
