@@ -5,6 +5,14 @@ import { createTelemetryClient, createTerminalOverlay, resolveTelemetrySource } 
 import type { TelemetrySnapshot, TerminalSign } from "./telemetry";
 import { createInteractPrompt } from "./interact";
 
+// The engine's USE trace reaches USERANGE (linuxdoom p_local.h = 64 map units)
+// in front of the player, so pressing space — or tapping the on-screen prompt,
+// which synthesizes a space press — only opens a door or activates a terminal
+// once the player is within that distance. The interact prompt is gated on the
+// same value so it never advertises an interaction the player is still too far
+// away to perform.
+const useRange = 64;
+
 // World positions (CPU/north wing) of the wall terminal screens, matching
 // build-doomperf-map.mjs. Pressing USE/space within range opens that terminal.
 const terminalSigns: { sign: TerminalSign; x: number; y: number }[] = [
@@ -12,20 +20,29 @@ const terminalSigns: { sign: TerminalSign; x: number; y: number }[] = [
   { sign: "runqueue", x: -576, y: 1436 },
   { sign: "load", x: 576, y: 1436 },
 ];
-const terminalRange = 128;
+const terminalRange = useRange;
 
 // World positions of the four hub doors, one per cardinal exit. These derive
 // from build-doomperf-map.mjs: each door sits at hubRadius (384) along its
-// direction (north/east/south/west -> +y/+x/-y/-x). Used only to decide when
-// to surface the interact prompt; the engine itself handles the door once it
-// receives the USE/space press.
-const doorSigns: { x: number; y: number }[] = [
-  { x: 0, y: 384 },
-  { x: 384, y: 0 },
-  { x: 0, y: -384 },
-  { x: -384, y: 0 },
+// direction (north/east/south/west -> +y/+x/-y/-x). Each point lies exactly on
+// the door's trigger line, so the radial distance below equals the perpendicular
+// distance the engine's USE trace measures on a head-on approach. Used only to
+// decide when to surface the interact prompt; the engine itself handles the
+// door once it receives the USE/space press.
+// `probe` is a point at the centre of the door sector just beyond the trigger
+// line (the 64-deep door sector spans hubRadius..448, so its centre is at 416).
+// The engine reports that sector's live ceiling opening there, letting us tell
+// a shut door from one the player has already opened.
+const doorSigns: { x: number; y: number; probeX: number; probeY: number }[] = [
+  { x: 0, y: 384, probeX: 0, probeY: 416 },
+  { x: 384, y: 0, probeX: 416, probeY: 0 },
+  { x: 0, y: -384, probeX: 0, probeY: -416 },
+  { x: -384, y: 0, probeX: -416, probeY: 0 },
 ];
-const doorRange = 160;
+const doorRange = useRange;
+// A shut DR door reports a ceiling opening of 0; once it has lifted past this
+// many map units it is opening/open, so the "Open Door" prompt is suppressed.
+const doorOpenThreshold = 16;
 
 const canvas = document.getElementById("canvas") as HTMLCanvasElement | null;
 const audio = document.getElementById("audio") as HTMLAudioElement | null;
@@ -68,7 +85,7 @@ const doomPerfMapWad = {
 const doomPerfCpuCoreCapacity = 64;
 console.log(`Loading WAD from ${wadUrl}.`);
 
-const engineAssetVersion = "sim-terminal-20260530";
+const engineAssetVersion = "door-state-20260531";
 const engineScriptUrl = `/engine/doom.js?v=${engineAssetVersion}`;
 const engineWasmUrl = `/engine/doom.wasm?v=${engineAssetVersion}`;
 
@@ -87,6 +104,7 @@ type DoomPerfEngine = {
   _DoomPerf_PlayerActive?: () => number;
   _DoomPerf_PlayerX?: () => number;
   _DoomPerf_PlayerY?: () => number;
+  _DoomPerf_SectorOpenRange?: (x: number, y: number) => number;
 };
 
 const getEngine = () =>
@@ -198,7 +216,7 @@ const start = async () => {
     // in range; the two never overlap in the map, but terminals win to be safe.
     const currentTarget = ():
       | { kind: "terminal"; sign: TerminalSign }
-      | { kind: "door" }
+      | { kind: "door"; probeX: number; probeY: number }
       | null => {
       const engine = getEngine();
       if (!engine?._DoomPerf_PlayerActive?.()) return null;
@@ -211,9 +229,15 @@ const start = async () => {
       const door = doorSigns.find(
         ({ x, y }) => Math.hypot(px - x, py - y) <= doorRange
       );
-      if (door) return { kind: "door" };
+      if (door) return { kind: "door", probeX: door.probeX, probeY: door.probeY };
       return null;
     };
+
+    // True when the door at the given probe point has already lifted open. Used
+    // to suppress the "Open Door" prompt while the door is open (it auto-closes
+    // a few seconds later, at which point the prompt returns).
+    const doorIsOpen = (probeX: number, probeY: number) =>
+      (getEngine()?._DoomPerf_SectorOpenRange?.(probeX, probeY) ?? 0) > doorOpenThreshold;
 
     const openTerminal = (sign: TerminalSign) => {
       refreshEffectiveTelemetry();
@@ -272,11 +296,15 @@ const start = async () => {
         return;
       }
       const target = currentTarget();
-      if (target) {
-        prompt.show(target.kind);
-      } else {
+      if (!target) {
         prompt.hide();
+        return;
       }
+      if (target.kind === "door" && doorIsOpen(target.probeX, target.probeY)) {
+        prompt.hide();
+        return;
+      }
+      prompt.show(target.kind);
     };
     const promptRefresh = window.setInterval(updatePrompt, 120);
 

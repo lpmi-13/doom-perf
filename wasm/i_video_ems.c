@@ -13,6 +13,7 @@
 #include "v_video.h"
 #include "m_fixed.h"
 #include "p_mobj.h"
+#include "r_main.h"
 
 // Doom Perf: CPU room telemetry in per-mille (0..1000), pushed from the
 // browser telemetry SSE stream. Declared extern in doom_emscripten_compat.h
@@ -207,6 +208,31 @@ EMSCRIPTEN_KEEPALIVE
 int DoomPerf_PlayerY(void)
 {
     return players[0].mo ? (players[0].mo->y >> FRACBITS) : 0;
+}
+
+// Doom Perf: report the vertical opening (ceiling minus floor, in map units)
+// of the sector at a world point so the browser can tell whether a hub door is
+// currently shut. A closed DR door (linedef special 1) has its ceiling dropped
+// to the floor, so the opening is 0; an open or opening door has headroom. The
+// interact prompt uses this to stop advertising "Open Door" once the door the
+// player is standing at has already opened (it auto-closes again afterward).
+EMSCRIPTEN_KEEPALIVE
+int DoomPerf_SectorOpenRange(int x, int y)
+{
+    subsector_t* subsector;
+    fixed_t opening;
+
+    if (gamestate != GS_LEVEL)
+        return 0;
+
+    subsector = R_PointInSubsector(x << FRACBITS, y << FRACBITS);
+    if (!subsector || !subsector->sector)
+        return 0;
+
+    opening = subsector->sector->ceilingheight - subsector->sector->floorheight;
+    if (opening < 0)
+        opening = 0;
+    return opening >> FRACBITS;
 }
 
 static SDL_Window* window;
