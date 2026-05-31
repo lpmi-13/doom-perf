@@ -411,7 +411,7 @@ export const createTerminalOverlay = () => {
   const panel = document.createElement("aside");
   panel.className = "doomTerminal";
   panel.style.display = "none";
-  panel.innerHTML = `<header class="doomTerminal__bar"></header><pre class="doomTerminal__body"></pre><footer class="doomTerminal__hint">[space] or [esc] to close</footer>`;
+  panel.innerHTML = `<header class="doomTerminal__bar"></header><pre class="doomTerminal__body"></pre><footer class="doomTerminal__hint">tap, [space] or [esc] to close</footer>`;
 
   const style = document.createElement("style");
   style.textContent = `
@@ -469,6 +469,14 @@ export const createTerminalOverlay = () => {
     new ResizeObserver(resizeTerminalText).observe(panel);
   }
   window.addEventListener("resize", resizeTerminalText);
+
+  // Tapping the panel closes it — the only dismiss affordance on touch devices,
+  // which have no [space]/[esc] keys.
+  panel.style.cursor = "pointer";
+  panel.addEventListener("pointerup", () => {
+    current = null;
+    panel.style.display = "none";
+  });
 
   return {
     isOpen: () => current !== null,
