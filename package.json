@@ -4,9 +4,9 @@
   "type": "module",
   "scripts": {
     "build:map": "node scripts/build-doomperf-map.mjs",
-    "build": "esbuild src/index.ts --bundle --sourcemap --loader:.vert=text --loader:.frag=text --outdir=public/dist",
+    "build": "node scripts/build-web.mjs",
     "build:engine": "bash scripts/build-doom-wasm.sh",
-    "dev": "esbuild src/index.ts --bundle --sourcemap --loader:.vert=text --loader:.frag=text --outdir=public/dist --servedir=public --serve=127.0.0.1:8000 --watch",
+    "dev": "node scripts/build-web.mjs --watch --serve",
     "dev:telemetry": "bash scripts/dev-with-telemetry.sh"
   },
   "devDependencies": {
@@ -16,9 +16,6 @@
   },
   "dependencies": {
     "@tonejs/midi": "^2.0.28",
-    "apl-easy-gl": "^0.4.0",
-    "earcut": "^3.0.2",
-    "gl-matrix": "^3.4.3",
     "tone": "^15.1.22"
   }
 }

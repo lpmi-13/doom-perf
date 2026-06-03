@@ -4,15 +4,7 @@ set -euo pipefail
 go run ./cmd/telemetry &
 telemetry_pid=$!
 
-./node_modules/.bin/esbuild src/index.ts \
-  --bundle \
-  --sourcemap \
-  --loader:.vert=text \
-  --loader:.frag=text \
-  --outdir=public/dist \
-  --servedir=public \
-  --serve=127.0.0.1:8000 \
-  --watch=forever &
+node scripts/build-web.mjs --watch --serve &
 web_pid=$!
 
 cleanup() {

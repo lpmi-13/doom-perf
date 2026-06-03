@@ -29,27 +29,46 @@ type resourceUSE struct {
 
 type cpuTelemetry struct {
 	resourceUSE
-	Load1            float64            `json:"load1"`
-	Load5            float64            `json:"load5"`
-	Load15           float64            `json:"load15"`
-	RunQueue         int                `json:"runQueue"`
-	RunQueuePressure float64            `json:"runQueuePressure"`
-	LoadPressure     float64            `json:"loadPressure"`
-	LogicalCPUs      int                `json:"logicalCpus"`
-	Cores            []cpuCoreTelemetry `json:"cores"`
+	Load1                    float64            `json:"load1"`
+	Load5                    float64            `json:"load5"`
+	Load15                   float64            `json:"load15"`
+	RunQueue                 int                `json:"runQueue"`
+	Blocked                  int                `json:"blocked"`
+	RunQueuePressure         float64            `json:"runQueuePressure"`
+	LoadPressure             float64            `json:"loadPressure"`
+	LogicalCPUs              int                `json:"logicalCpus"`
+	User                     float64            `json:"user"`
+	System                   float64            `json:"system"`
+	Idle                     float64            `json:"idle"`
+	IOWait                   float64            `json:"iowait"`
+	Steal                    float64            `json:"steal"`
+	ContextSwitchesPerSecond float64            `json:"contextSwitchesPerSecond"`
+	InterruptsPerSecond      float64            `json:"interruptsPerSecond"`
+	Cores                    []cpuCoreTelemetry `json:"cores"`
 }
 
 type cpuCoreTelemetry struct {
 	ID          int     `json:"id"`
 	Utilization float64 `json:"utilization"`
+	User        float64 `json:"user"`
+	System      float64 `json:"system"`
+	Idle        float64 `json:"idle"`
+	IOWait      float64 `json:"iowait"`
+	Steal       float64 `json:"steal"`
 }
 
 type memoryTelemetry struct {
 	resourceUSE
-	TotalBytes         uint64  `json:"totalBytes"`
-	AvailableBytes     uint64  `json:"availableBytes"`
-	SwapPagesPerSecond float64 `json:"swapPagesPerSecond"`
-	OOMKillsPerSecond  float64 `json:"oomKillsPerSecond"`
+	TotalBytes            uint64  `json:"totalBytes"`
+	AvailableBytes        uint64  `json:"availableBytes"`
+	FreeBytes             uint64  `json:"freeBytes"`
+	BuffersBytes          uint64  `json:"buffersBytes"`
+	CachedBytes           uint64  `json:"cachedBytes"`
+	SwapUsedBytes         uint64  `json:"swapUsedBytes"`
+	SwapPagesPerSecond    float64 `json:"swapPagesPerSecond"`
+	SwapInPagesPerSecond  float64 `json:"swapInPagesPerSecond"`
+	SwapOutPagesPerSecond float64 `json:"swapOutPagesPerSecond"`
+	OOMKillsPerSecond     float64 `json:"oomKillsPerSecond"`
 }
 
 type storageTelemetry struct {
@@ -69,18 +88,24 @@ type networkTelemetry struct {
 }
 
 type telemetry struct {
-	Timestamp int64            `json:"timestamp"`
-	Host      string           `json:"host"`
-	Health    float64          `json:"health"`
-	CPU       cpuTelemetry     `json:"cpu"`
-	Memory    memoryTelemetry  `json:"memory"`
-	Storage   storageTelemetry `json:"storage"`
-	Network   networkTelemetry `json:"network"`
+	Timestamp     int64            `json:"timestamp"`
+	Host          string           `json:"host"`
+	Health        float64          `json:"health"`
+	UptimeSeconds float64          `json:"uptimeSeconds"`
+	CPU           cpuTelemetry     `json:"cpu"`
+	Memory        memoryTelemetry  `json:"memory"`
+	Storage       storageTelemetry `json:"storage"`
+	Network       networkTelemetry `json:"network"`
 }
 
 type cpuCounter struct {
-	total uint64
-	idle  uint64
+	total      uint64
+	idle       uint64 // idle + iowait, used for utilization
+	userTime   uint64 // user + nice
+	systemTime uint64 // system + irq + softirq
+	idleTime   uint64 // idle only
+	iowaitTime uint64
+	stealTime  uint64
 }
 
 type cpuCoreCounter struct {
@@ -118,7 +143,11 @@ type sampler struct {
 	disk      map[string]diskCounter
 	net       map[string]netCounter
 	swapPages uint64
+	swapIn    uint64
+	swapOut   uint64
 	oomKills  uint64
+	ctxt      uint64
+	intr      uint64
 }
 
 type telemetryHub struct {
@@ -318,13 +347,27 @@ func (s *sampler) sample(now time.Time) (telemetry, error) {
 	load1, load5, load15, runQueue := readLoad()
 	logicalCPUs := max(len(cpuCores), max(runtime.NumCPU(), 1))
 	cpuUtil := cpuUtilization(cpu, s.cpu)
+	cpuUser, cpuSystem, cpuIdle, cpuIOWait, cpuSteal := cpuBreakdown(cpu, s.cpu)
+	statExtras, _ := readKeyValues("/proc/stat")
+	blocked := int(statExtras["procs_blocked"])
+	ctxt := statExtras["ctxt"]
+	intr := statExtras["intr"]
+	ctxtRate := counterRate(ctxt, s.ctxt, elapsed)
+	intrRate := counterRate(intr, s.intr, elapsed)
 	coreTelemetry := make([]cpuCoreTelemetry, 0, len(cpuCores))
 	currentCPUCores := make(map[int]cpuCounter, len(cpuCores))
 	for _, core := range cpuCores {
+		prev := s.cpuCores[core.id]
 		currentCPUCores[core.id] = core.cpuCounter
+		coreUser, coreSystem, coreIdle, coreIOWait, coreSteal := cpuBreakdown(core.cpuCounter, prev)
 		coreTelemetry = append(coreTelemetry, cpuCoreTelemetry{
 			ID:          core.id,
-			Utilization: cpuUtilization(core.cpuCounter, s.cpuCores[core.id]),
+			Utilization: cpuUtilization(core.cpuCounter, prev),
+			User:        coreUser,
+			System:      coreSystem,
+			Idle:        coreIdle,
+			IOWait:      coreIOWait,
+			Steal:       coreSteal,
 		})
 	}
 	runQueuePressure := clamp(float64(max(runQueue-logicalCPUs, 0)) / float64(logicalCPUs))
@@ -348,9 +391,22 @@ func (s *sampler) sample(now time.Time) (telemetry, error) {
 	if memTotal > 0 {
 		memUtil = clamp(1 - float64(memAvailable)/float64(memTotal))
 	}
-	swapPages := vmstat["pswpin"] + vmstat["pswpout"]
+	memFree := meminfo["MemFree"] * 1024
+	memBuffers := meminfo["Buffers"] * 1024
+	memCached := meminfo["Cached"] * 1024
+	swapTotal := meminfo["SwapTotal"] * 1024
+	swapFree := meminfo["SwapFree"] * 1024
+	swapUsed := uint64(0)
+	if swapTotal > swapFree {
+		swapUsed = swapTotal - swapFree
+	}
+	swapInPages := vmstat["pswpin"]
+	swapOutPages := vmstat["pswpout"]
+	swapPages := swapInPages + swapOutPages
 	oomKills := vmstat["oom_kill"]
 	swapRate := counterRate(swapPages, s.swapPages, elapsed)
+	swapInRate := counterRate(swapInPages, s.swapIn, elapsed)
+	swapOutRate := counterRate(swapOutPages, s.swapOut, elapsed)
 	oomRate := counterRate(oomKills, s.oomKills, elapsed)
 	memSaturation := clamp(maxFloat(swapRate/2500, maxFloat(memUtil-0.90, 0)*5))
 	memErrors := clamp(oomRate)
@@ -368,7 +424,11 @@ func (s *sampler) sample(now time.Time) (telemetry, error) {
 	s.cpu = cpu
 	s.cpuCores = currentCPUCores
 	s.swapPages = swapPages
+	s.swapIn = swapInPages
+	s.swapOut = swapOutPages
 	s.oomKills = oomKills
+	s.ctxt = ctxt
+	s.intr = intr
 	s.disk = disks
 	s.net = nets
 
@@ -380,26 +440,41 @@ func (s *sampler) sample(now time.Time) (telemetry, error) {
 	)
 
 	return telemetry{
-		Timestamp: now.UnixMilli(),
-		Host:      host,
-		Health:    clamp(1 - worst),
+		Timestamp:     now.UnixMilli(),
+		Host:          host,
+		Health:        clamp(1 - worst),
+		UptimeSeconds: readUptime(),
 		CPU: cpuTelemetry{
-			resourceUSE:      resourceUSE{Utilization: cpuUtil, Saturation: cpuSaturation},
-			Load1:            load1,
-			Load5:            load5,
-			Load15:           load15,
-			RunQueue:         runQueue,
-			RunQueuePressure: runQueuePressure,
-			LoadPressure:     loadPressure,
-			LogicalCPUs:      logicalCPUs,
-			Cores:            coreTelemetry,
+			resourceUSE:              resourceUSE{Utilization: cpuUtil, Saturation: cpuSaturation},
+			Load1:                    load1,
+			Load5:                    load5,
+			Load15:                   load15,
+			RunQueue:                 runQueue,
+			Blocked:                  blocked,
+			RunQueuePressure:         runQueuePressure,
+			LoadPressure:             loadPressure,
+			LogicalCPUs:              logicalCPUs,
+			User:                     cpuUser,
+			System:                   cpuSystem,
+			Idle:                     cpuIdle,
+			IOWait:                   cpuIOWait,
+			Steal:                    cpuSteal,
+			ContextSwitchesPerSecond: ctxtRate,
+			InterruptsPerSecond:      intrRate,
+			Cores:                    coreTelemetry,
 		},
 		Memory: memoryTelemetry{
-			resourceUSE:        resourceUSE{Utilization: memUtil, Saturation: memSaturation, Errors: memErrors},
-			TotalBytes:         memTotal,
-			AvailableBytes:     memAvailable,
-			SwapPagesPerSecond: swapRate,
-			OOMKillsPerSecond:  oomRate,
+			resourceUSE:           resourceUSE{Utilization: memUtil, Saturation: memSaturation, Errors: memErrors},
+			TotalBytes:            memTotal,
+			AvailableBytes:        memAvailable,
+			FreeBytes:             memFree,
+			BuffersBytes:          memBuffers,
+			CachedBytes:           memCached,
+			SwapUsedBytes:         swapUsed,
+			SwapPagesPerSecond:    swapRate,
+			SwapInPagesPerSecond:  swapInRate,
+			SwapOutPagesPerSecond: swapOutRate,
+			OOMKillsPerSecond:     oomRate,
 		},
 		Storage: storage,
 		Network: network,
@@ -463,7 +538,45 @@ func cpuCounterFromFields(fields []string) (cpuCounter, error) {
 	for _, value := range values {
 		total += value
 	}
-	return cpuCounter{total: total, idle: values[3] + values[4]}, nil
+	// /proc/stat cpu fields: user nice system idle iowait irq softirq steal ...
+	counter := cpuCounter{
+		total:      total,
+		idle:       values[3] + values[4],
+		userTime:   values[0] + values[1],
+		systemTime: values[2],
+		idleTime:   values[3],
+		iowaitTime: values[4],
+	}
+	if len(values) > 5 {
+		counter.systemTime += values[5]
+	}
+	if len(values) > 6 {
+		counter.systemTime += values[6]
+	}
+	if len(values) > 7 {
+		counter.stealTime = values[7]
+	}
+	return counter, nil
+}
+
+// cpuBreakdown returns the fraction of the interval spent in user, system, idle,
+// iowait and steal, computed from the delta between two /proc/stat cpu snapshots.
+func cpuBreakdown(current, previous cpuCounter) (user, system, idle, iowait, steal float64) {
+	total := current.total - previous.total
+	if previous.total == 0 || total == 0 {
+		return 0, 0, 0, 0, 0
+	}
+	frac := func(c, p uint64) float64 {
+		if c < p {
+			return 0
+		}
+		return clamp(float64(c-p) / float64(total))
+	}
+	return frac(current.userTime, previous.userTime),
+		frac(current.systemTime, previous.systemTime),
+		frac(current.idleTime, previous.idleTime),
+		frac(current.iowaitTime, previous.iowaitTime),
+		frac(current.stealTime, previous.stealTime)
 }
 
 func cpuUtilization(current, previous cpuCounter) float64 {
@@ -490,6 +603,19 @@ func readLoad() (float64, float64, float64, int) {
 	running, _, _ := strings.Cut(fields[3], "/")
 	runQueue, _ := strconv.Atoi(running)
 	return load1, load5, load15, runQueue
+}
+
+func readUptime() float64 {
+	content, err := os.ReadFile("/proc/uptime")
+	if err != nil {
+		return 0
+	}
+	fields := strings.Fields(string(content))
+	if len(fields) < 1 {
+		return 0
+	}
+	seconds, _ := strconv.ParseFloat(fields[0], 64)
+	return seconds
 }
 
 func readKeyValues(path string) (map[string]uint64, error) {

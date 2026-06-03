@@ -20,8 +20,18 @@ const terminalTextureSize = {
   width: 256,
   height: 128,
 };
+const signTextureSize = {
+  width: 256,
+  height: 40,
+};
 const terminalPanelDepth = 16;
 const terminalPanelFloor = 32;
+// Control panel filling the wall immediately below each terminal screen. As wide
+// as the riser (which is 256), so with flowOffsetFor it maps across the whole
+// base exactly once -- no obvious repeat.
+const controlPanelTextureSize = { width: 256, height: 32 };
+const controlPanelTexture = "DPCTRL";
+const controlPanelPatch = "DPPCTRL";
 const doorWidth = 192;
 const cpuCoreDisplay = {
   u1: -128,
@@ -60,7 +70,7 @@ ringOrder.push([0, 2]);
 const ringPillarIndex = new Map(ringOrder.map(([c, r], i) => [`${c},${r}`, i]));
 
 const cpuRoomBounds = {
-  main: { u1: -320, v1: 896, u2: 320, v2: 1496 },
+  main: { u1: -320, v1: 896, u2: 320, v2: 1624 },
   runQueue: { u1: -768, v1: 896, u2: -384, v2: 1496 },
   load: { u1: 384, v1: 896, u2: 768, v2: 1496 },
   sideEntry: { v1: 1024, v2: 1216 },
@@ -89,6 +99,23 @@ const cpuTerminalScreens = {
     role: "saturation",
   },
 };
+
+// Free-standing area-identifier signs for the three CPU sub-areas. The wall
+// terminals now show only indistinct green static; these carry the readable
+// name, in the telemetry popup's green.
+const cpuAreaSigns = {
+  core: { text: "CPU CORES", texture: "DPSGCOR", patch: "DPSPCOR" },
+  runQueue: { text: "RUN QUEUE", texture: "DPSGRQ", patch: "DPSPRQ" },
+  load: { text: "LOAD", texture: "DPSGLD", patch: "DPSPLD" },
+};
+const signTextColor = 112;
+
+// Floor name inscriptions: cell flat names per CPU sub-area. The flat pixel data
+// is generated later (once the glyph renderer is defined); the names are static
+// so the geometry can reference them while sectors are built.
+const coreInscriptionNames = Array.from({ length: 4 }, (_, k) => `DPFCOR${k}`);
+const rqInscriptionNames = Array.from({ length: 3 }, (_, k) => `DPFRQ${k}`);
+const loadInscriptionNames = Array.from({ length: 3 }, (_, k) => `DPFLD${k}`);
 
 // Linedef tags reserve stable room markers for engine-side telemetry visuals.
 const resourceConfigs = {
@@ -299,11 +326,28 @@ const addResourceArea = (direction) => {
     kind: "entry",
     light: 192,
   });
-  areaRect(direction, "foyer", { u1: -320, v1: 704, u2: 320, v2: hasCpuCoreDisplay ? cpuRoomBounds.main.v1 : 960 }, {
-    ...base,
-    kind: "foyer",
-    light: 216,
-  });
+  if (hasCpuCoreDisplay) {
+    // Split the CPU foyer to inscribe the CPU CORES name flush into the floor at
+    // the threshold into the core chamber (the player walks over it).
+    const foyer = { ...base, kind: "foyer", light: 216 };
+    areaRect(direction, "foyer-west", { u1: -320, v1: 704, u2: -128, v2: cpuRoomBounds.main.v1 }, foyer);
+    areaRect(direction, "foyer-east", { u1: 128, v1: 704, u2: 320, v2: cpuRoomBounds.main.v1 }, foyer);
+    areaRect(direction, "foyer-south", { u1: -128, v1: 704, u2: 128, v2: 832 }, foyer);
+    // CPU CORES name inscribed flush into the foyer floor at the chamber mouth.
+    coreInscriptionNames.forEach((flatName, k) => {
+      const u1 = -128 + k * 64;
+      areaRect(direction, `core-inscription-${k}`, { u1, v1: 832, u2: u1 + 64, v2: cpuRoomBounds.main.v1 }, {
+        ...foyer,
+        floorFlat: flatName,
+      });
+    });
+  } else {
+    areaRect(direction, "foyer", { u1: -320, v1: 704, u2: 320, v2: 960 }, {
+      ...base,
+      kind: "foyer",
+      light: 216,
+    });
+  }
   if (hasCpuCoreDisplay) {
     // Core ring: a lit metal frame surrounds a 5x5 grid platform whose ceiling
     // vaults upward. The 8 perimeter pillars are solid streak columns (one per
@@ -320,10 +364,39 @@ const addResourceArea = (direction) => {
       ceilingFlat: "CEIL5_1",
       light: frameLight,
     };
+    // Open-air variant for the core courtyard (ring + balconies + stairs) so the
+    // columns are seen rising into the sky from the raised overlook.
+    const openSky = { ...frame, ceiling: 288, ceilingFlat: "F_SKY1" };
     areaRect(direction, "main-frame-south", { u1: cpuRoomBounds.main.u1, v1: cpuRoomBounds.main.v1, u2: cpuRoomBounds.main.u2, v2: ringV0 }, frame);
+    // Behind the cores the chamber flares wider (rearU vs the +/-320 core area)
+    // and leaves a flat breathing space before the stairs, so the overlook feels
+    // open and the stairs aren't crammed up against the columns.
+    const rearU = 368;                                    // rear half-width (core area stays +/-320)
+    const coreRearV = ringV0 + ringCells * ringCell;      // 1240: cores' north edge
+    const coreGap = 128;                                  // flat space between cores and stairs
+    const stairBaseV = coreRearV + coreGap;               // 1368: foot of the stairs
+    const stairCount = 8, stairRun = 24, stairRise = 16;
+    const stairTopV = stairBaseV + stairCount * stairRun; // 1560: top landing / platform
+    const platformFloor = stairCount * stairRise;         // 128: one floor up
     const mainTerminalPanelV = cpuRoomBounds.main.v2 - terminalPanelDepth;
-    areaRect(direction, "main-frame-north-west", { u1: cpuRoomBounds.main.u1, v1: ringV0 + ringCells * ringCell, u2: -128, v2: cpuRoomBounds.main.v2 }, frame);
-    areaRect(direction, "main-terminal-walk", { u1: -128, v1: ringV0 + ringCells * ringCell, u2: 128, v2: mainTerminalPanelV }, frame);
+    // Flat rear courtyard behind the cores, flanking the central terminal corridor.
+    areaRect(direction, "core-rear-w", { u1: -rearU, v1: coreRearV, u2: -128, v2: stairBaseV }, openSky);
+    areaRect(direction, "core-rear-e", { u1: 128, v1: coreRearV, u2: rearU, v2: stairBaseV }, openSky);
+    // Straight flights climbing to viewing platforms at the far back wall, where
+    // the cores are seen across the room. They flank the central terminal
+    // corridor, which stays at ground level the whole way to the screen.
+    for (let s = 1; s <= stairCount; s += 1) {
+      const v1 = stairBaseV + (s - 1) * stairRun;
+      const step = { ...openSky, floor: s * stairRise };
+      areaRect(direction, `core-stair-w${s}`, { u1: -rearU, v1, u2: -128, v2: v1 + stairRun }, step);
+      areaRect(direction, `core-stair-e${s}`, { u1: 128, v1, u2: rearU, v2: v1 + stairRun }, step);
+    }
+    areaRect(direction, "core-platform-w", { u1: -rearU, v1: stairTopV, u2: -128, v2: cpuRoomBounds.main.v2 }, { ...openSky, floor: platformFloor });
+    areaRect(direction, "core-platform-e", { u1: 128, v1: stairTopV, u2: rearU, v2: cpuRoomBounds.main.v2 }, { ...openSky, floor: platformFloor });
+    // Central terminal corridor: open to the sky and at ground level the whole way
+    // to the terminal. The recess keeps ceiling 160, so the step up to the open
+    // sky leaves a solid wall (METAL1) above the screen, as tall as the cores.
+    areaRect(direction, "main-terminal-walk", { u1: -128, v1: coreRearV, u2: 128, v2: mainTerminalPanelV }, openSky);
     areaRect(direction, "main-terminal", { u1: -128, v1: mainTerminalPanelV, u2: 128, v2: cpuRoomBounds.main.v2 }, {
       ...frame,
       floor: terminalPanelFloor,
@@ -331,9 +404,10 @@ const addResourceArea = (direction) => {
       labelSide: "top",
       labelTexture: cpuTerminalScreens.core.texture,
     });
-    areaRect(direction, "main-frame-north-east", { u1: 128, v1: ringV0 + ringCells * ringCell, u2: cpuRoomBounds.main.u2, v2: cpuRoomBounds.main.v2 }, frame);
-    areaRect(direction, "main-frame-west", { u1: cpuRoomBounds.main.u1, v1: ringV0, u2: ringU0, v2: ringV0 + ringCells * ringCell }, frame);
-    areaRect(direction, "main-frame-east", { u1: ringU0 + ringCells * ringCell, v1: ringV0, u2: cpuRoomBounds.main.u2, v2: ringV0 + ringCells * ringCell }, frame);
+    // West & east flanks beside the cores stay at ground level (no raised balcony)
+    // so the cores aren't crowded and the side doorways + entrance stay reachable.
+    areaRect(direction, "core-flank-w", { u1: cpuRoomBounds.main.u1, v1: ringV0, u2: ringU0, v2: coreRearV }, openSky);
+    areaRect(direction, "core-flank-e", { u1: ringU0 + ringCells * ringCell, v1: ringV0, u2: cpuRoomBounds.main.u2, v2: coreRearV }, openSky);
     // 5x5 platform grid: pillar cells (solid streak columns, tagged 101+i for
     // the renderer and 201+i for the sink hook) and walkway/gap cells.
     const ringFloor = {
@@ -342,7 +416,7 @@ const addResourceArea = (direction) => {
       wall: cpuCoreWallTexture,
       floorFlat: "FLOOR1_7",
       ceiling: 288,
-      ceilingFlat: "CEIL5_2",
+      ceilingFlat: "F_SKY1",
       light: cpuCoreDisplay.light,
     };
     for (let row = 0; row < ringCells; row += 1) {
@@ -377,18 +451,16 @@ const addResourceArea = (direction) => {
       light: frameLight,
       ceiling: 144,
     };
-    areaRect(direction, "rq-entry", {
-      u1: cpuRoomBounds.runQueue.u2,
-      v1: cpuRoomBounds.sideEntry.v1,
-      u2: cpuRoomBounds.main.u1,
-      v2: cpuRoomBounds.sideEntry.v2,
-    }, corridor);
-    areaRect(direction, "load-entry", {
-      u1: cpuRoomBounds.main.u2,
-      v1: cpuRoomBounds.sideEntry.v1,
-      u2: cpuRoomBounds.load.u1,
-      v2: cpuRoomBounds.sideEntry.v2,
-    }, corridor);
+    // RUN QUEUE / LOAD names inscribed flush into the entry-corridor floors at
+    // each room's threshold (the player walks over them on the way in).
+    rqInscriptionNames.forEach((flatName, k) => {
+      const v1 = cpuRoomBounds.sideEntry.v1 + k * 64;
+      areaRect(direction, `rq-inscription-${k}`, { u1: cpuRoomBounds.runQueue.u2, v1, u2: cpuRoomBounds.main.u1, v2: v1 + 64 }, { ...corridor, floorFlat: flatName });
+    });
+    loadInscriptionNames.forEach((flatName, k) => {
+      const v1 = cpuRoomBounds.sideEntry.v1 + k * 64;
+      areaRect(direction, `load-inscription-${k}`, { u1: cpuRoomBounds.main.u2, v1, u2: cpuRoomBounds.load.u1, v2: v1 + 64 }, { ...corridor, floorFlat: flatName });
+    });
     // ===== LEFT room: RUN QUEUE conveyor (light 144) + sky window =====
     const runQueueFloor = {
       ...base,
@@ -396,6 +468,7 @@ const addResourceArea = (direction) => {
       wall: "METAL1",
       floorFlat: "FLOOR1_7",
       ceilingFlat: "CEIL5_1",
+      ceiling: 224,
       light: cpuRunQueueDisplay.light,
     };
     areaRect(direction, "rq-room-west", { ...cpuRoomBounds.runQueue, u2: -704 }, runQueueFloor);
@@ -431,6 +504,7 @@ const addResourceArea = (direction) => {
       wall: "METAL1",
       floorFlat: "FLOOR4_8",
       ceilingFlat: "CEIL5_1",
+      ceiling: 224,
       light: 176,
     };
     const loadGauge = {
@@ -557,12 +631,14 @@ const addResourceArea = (direction) => {
   }
 
   if (hasCpuCoreDisplay) {
-    // Decorative torches stay in the corners so the side entries and wall
-    // terminal screens have clear sightlines and walk-up space.
-    addAreaThing(direction, 46, -288, 936);
-    addAreaThing(direction, 46, 288, 936);
-    addAreaThing(direction, 46, -288, 1456);
-    addAreaThing(direction, 46, 288, 1456);
+    // One torch beside each side-room doorway -- against the side wall and just
+    // south of the v=1024..1216 opening (radius 16 reaches only to v=1024, so it
+    // never intrudes into the entry/exit) -- and one at the foot of each back
+    // staircase (stairs start at v=1368), against the rear side wall.
+    addAreaThing(direction, 46, -306, 1008);
+    addAreaThing(direction, 46, 306, 1008);
+    addAreaThing(direction, 46, -354, 1352);
+    addAreaThing(direction, 46, 354, 1352);
   }
 };
 
@@ -686,7 +762,15 @@ const lineTagFor = (front, back, overrideTexture) => {
   return resource ? resourceConfigs[resource].tag : 0;
 };
 
-const sideTextures = (sector, other, overrideTexture) => {
+// A placard's name belongs only on its long faces; the narrow end risers get
+// plain metal. The long faces run along the block's wider axis.
+const edgeIsLongFace = (edge, sign) => {
+  const horizontal = edge.a[1] === edge.b[1];
+  const wideX = (sign.x2 - sign.x1) >= (sign.y2 - sign.y1);
+  return horizontal === wideX;
+};
+
+const sideTextures = (sector, other, overrideTexture, edge) => {
   if (!other) {
     return {
       top: "-",
@@ -699,17 +783,27 @@ const sideTextures = (sector, other, overrideTexture) => {
     // inside gets a plain wall so it isn't left untextured.
     const room = sector.kind === "door" ? other : sector;
     return {
-      top: room && room.kind === "hub" ? doorTextureFor(sector, other) : (room ? room.wall : "-"),
+      top: room && room.kind === "hub" ? doorTextureFor(sector, other) : (room ? "BIGDOOR2" : "-"),
       bottom: "-",
       mid: "-",
     };
   }
   const floorStep = sector.floor !== other.floor;
-  const ceilingStep = sector.ceiling !== other.ceiling && sector.ceilingFlat !== "F_SKY1" && other.ceilingFlat !== "F_SKY1";
+  // A top texture seals the gap above the lower-ceiling sector. Suppress it only
+  // when the *neighbour* is sky (so a window/ledge under a higher sky ceiling
+  // bleeds sky as intended); a sky sector meeting a LOWER solid ceiling -- the
+  // open core courtyard above the terminal recess, the entrance, the side
+  // passages -- still needs a real wall, not a sky-bleed gap.
+  const ceilingStep = sector.ceiling !== other.ceiling && other.ceilingFlat !== "F_SKY1";
   let bottom = "-";
   if (floorStep) {
-    if (other.kind === "core-column" || other.kind === "load-gauge") bottom = other.wall;
+    if (other.kind === "sign") bottom = edge && edgeIsLongFace(edge, other) ? other.labelTexture : other.wall;
+    else if (sector.kind === "sign") bottom = edge && edgeIsLongFace(edge, sector) ? sector.labelTexture : sector.wall;
+    else if (other.kind === "core-column" || other.kind === "load-gauge") bottom = other.wall;
     else if (sector.kind === "core-column" || sector.kind === "load-gauge") bottom = sector.wall;
+    // The step up into a wall-terminal recess (the wall just below the screen)
+    // gets a keyboard/control panel rather than a plain step riser.
+    else if (other.labelSide === "top" && other.labelTexture) bottom = controlPanelTexture;
     else if (sector.kind === "outside" || other.kind === "outside") bottom = "STONE2";
     else bottom = "STEP1";
   }
@@ -753,8 +847,20 @@ const overrideTextureOffsetFor = (edge, sector) => {
   return Math.floor(pad + dist);
 };
 
+// Distance of this segment's start from the wall's start, so a tiling texture
+// continues seamlessly across grid-cut segments instead of restarting at each.
+const flowOffsetFor = (edge, sector) => {
+  const horizontal = edge.a[1] === edge.b[1];
+  if (horizontal) return Math.floor(edge.b[0] >= edge.a[0] ? edge.a[0] - sector.x1 : sector.x2 - edge.a[0]);
+  return Math.floor(edge.b[1] >= edge.a[1] ? edge.a[1] - sector.y1 : sector.y2 - edge.a[1]);
+};
+
 const textureOffsetFor = (edge, sector, other, overrideTexture) => {
   if (isDoorPair(sector, other)) return doorTextureOffsetFor(edge, sector, other);
+  if (sector.kind === "sign") return edgeIsLongFace(edge, sector) ? overrideTextureOffsetFor(edge, sector) : 0;
+  if (other && other.kind === "sign") return edgeIsLongFace(edge, other) ? overrideTextureOffsetFor(edge, other) : 0;
+  // Terminal control-panel riser: flow the tiling panel across its cut segments.
+  if (other && other.labelSide === "top" && other.labelTexture && sector.floor < other.floor) return flowOffsetFor(edge, sector);
   if (overrideTexture) return overrideTextureOffsetFor(edge, sector);
   return 0;
 };
@@ -767,7 +873,7 @@ for (const group of edgeGroups.values()) {
   const backEdge = group.find((edge) => edge !== frontEdge);
   const front = frontEdge.sector;
   const back = backEdge?.sector;
-  const frontTextures = sideTextures(front, back, frontEdge.overrideTexture);
+  const frontTextures = sideTextures(front, back, frontEdge.overrideTexture, frontEdge);
   const frontSide = sidedef(
     sectors.indexOf(front),
     frontTextures.top,
@@ -775,7 +881,7 @@ for (const group of edgeGroups.values()) {
     frontTextures.mid,
     textureOffsetFor(frontEdge, front, back, frontEdge.overrideTexture)
   );
-  const backTextures = back ? sideTextures(back, front, backEdge.overrideTexture) : undefined;
+  const backTextures = back ? sideTextures(back, front, backEdge.overrideTexture, backEdge) : undefined;
   const backSide = back && backTextures
     ? sidedef(
       sectors.indexOf(back),
@@ -1023,6 +1129,23 @@ const glyphs = {
   W: ["10001", "10001", "10001", "10101", "10101", "11011", "10001"],
   Y: ["10001", "10001", "01010", "00100", "00100", "00100", "00100"],
   Z: ["11111", "00001", "00010", "00100", "01000", "10000", "11111"],
+  "0": ["01110", "10001", "10011", "10101", "11001", "10001", "01110"],
+  "1": ["00100", "01100", "00100", "00100", "00100", "00100", "01110"],
+  "2": ["01110", "10001", "00001", "00110", "01000", "10000", "11111"],
+  "3": ["11110", "00001", "00001", "01110", "00001", "00001", "11110"],
+  "4": ["00010", "00110", "01010", "10010", "11111", "00010", "00010"],
+  "5": ["11111", "10000", "11110", "00001", "00001", "10001", "01110"],
+  "6": ["00110", "01000", "10000", "11110", "10001", "10001", "01110"],
+  "7": ["11111", "00001", "00010", "00100", "01000", "01000", "01000"],
+  "8": ["01110", "10001", "10001", "01110", "10001", "10001", "01110"],
+  "9": ["01110", "10001", "10001", "01111", "00001", "00010", "01100"],
+  ":": ["00000", "01100", "01100", "00000", "01100", "01100", "00000"],
+  "/": ["00001", "00001", "00010", "00100", "01000", "10000", "10000"],
+  ".": ["00000", "00000", "00000", "00000", "00000", "01100", "01100"],
+  "-": ["00000", "00000", "00000", "11111", "00000", "00000", "00000"],
+  "%": ["11000", "11001", "00010", "00100", "01000", "10011", "00011"],
+  "=": ["00000", "00000", "11111", "00000", "11111", "00000", "00000"],
+  "_": ["00000", "00000", "00000", "00000", "00000", "00000", "11111"],
 };
 
 const drawRect = (pixels, width, height, x1, y1, x2, y2, color) => {
@@ -1116,55 +1239,126 @@ const buildLabelPatch = (text, color) => {
   return buildPatch(pixels, width, height);
 };
 
-const buildTerminalPatch = ({ lines, labelColor, role }) => {
-  const { width, height } = terminalTextureSize;
+// A short, wide plate for the free-standing floor placards at each CPU sub-area
+// entrance: a metal frame around a dark panel with the green area name. Drawn on
+// the placard block's low riser, so it must be short (matches signTextureSize).
+const buildSignPatch = (text) => {
+  const { width, height } = signTextureSize;
   const pixels = new Uint8Array(width * height);
-  pixels.fill(5);
+  pixels.fill(96);
+  drawRect(pixels, width, height, 5, 5, width - 5, height - 5, 0);
+  const scale = text.length > 6 ? 4 : 5;
+  const startY = Math.floor((height - 7 * scale) / 2);
+  drawCenteredText(pixels, width, height, text, startY, scale, signTextColor, 10, width - 10);
+  return buildPatch(pixels, width, height);
+};
 
+const buildTerminalPatch = ({ lines }) => {
+  const { width, height } = terminalTextureSize;
   const screenTop = 8;
   const screenBottom = height - 8;
-  drawRect(pixels, width, height, 10, screenTop + 4, width - 10, screenBottom + 2, 8);
-  drawRect(pixels, width, height, 6, screenTop, width - 14, screenBottom - 2, 96);
-  drawRect(pixels, width, height, 14, screenTop + 8, width - 22, screenBottom - 10, 0);
-  drawRect(pixels, width, height, 20, screenTop + 14, width - 28, screenTop + 20, labelColor);
-  drawRect(pixels, width, height, 20, screenBottom - 26, width - 28, screenBottom - 20, 96);
-
-  [
-    [15, screenTop + 9],
-    [width - 32, screenTop + 9],
-    [15, screenBottom - 28],
-    [width - 32, screenBottom - 28],
-  ].forEach(([x, y]) => {
-    drawRect(pixels, width, height, x, y, x + 8, y + 8, 231);
-    drawRect(pixels, width, height, x + 2, y + 2, x + 6, y + 6, 96);
-  });
-
-  drawCenteredText(pixels, width, height, lines[0], screenTop + 28, 2, 200, 28, width - 36);
-  drawCenteredText(pixels, width, height, lines[1], screenTop + 54, 2, labelColor, 28, width - 36);
-  drawCenteredText(pixels, width, height, "READY", screenTop + 96, 1, 112, 28, width - 36);
-
-  if (role === "utilization") {
-    for (let row = 0; row < 2; row += 1) {
-      for (let column = 0; column < 4; column += 1) {
-        const x = 76 + column * 28;
-        const y = screenTop + 78 + row * 12;
-        const color = [200, 112, 231, labelColor][(row * 4 + column) % 4];
-        drawRect(pixels, width, height, x + 2, y + 2, x + 18, y + 9, 8);
-        drawRect(pixels, width, height, x, y, x + 16, y + 7, color);
-      }
-    }
-  } else {
-    [0, 1, 2, 3, 4].forEach((bar) => {
-      const x = 70 + bar * 24;
-      const barHeight = 10 + bar * 4;
-      const baseY = screenTop + 96;
-      drawRect(pixels, width, height, x + 2, baseY - barHeight + 2, x + 14, baseY + 2, 8);
-      drawRect(pixels, width, height, x, baseY - barHeight, x + 12, baseY, bar % 2 ? labelColor : 231);
+  const pixels = new Uint8Array(width * height);
+  pixels.fill(5);
+  // Bezel + dark screen.
+  drawRect(pixels, width, height, 6, screenTop - 2, width - 6, screenBottom + 2, 96);
+  drawRect(pixels, width, height, 10, screenTop + 2, width - 10, screenBottom - 2, 8);
+  drawRect(pixels, width, height, 14, screenTop + 6, width - 14, screenBottom - 6, 0);
+  // Simulated console output, then blurred so the individual glyphs can't be
+  // read -- it reads as out-of-focus streaming logs. We rasterise gibberish
+  // monospace text (left-aligned, ragged right) into an intensity buffer,
+  // box-blur it (more horizontally, so log lines stay separate), and map the
+  // intensity onto Doom's green ramp (112 bright -> ~124 dim), leaving the
+  // screen black where there is no text. Seeded from the screen name
+  // (mulberry32) for stable, per-terminal output.
+  let a = 0;
+  for (const ch of lines.join("|")) a = (Math.imul(a, 31) + ch.charCodeAt(0)) | 0;
+  const rand = () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  // Only glyphs the font actually has (no B/F/H/J/X).
+  const pool = "ACDEGIKLMNOPQRSTUVWYZ0123456789:/.-%=_".split("");
+  const left = 16;
+  const charW = 6;
+  const lineH = 9;
+  const maxCols = Math.floor((width - 16 - left) / charW);
+  const ink = new Float32Array(width * height);
+  const mark = (x, y) => {
+    if (x >= 0 && x < width && y >= 0 && y < height) ink[y * width + x] = 1;
+  };
+  const stampGlyph = (ch, gx, gy) => {
+    glyphs[ch].forEach((row, ri) => {
+      for (let ci = 0; ci < 5; ci += 1) if (row[ci] === "1") mark(gx + ci, gy + ri);
     });
+  };
+  let cursorX = null;
+  let cursorY = 0;
+  for (let y = screenTop + 8; y + 7 <= screenBottom - 6; y += lineH) {
+    if (rand() < 0.12) continue; // occasional blank line for rhythm
+    const cols = 2 + Math.floor(rand() * (maxCols - 2)); // ragged right: variable length
+    let c = 0;
+    while (c < cols) {
+      const wordLen = Math.min(2 + Math.floor(rand() * 8), cols - c);
+      for (let i = 0; i < wordLen; i += 1) {
+        stampGlyph(pool[Math.floor(rand() * pool.length)], left + c * charW, y);
+        c += 1;
+      }
+      c += 1; // space between words
+    }
+    cursorX = left + Math.min(c, maxCols) * charW;
+    cursorY = y;
   }
-
-  drawRect(pixels, width, height, width - 48, screenBottom - 22, width - 36, screenBottom - 20, 112);
-  drawRect(pixels, width, height, width - 35, screenBottom - 22, width - 28, screenBottom - 20, labelColor);
+  if (cursorX !== null)
+    for (let yy = 0; yy < 7; yy += 1) for (let xx = 0; xx < 4; xx += 1) mark(cursorX + xx, cursorY + yy);
+  // Separable box blur (horizontal radius rx, vertical radius ry).
+  const blur = (rx, ry) => {
+    if (rx > 0) {
+      const t = new Float32Array(ink.length);
+      for (let y = 0; y < height; y += 1)
+        for (let x = 0; x < width; x += 1) {
+          let s = 0;
+          let n = 0;
+          for (let k = -rx; k <= rx; k += 1) {
+            const xx = x + k;
+            if (xx >= 0 && xx < width) { s += ink[y * width + xx]; n += 1; }
+          }
+          t[y * width + x] = s / n;
+        }
+      ink.set(t);
+    }
+    if (ry > 0) {
+      const t = new Float32Array(ink.length);
+      for (let x = 0; x < width; x += 1)
+        for (let y = 0; y < height; y += 1) {
+          let s = 0;
+          let n = 0;
+          for (let k = -ry; k <= ry; k += 1) {
+            const yy = y + k;
+            if (yy >= 0 && yy < height) { s += ink[yy * width + x]; n += 1; }
+          }
+          t[y * width + x] = s / n;
+        }
+      ink.set(t);
+    }
+  };
+  blur(2, 1);
+  blur(2, 1);
+  let peak = 0;
+  for (let i = 0; i < ink.length; i += 1) if (ink[i] > peak) peak = ink[i];
+  if (peak > 0) {
+    const sx0 = 15;
+    const sy0 = screenTop + 7;
+    const sx1 = width - 15;
+    const sy1 = screenBottom - 7;
+    for (let y = sy0; y < sy1; y += 1)
+      for (let x = sx0; x < sx1; x += 1) {
+        const v = ink[y * width + x] / peak;
+        if (v < 0.15) continue;
+        pixels[y * width + x] = Math.min(124, 112 + Math.round((1 - v) * 13));
+      }
+  }
   return buildPatch(pixels, width, height);
 };
 
@@ -1195,6 +1389,143 @@ const buildCpuColumnPatch = () => {
   return buildPatch(pixels, width, height);
 };
 
+// Rack-mounted server panel for the wall below the terminal screens. Gray metal
+// split by horizontal rack seams into stacked units, each carrying an irregular,
+// non-repeating mix of equipment -- black mini-screens with green data, amber/
+// green/red LED clusters, vent slots, label plates and bare metal -- placed by a
+// seeded RNG so it reads as real gear rather than a uniform decorative pattern.
+// 256 wide -> spans the whole riser once (via flowOffsetFor), so nothing repeats.
+const buildControlPanelPatch = () => {
+  const { width: W, height: H } = controlPanelTextureSize; // 256 x 32
+  const px = new Uint8Array(W * H);
+  px.fill(96); // gray rack metal
+  const R = (x, y, w, h, c) => drawRect(px, W, H, x, y, x + w, y + h, c);
+  let a = 0x1a2b3c4d | 0;
+  const rnd = () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const pick = (arr) => arr[Math.floor(rnd() * arr.length)];
+  const screen = (x, w, y0, y1) => {                 // black mini-screen, green data
+    R(x, y0, w, y1 - y0, 8); R(x + 1, y0 + 1, w - 2, y1 - y0 - 2, 0);
+    for (let gx = x + 2; gx < x + w - 2;) {
+      const bw = 1 + Math.floor(rnd() * 3);
+      if (rnd() > 0.25) { const bh = 1 + Math.floor(rnd() * (y1 - y0 - 4)); R(gx, y1 - 2 - bh, bw, bh, rnd() > 0.4 ? 112 : 118); }
+      gx += bw + 1;
+    }
+  };
+  const leds = (x, w, y0, y1) => {                   // recessed bar of small lamps
+    const my = y0 + Math.max(0, Math.floor((y1 - y0 - 4) / 2));
+    R(x, my, w, 4, 8);
+    for (let lx = x + 2; lx < x + w - 2; lx += 4) if (rnd() > 0.3) R(lx, my + 1, 2, 2, pick([231, 231, 112, 176]));
+  };
+  const vent = (x, w, y0, y1) => { for (let yy = y0 + 1; yy < y1 - 1; yy += 2) R(x, yy, w, 1, 0); };
+  const label = (x, w, y0, y1) => { R(x, y0, w, y1 - y0, 8); R(x, y0, w, 1, 96); R(x + 2, y0 + 3, w - 5, 1, 5); R(x + 2, y0 + 5, Math.floor((w - 4) / 2), 1, 5); };
+  const fillRow = (y0, y1) => {
+    let x = 2 + Math.floor(rnd() * 8);
+    while (x < W - 10) {
+      const type = pick(["screen", "screen", "leds", "leds", "vent", "label", "blank", "screen"]);
+      const w = Math.min(12 + Math.floor(rnd() * 38), W - 4 - x);
+      if (w < 8) break;
+      if (type === "screen") screen(x, w, y0, y1);
+      else if (type === "leds") leds(x, w, y0, y1);
+      else if (type === "vent") vent(x, w, y0, y1);
+      else if (type === "label") label(x, w, y0, y1);
+      else { R(x + 1, y0, 1, 1, 8); R(x + w - 2, y1 - 1, 1, 1, 8); } // bare metal + screws
+      x += w + 3 + Math.floor(rnd() * 10);
+    }
+  };
+  fillRow(2, 13);
+  fillRow(16, 27);
+  // Rack seams: top edge, the unit divider, and a ventilation grille along the base.
+  R(0, 0, W, 1, 0); R(0, 1, W, 1, 8);
+  R(0, 13, W, 1, 8); R(0, 14, W, 1, 0); R(0, 15, W, 1, 8);
+  R(0, 27, W, 1, 8);
+  for (let yy = 28; yy < H; yy += 2) { R(0, yy, W, 1, 0); R(0, yy + 1, W, 1, 8); }
+  return buildPatch(px, W, H);
+};
+
+// ===== Floor name inscriptions (custom flats) =====
+// Doom can only add floor flats by re-bundling every stock flat into the map's
+// own F_START..F_END (R_InitFlats keys off the last F_START/F_END markers), so
+// we copy the IWAD flats and append our generated text flats.
+const FLAT_DIM = 64;
+
+const readIwadFlats = () => {
+  const wad = readFileSync(baseIwadPath);
+  const numLumps = wad.readInt32LE(4);
+  const dirOff = wad.readInt32LE(8);
+  const entries = [];
+  for (let i = 0; i < numLumps; i += 1) {
+    const e = dirOff + i * 16;
+    const name = wad.subarray(e + 8, e + 16).toString("ascii").replace(/\0.*$/, "").trim();
+    entries.push({ name, offset: wad.readInt32LE(e), size: wad.readInt32LE(e + 4) });
+  }
+  const start = entries.findIndex((x) => x.name === "F_START");
+  const end = entries.findIndex((x) => x.name === "F_END");
+  return entries.slice(start + 1, end).map(({ name, offset, size }) =>
+    lump(name, Buffer.from(wad.subarray(offset, offset + size)))
+  );
+};
+
+// Build the 64x64 floor flats for a name inscription: the green name on a dark
+// high-contrast panel. Doom samples floor flats at
+// flat[((-worldY)&63)*64 + (worldX&63)] (note the negated Y), so we map each
+// flat pixel back to a world position and then to the text image, oriented for
+// the cardinal direction the reading player faces. Cells run along the player's
+// left->right axis (worldX for a north/south view, worldY for east/west).
+const inscriptionFontScale = 2;
+const renderInscriptionText = (text, readLen) => {
+  const img = new Uint8Array(readLen * FLAT_DIM); // 0 = black background
+  const startY = Math.floor((FLAT_DIM - 7 * inscriptionFontScale) / 2);
+  drawCenteredText(img, readLen, FLAT_DIM, text, startY, inscriptionFontScale, signTextColor, 4, readLen - 4);
+  return img; // T[letterRow][readPos] = img[letterRow * readLen + readPos]
+};
+const makeInscription = (prefix, text, facing, cells) => {
+  const readLen = cells * FLAT_DIM;
+  const T = renderInscriptionText(text, readLen);
+  const sample = (letterRow, readPos) =>
+    readPos < 0 || readPos >= readLen || letterRow < 0 || letterRow >= FLAT_DIM
+      ? 0
+      : T[letterRow * readLen + readPos];
+  const horiz = facing === "north" || facing === "south";
+  const rectW = horiz ? readLen : FLAT_DIM;
+  const rectH = horiz ? FLAT_DIM : readLen;
+  // World-local (wx,wy) -> text pixel, oriented so the name reads upright with
+  // its top away from the approaching player.
+  const at = (wx, wy) => {
+    if (facing === "north") return sample(rectH - 1 - wy, wx);
+    if (facing === "south") return sample(wy, rectW - 1 - wx);
+    if (facing === "west") return sample(wx, wy);
+    return sample(FLAT_DIM - 1 - wx, rectH - 1 - wy); // east
+  };
+  const flats = [];
+  const names = [];
+  for (let k = 0; k < cells; k += 1) {
+    const cellXoff = horiz ? k * FLAT_DIM : 0;
+    const cellYoff = horiz ? 0 : k * FLAT_DIM;
+    const flat = new Uint8Array(FLAT_DIM * FLAT_DIM);
+    for (let r = 0; r < FLAT_DIM; r += 1)
+      for (let c = 0; c < FLAT_DIM; c += 1)
+        flat[r * FLAT_DIM + c] = at(cellXoff + c, cellYoff + ((FLAT_DIM - r) % FLAT_DIM));
+    const name = `${prefix}${k}`;
+    flats.push(lump(name, Buffer.from(flat)));
+    names.push(name);
+  }
+  return { flats, names };
+};
+
+const iwadFlats = readIwadFlats();
+// `facing` is the way the reading player looks as they approach each entrance:
+// the core chamber from the south (looking north), the run-queue room from the
+// east (looking west), the load room from the west (looking east).
+const coreInscription = makeInscription("DPFCOR", "CPU CORES", "north", 4);
+const rqInscription = makeInscription("DPFRQ", "RUN QUEUE", "west", 3);
+const loadInscription = makeInscription("DPFLD", "LOAD", "east", 3);
+const inscriptionFlats = [...coreInscription.flats, ...rqInscription.flats, ...loadInscription.flats];
+
 const basePNames = readWadLump(readFileSync(baseIwadPath), "PNAMES");
 const basePatchCount = basePNames.readInt32LE(0);
 const labelConfigs = Object.values(resourceConfigs);
@@ -1209,12 +1540,26 @@ const textureConfigs = [
     patch: "DPLCOLM",
     build: buildCpuColumnPatch,
   },
+  {
+    texture: controlPanelTexture,
+    patch: controlPanelPatch,
+    width: controlPanelTextureSize.width,
+    height: controlPanelTextureSize.height,
+    build: buildControlPanelPatch,
+  },
   ...Object.values(cpuTerminalScreens).map((config) => ({
     texture: config.texture,
     patch: config.patch,
     width: terminalTextureSize.width,
     height: terminalTextureSize.height,
     build: () => buildTerminalPatch(config),
+  })),
+  ...Object.values(cpuAreaSigns).map((sign) => ({
+    texture: sign.texture,
+    patch: sign.patch,
+    width: signTextureSize.width,
+    height: signTextureSize.height,
+    build: () => buildSignPatch(sign.text),
   })),
 ];
 
@@ -1284,6 +1629,10 @@ const mapLumps = [
   lump("PNAMES", buildPNames()),
   ...textureConfigs.map(({ patch, build }) => lump(patch, build())),
   lump("TEXTURE2", buildTexture2()),
+  lump("F_START"),
+  ...iwadFlats,
+  ...inscriptionFlats,
+  lump("F_END"),
   lump("E1M1"),
   lump("THINGS", buildThings()),
   lump("LINEDEFS", buildLineDefs()),
@@ -1300,3 +1649,40 @@ const mapLumps = [
 mkdirSync(dirname(outputPath), { recursive: true });
 writeFileSync(outputPath, buildWad(mapLumps));
 console.log(`Wrote ${outputPath}`);
+
+// Emit the interaction manifest the browser UI consumes (terminal read-points
+// and hub-door probes), derived from the same constants that lay out the map.
+// This is the single source of truth for those coordinates: src/index.ts reads
+// this file instead of re-hardcoding values that silently drift when the map
+// layout changes (e.g. when a terminal moves to a new back wall).
+const terminalReadOffset = 60; // a wall terminal is read from ~this far in front (< useRange)
+const doorOuterRadius = 448;   // a hub door sector spans hubRadius..doorOuterRadius
+const roomCenterU = (room) => (room.u1 + room.u2) / 2;
+const doorProbeRadius = hubRadius + (doorOuterRadius - hubRadius) / 2;
+const mapManifest = {
+  useRange: 64,          // engine USERANGE (linuxdoom p_local.h) — USE trace reach
+  doorOpenThreshold: 16, // ceiling lift past which a DR door reads as already open
+  // CPU/north-wing terminal screens sit centred on each room's back wall; the
+  // player reads them from terminalReadOffset units in front (south).
+  terminals: [
+    { sign: "cores", x: roomCenterU(cpuRoomBounds.main), y: cpuRoomBounds.main.v2 - terminalReadOffset },
+    { sign: "runqueue", x: roomCenterU(cpuRoomBounds.runQueue), y: cpuRoomBounds.runQueue.v2 - terminalReadOffset },
+    { sign: "load", x: roomCenterU(cpuRoomBounds.load), y: cpuRoomBounds.load.v2 - terminalReadOffset },
+  ],
+  // Four hub doors, one per cardinal exit, on the trigger line at hubRadius; the
+  // probe point sits at the centre of the door sector just beyond it.
+  doors: [
+    { x: 0, y: hubRadius, probeX: 0, probeY: doorProbeRadius },
+    { x: hubRadius, y: 0, probeX: doorProbeRadius, probeY: 0 },
+    { x: 0, y: -hubRadius, probeX: 0, probeY: -doorProbeRadius },
+    { x: -hubRadius, y: 0, probeX: -doorProbeRadius, probeY: 0 },
+  ],
+};
+const manifestPath = fileURLToPath(new URL("../src/doomperf-map-manifest.ts", import.meta.url));
+writeFileSync(
+  manifestPath,
+  "// GENERATED by scripts/build-doomperf-map.mjs — do not edit by hand.\n" +
+    "// Map interaction geometry shared with the browser UI (src/index.ts).\n" +
+    `export const mapManifest = ${JSON.stringify(mapManifest, null, 2)} as const;\n`
+);
+console.log(`Wrote ${manifestPath}`);

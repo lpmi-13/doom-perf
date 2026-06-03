@@ -1,25 +1,32 @@
 import { bootstrapEngine } from "./engine_bootstrap";
 import { D_DoomMain } from "./d_main";
-import { bootstrapWebgl } from "./webgl_bootstrap";
 import { createTelemetryClient, createTerminalOverlay, resolveTelemetrySource } from "./telemetry";
 import type { TelemetrySnapshot, TerminalSign } from "./telemetry";
 import { createInteractPrompt } from "./interact";
+import { mapManifest } from "./doomperf-map-manifest";
+
+// Cache-bust versions injected at build time by scripts/build-web.mjs (content
+// hashes of the WAD / engine). Under `--watch` they arrive as the "dev" sentinel,
+// which we expand to a runtime timestamp so dev never serves a stale copy.
+declare const __WAD_VERSION__: string;
+declare const __ENGINE_VERSION__: string;
+const assetVersion = (version: string): string => (version === "dev" ? String(Date.now()) : version);
 
 // The engine's USE trace reaches USERANGE (linuxdoom p_local.h = 64 map units)
 // in front of the player, so pressing space — or tapping the on-screen prompt,
 // which synthesizes a space press — only opens a door or activates a terminal
 // once the player is within that distance. The interact prompt is gated on the
 // same value so it never advertises an interaction the player is still too far
-// away to perform.
-const useRange = 64;
+// away to perform. useRange and the terminal/door coordinates below all come
+// from the generated map manifest (scripts/build-doomperf-map.mjs) so they can't
+// drift out of sync with the actual map layout.
+const useRange = mapManifest.useRange;
 
-// World positions (CPU/north wing) of the wall terminal screens, matching
-// build-doomperf-map.mjs. Pressing USE/space within range opens that terminal.
-const terminalSigns: { sign: TerminalSign; x: number; y: number }[] = [
-  { sign: "cores", x: 0, y: 1436 },
-  { sign: "runqueue", x: -576, y: 1436 },
-  { sign: "load", x: 576, y: 1436 },
-];
+// World positions (CPU/north wing) of the wall terminal screens. Pressing
+// USE/space within range opens that terminal.
+const terminalSigns: { sign: TerminalSign; x: number; y: number }[] = mapManifest.terminals.map(
+  (terminal) => ({ sign: terminal.sign, x: terminal.x, y: terminal.y })
+);
 const terminalRange = useRange;
 
 // World positions of the four hub doors, one per cardinal exit. These derive
@@ -33,16 +40,13 @@ const terminalRange = useRange;
 // line (the 64-deep door sector spans hubRadius..448, so its centre is at 416).
 // The engine reports that sector's live ceiling opening there, letting us tell
 // a shut door from one the player has already opened.
-const doorSigns: { x: number; y: number; probeX: number; probeY: number }[] = [
-  { x: 0, y: 384, probeX: 0, probeY: 416 },
-  { x: 384, y: 0, probeX: 416, probeY: 0 },
-  { x: 0, y: -384, probeX: 0, probeY: -416 },
-  { x: -384, y: 0, probeX: -416, probeY: 0 },
-];
+const doorSigns: { x: number; y: number; probeX: number; probeY: number }[] = mapManifest.doors.map(
+  (door) => ({ x: door.x, y: door.y, probeX: door.probeX, probeY: door.probeY })
+);
 const doorRange = useRange;
 // A shut DR door reports a ceiling opening of 0; once it has lifted past this
 // many map units it is opening/open, so the "Open Door" prompt is suppressed.
-const doorOpenThreshold = 16;
+const doorOpenThreshold = mapManifest.doorOpenThreshold;
 
 const canvas = document.getElementById("canvas") as HTMLCanvasElement | null;
 const audio = document.getElementById("audio") as HTMLAudioElement | null;
@@ -71,7 +75,6 @@ const attachAudioUnlock = () => {
 };
 
 const wadParam = new URLSearchParams(window.location.search).get("wad")?.toLowerCase();
-const rendererParam = new URLSearchParams(window.location.search).get("renderer")?.toLowerCase();
 const wadMap: Record<string, string> = {
   doom1: "/wads/Doom1.WAD",
   doom2: "/wads/Doom2.wad",
@@ -79,13 +82,13 @@ const wadMap: Record<string, string> = {
 const wadUrl = wadParam && wadMap[wadParam] ? wadMap[wadParam] : "/wads/Doom1.WAD";
 const telemetrySource = resolveTelemetrySource();
 const doomPerfMapWad = {
-  url: "/maps/doomperf-lab.wad?v=terminal-panel-20260530",
+  url: `/maps/doomperf-lab.wad?v=${assetVersion(__WAD_VERSION__)}`,
   name: "doomperf-lab.wad",
 };
 const doomPerfCpuCoreCapacity = 64;
 console.log(`Loading WAD from ${wadUrl}.`);
 
-const engineAssetVersion = "door-state-20260531";
+const engineAssetVersion = assetVersion(__ENGINE_VERSION__);
 const engineScriptUrl = `/engine/doom.js?v=${engineAssetVersion}`;
 const engineWasmUrl = `/engine/doom.wasm?v=${engineAssetVersion}`;
 
@@ -150,13 +153,45 @@ const scenarioTelemetry = (
   const cpuPressure = mode === 2 ? Math.max(runQueuePressure, loadPressure) : runQueuePressure;
   const quietResource = { utilization: 0.08, saturation: 0, errors: 0 };
   const source = mode === 1 ? "sim: high CPU utilization" : "sim: high CPU saturation";
+  const now = Date.now();
+  // Background system stats so the vmstat memory/swap/io columns aren't blank.
+  // They sit at a low baseline and rise gently with CPU activity (a busier box
+  // touches more memory and does more I/O); a future memory-pressure scenario
+  // would push memUtil up and free/cache/swap would follow automatically.
+  const totalBytes = 8 * 1024 ** 3;
+  const memUtil = clampRatio(0.22 + utilization * 0.12 + cpuPressure * 0.05 + 0.02 * Math.sin(now / 5000));
+  const cacheFrac = clampRatio(0.4 - memUtil * 0.35);
+  const freeFrac = clampRatio(1 - 0.03 - cacheFrac - memUtil);
+  const swapUsedBytes = memUtil > 0.85 ? totalBytes * (memUtil - 0.85) * 1.2 : 0;
+  const simMemory = {
+    utilization: memUtil,
+    saturation: clampRatio((memUtil - 0.9) * 6),
+    errors: 0,
+    totalBytes,
+    freeBytes: totalBytes * freeFrac,
+    buffersBytes: totalBytes * 0.03,
+    cachedBytes: totalBytes * cacheFrac,
+    availableBytes: totalBytes * (freeFrac + cacheFrac * 0.85),
+    swapUsedBytes,
+    swapInPagesPerSecond: 0,
+    swapOutPagesPerSecond: swapUsedBytes > 0 ? 60 + utilization * 200 : 0,
+  };
+  const ioBeat = 1 + Math.abs(Math.sin(now / 1300));
+  const simStorage = {
+    utilization: clampRatio(0.04 + utilization * 0.12),
+    saturation: 0,
+    errors: 0,
+    readBytesPerSecond: (18 + utilization * 180) * ioBeat * 1024,
+    writeBytesPerSecond: (26 + utilization * 260) * ioBeat * 1024,
+  };
 
   return {
     status: "live",
     source,
-    updatedAt: Date.now(),
+    updatedAt: now,
     host: "doomperf-simulation",
     health: clampRatio(1 - Math.max(utilization, cpuPressure)),
+    uptimeSeconds: 3 * 86400 + performance.now() / 1000,
     cpu: {
       utilization,
       saturation: cpuPressure,
@@ -168,23 +203,27 @@ const scenarioTelemetry = (
       load5: Math.max(0, (engine?._DoomPerf_GetEffectiveLoad?.(1) ?? 0) / 1000),
       load15: Math.max(0, (engine?._DoomPerf_GetEffectiveLoad?.(2) ?? 0) / 1000),
       cores,
+      // vmstat detail derived from the simulated CPU state (no live source).
+      runQueue: Math.max(count, Math.round(count * (1 + runQueuePressure))),
+      blocked: 0,
+      user: clampRatio(utilization * 0.7),
+      system: clampRatio(utilization * 0.3),
+      idle: clampRatio(1 - utilization),
+      iowait: 0,
+      steal: 0,
+      contextSwitchesPerSecond: Math.round(1200 + cpuPressure * 28000 + utilization * 6000),
+      interruptsPerSecond: Math.round(800 + utilization * 7000),
     },
-    memory: liveTelemetry?.memory ?? quietResource,
-    storage: liveTelemetry?.storage ?? quietResource,
+    // A scenario is a self-contained simulation, so its memory/io are the
+    // simulated background (not the host's real stats) -- keeping the whole
+    // picture coherent with the simulated CPU.
+    memory: simMemory,
+    storage: simStorage,
     network: liveTelemetry?.network ?? quietResource,
   };
 };
 
 const start = async () => {
-  if (rendererParam === "webgl") {
-    attachAudioUnlock();
-    await bootstrapWebgl({
-      wadUrl,
-      canvas,
-      onStatus: (message) => console.log(message),
-    });
-    return;
-  }
   const engineResponse = await fetch(engineScriptUrl, { method: "HEAD" });
   if (engineResponse.ok) {
     attachAudioUnlock();
