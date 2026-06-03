@@ -662,21 +662,59 @@ const textureOffsetFor = (edge, sector, other, overrideTexture) => {
   return 0;
 };
 
+const WAD_HEADER_SIZE = 12;
+const WAD_DIRECTORY_ENTRY_SIZE = 16;
 
+const wadLumpName = (wadBytes, offset) =>
+  wadBytes.subarray(offset, offset + 8).toString("ascii").replace(/\0.*$/, "").trim();
 
-const readWadLump = (wadBytes, lumpName) => {
+const readWadDirectory = (wadBytes, sourcePath = baseIwadPath) => {
+  if (wadBytes.length < WAD_HEADER_SIZE) {
+    throw new Error(`${sourcePath} is too small to be a WAD.`);
+  }
+
+  const identification = wadBytes.subarray(0, 4).toString("ascii");
+  if (identification !== "IWAD" && identification !== "PWAD") {
+    throw new Error(`${sourcePath} has unsupported WAD type ${identification}.`);
+  }
+
   const numLumps = wadBytes.readInt32LE(4);
   const directoryOffset = wadBytes.readInt32LE(8);
-  for (let index = 0; index < numLumps; index += 1) {
-    const entry = directoryOffset + index * 16;
-    const name = wadBytes.subarray(entry + 8, entry + 16).toString("ascii").replace(/\0.*$/, "").trim();
-    if (name === lumpName) {
-      const offset = wadBytes.readInt32LE(entry);
-      const size = wadBytes.readInt32LE(entry + 4);
-      return Buffer.from(wadBytes.subarray(offset, offset + size));
-    }
+  if (numLumps < 0) {
+    throw new Error(`${sourcePath} has an invalid negative lump count.`);
   }
-  throw new Error(`Missing ${lumpName} in ${baseIwadPath}`);
+  if (directoryOffset < 0) {
+    throw new Error(`${sourcePath} has an invalid negative directory offset.`);
+  }
+
+  const directorySize = numLumps * WAD_DIRECTORY_ENTRY_SIZE;
+  if (directoryOffset > wadBytes.length - directorySize) {
+    throw new Error(`${sourcePath} WAD directory exceeds file length.`);
+  }
+
+  const entries = [];
+  for (let index = 0; index < numLumps; index += 1) {
+    const entryOffset = directoryOffset + index * WAD_DIRECTORY_ENTRY_SIZE;
+    const offset = wadBytes.readInt32LE(entryOffset);
+    const size = wadBytes.readInt32LE(entryOffset + 4);
+    const name = wadLumpName(wadBytes, entryOffset + 8);
+
+    if (offset < 0 || size < 0 || offset > wadBytes.length - size) {
+      throw new Error(`${sourcePath} has invalid lump bounds for ${name || `entry ${index}`}.`);
+    }
+
+    entries.push({ name, offset, size });
+  }
+
+  return entries;
+};
+
+const readWadLump = (wadBytes, lumpName, sourcePath = baseIwadPath) => {
+  const entry = readWadDirectory(wadBytes, sourcePath).find((candidate) => candidate.name === lumpName);
+  if (!entry) {
+    throw new Error(`Missing ${lumpName} in ${sourcePath}`);
+  }
+  return Buffer.from(wadBytes.subarray(entry.offset, entry.offset + entry.size));
 };
 
 // ===== Floor name inscriptions (custom flats) =====
@@ -687,19 +725,19 @@ const FLAT_DIM = 64;
 
 const readIwadFlats = () => {
   const wad = readFileSync(baseIwadPath);
-  const numLumps = wad.readInt32LE(4);
-  const dirOff = wad.readInt32LE(8);
-  const entries = [];
-  for (let i = 0; i < numLumps; i += 1) {
-    const e = dirOff + i * 16;
-    const name = wad.subarray(e + 8, e + 16).toString("ascii").replace(/\0.*$/, "").trim();
-    entries.push({ name, offset: wad.readInt32LE(e), size: wad.readInt32LE(e + 4) });
-  }
+  const entries = readWadDirectory(wad, baseIwadPath);
   const start = entries.findIndex((x) => x.name === "F_START");
   const end = entries.findIndex((x) => x.name === "F_END");
-  return entries.slice(start + 1, end).map(({ name, offset, size }) =>
-    lump(name, Buffer.from(wad.subarray(offset, offset + size)))
-  );
+  if (start === -1 || end === -1 || end <= start) {
+    throw new Error(`${baseIwadPath} is missing a valid F_START..F_END flat range.`);
+  }
+
+  return entries.slice(start + 1, end).map(({ name, offset, size }) => {
+    if (size !== 0 && size !== FLAT_DIM * FLAT_DIM) {
+      throw new Error(`${baseIwadPath} flat ${name} has invalid size ${size}.`);
+    }
+    return lump(name, Buffer.from(wad.subarray(offset, offset + size)));
+  });
 };
 
 // Build the 64x64 floor flats for a name inscription: the green name on a dark
