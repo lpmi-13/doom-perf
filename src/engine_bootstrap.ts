@@ -21,6 +21,7 @@ type EngineModule = {
   FS?: {
     createDataFile?: (path: string, name: string, data: Uint8Array, canRead: boolean, canWrite: boolean) => void;
     analyzePath?: (path: string) => { exists: boolean };
+    chdir?: (path: string) => void;
   };
   callMain?: (args: string[]) => void;
   arguments?: string[];

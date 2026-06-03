@@ -84,8 +84,8 @@ if (watch || serve) {
   const ctx = await esbuild.context(options);
   if (watch) await ctx.watch();
   if (serve) {
-    const { host, port } = await ctx.serve({ host: "127.0.0.1", port: 8000, servedir: "public" });
-    console.log(`[build-web] serving http://${host}:${port}`);
+    const { hosts, port } = await ctx.serve({ host: "127.0.0.1", port: 8000, servedir: "public" });
+    console.log(`[build-web] serving http://${hosts?.[0] ?? "127.0.0.1"}:${port}`);
   }
 } else {
   await esbuild.build(options);

@@ -10,7 +10,9 @@ const screens = Array.from(
 
 let context: CanvasRenderingContext2D | null = null;
 let imageData: ImageData | null = null;
-let palette = new Uint8Array(PALETTE_SIZE);
+// Typed as the buffer-agnostic Uint8Array so it accepts a .subarray() view of a
+// caller-supplied palette (TS 5.7+ Uint8Array is generic over its backing buffer).
+let palette: Uint8Array = new Uint8Array(PALETTE_SIZE);
 let colormap: Uint8Array | null = null;
 
 export const V_Init = (canvas: HTMLCanvasElement) => {

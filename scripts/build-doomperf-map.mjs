@@ -1,6 +1,21 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { lump, i16, i32, ascii8, record, buildWad } from "./lib/wad-bytes.mjs";
+import {
+  labelTextureSize,
+  terminalTextureSize,
+  signTextureSize,
+  controlPanelTextureSize,
+  signTextColor,
+  drawCenteredText,
+  buildLabelPatch,
+  buildSignPatch,
+  buildTerminalPatch,
+  buildCpuColumnPatch,
+  buildControlPanelPatch,
+} from "./lib/textures.mjs";
+import { createMapBuilder } from "./lib/map-builder.mjs";
 
 const outputPath = fileURLToPath(new URL("../public/maps/doomperf-lab.wad", import.meta.url));
 const baseIwadPath = fileURLToPath(new URL("../public/wads/Doom1.WAD", import.meta.url));
@@ -12,24 +27,8 @@ const lineFlags = {
 };
 
 const hubRadius = 384;
-const labelTextureSize = {
-  width: 256,
-  height: 192,
-};
-const terminalTextureSize = {
-  width: 256,
-  height: 128,
-};
-const signTextureSize = {
-  width: 256,
-  height: 40,
-};
 const terminalPanelDepth = 16;
 const terminalPanelFloor = 32;
-// Control panel filling the wall immediately below each terminal screen. As wide
-// as the riser (which is 256), so with flowOffsetFor it maps across the whole
-// base exactly once -- no obvious repeat.
-const controlPanelTextureSize = { width: 256, height: 32 };
 const controlPanelTexture = "DPCTRL";
 const controlPanelPatch = "DPPCTRL";
 const doorWidth = 192;
@@ -108,7 +107,6 @@ const cpuAreaSigns = {
   runQueue: { text: "RUN QUEUE", texture: "DPSGRQ", patch: "DPSPRQ" },
   load: { text: "LOAD", texture: "DPSGLD", patch: "DPSPLD" },
 };
-const signTextColor = 112;
 
 // Floor name inscriptions: cell flat names per CPU sub-area. The flat pixel data
 // is generated later (once the glyph renderer is defined); the names are static
@@ -179,117 +177,11 @@ const outwardSide = {
   west: "left",
 };
 
-const lump = (name, data = Buffer.alloc(0)) => ({ name, data });
-
-const i16 = (value) => {
-  const buffer = Buffer.alloc(2);
-  buffer.writeInt16LE(value);
-  return buffer;
-};
-
-const u16 = (value) => {
-  const buffer = Buffer.alloc(2);
-  buffer.writeUInt16LE(value);
-  return buffer;
-};
-
-const i32 = (value) => {
-  const buffer = Buffer.alloc(4);
-  buffer.writeInt32LE(value);
-  return buffer;
-};
-
-const ascii8 = (value) => {
-  if (value.length > 8) {
-    throw new Error(`Doom lump field exceeds 8 bytes: ${value}`);
-  }
-  const buffer = Buffer.alloc(8);
-  buffer.write(value, "ascii");
-  return buffer;
-};
-
-const record = (...parts) => Buffer.concat(parts);
-
-const pointKey = ([x, y]) => `${x},${y}`;
-
-const boundsFor = (points) => ({
-  x1: Math.min(...points.map(([x]) => x)),
-  y1: Math.min(...points.map(([, y]) => y)),
-  x2: Math.max(...points.map(([x]) => x)),
-  y2: Math.max(...points.map(([, y]) => y)),
-});
-
-const rotatePoint = ([u, v], direction) => {
-  switch (direction) {
-    case "north":
-      return [u, v];
-    case "east":
-      return [v, -u];
-    case "south":
-      return [-u, -v];
-    case "west":
-      return [-v, u];
-    default:
-      throw new Error(`Unknown map direction: ${direction}`);
-  }
-};
-
-const rotateBounds = ({ u1, v1, u2, v2 }, direction) =>
-  boundsFor([
-    rotatePoint([u1, v1], direction),
-    rotatePoint([u2, v1], direction),
-    rotatePoint([u2, v2], direction),
-    rotatePoint([u1, v2], direction),
-  ]);
-
-const sectors = [];
-const things = [{ x: 0, y: 0, angle: 90, type: 1, options: 7 }];
-
-const addThing = ({ x, y, angle = 0, type, options = 7 }) => {
-  things.push({ x, y, angle, type, options });
-};
-
-const addAreaThing = (direction, type, u, v, angle = 0) => {
-  const [x, y] = rotatePoint([u, v], direction);
-  const directionAngle = {
-    north: 0,
-    east: 270,
-    south: 180,
-    west: 90,
-  }[direction];
-  addThing({ x, y, angle: (angle + directionAngle) % 360, type });
-};
-
-const addRect = (id, bounds, options) => {
-  const sector = {
-    id,
-    floor: 0,
-    ceiling: 192,
-    floorFlat: "FLOOR4_8",
-    ceilingFlat: "CEIL3_5",
-    light: 208,
-    wall: "STARTAN3",
-    kind: "room",
-    resource: undefined,
-    labelSide: undefined,
-    labelTexture: undefined,
-    ...bounds,
-    ...options,
-  };
-
-  if (sector.x1 >= sector.x2 || sector.y1 >= sector.y2) {
-    throw new Error(`Sector ${id} has invalid bounds.`);
-  }
-  for (const other of sectors) {
-    const overlapX = Math.min(sector.x2, other.x2) - Math.max(sector.x1, other.x1);
-    const overlapY = Math.min(sector.y2, other.y2) - Math.max(sector.y1, other.y1);
-    if (overlapX > 0 && overlapY > 0) {
-      throw new Error(`Sectors overlap: ${id} and ${other.id}`);
-    }
-  }
-  sectors.push(sector);
-  return sector;
-};
+// The geometry builder owns the sectors/things state and the WAD compile
+// pipeline; we destructure its construction API so the layout code below reads
+// the same as before (areaRect/addAreaThing/addThing), then call compile() near
+// the end (with the map-specific texturing) to emit the binary map lumps.
+const { addThing, addRect, areaRect, addAreaThing, compile } = createMapBuilder();
 
 addRect("atrium", { x1: -hubRadius, y1: -hubRadius, x2: hubRadius, y2: hubRadius }, {
   kind: "hub",
@@ -299,8 +191,6 @@ addRect("atrium", { x1: -hubRadius, y1: -hubRadius, x2: hubRadius, y2: hubRadius
   light: 224,
 });
 
-const areaRect = (direction, id, localBounds, options) =>
-  addRect(`${direction}-${id}`, rotateBounds(localBounds, direction), options);
 
 const addResourceArea = (direction) => {
   const resource = directionResource[direction];
@@ -644,99 +534,6 @@ const addResourceArea = (direction) => {
 
 directions.forEach(addResourceArea);
 
-const xCuts = [...new Set(sectors.flatMap(({ x1, x2 }) => [x1, x2]))].sort((a, b) => a - b);
-const yCuts = [...new Set(sectors.flatMap(({ y1, y2 }) => [y1, y2]))].sort((a, b) => a - b);
-
-const cutsBetween = (cuts, start, end) => cuts.filter((cut) => cut > start && cut < end);
-const vertexIds = new Map();
-const vertices = [];
-
-const vertexId = (point) => {
-  const key = pointKey(point);
-  const existing = vertexIds.get(key);
-  if (existing !== undefined) {
-    return existing;
-  }
-  const index = vertices.length;
-  vertexIds.set(key, index);
-  vertices.push(point);
-  return index;
-};
-
-const splitEdge = (sector, side) => {
-  const points = [];
-  switch (side) {
-    case "top":
-      points.push([sector.x1, sector.y2]);
-      cutsBetween(xCuts, sector.x1, sector.x2).forEach((x) => points.push([x, sector.y2]));
-      points.push([sector.x2, sector.y2]);
-      break;
-    case "right":
-      points.push([sector.x2, sector.y2]);
-      cutsBetween(yCuts, sector.y1, sector.y2).reverse().forEach((y) => points.push([sector.x2, y]));
-      points.push([sector.x2, sector.y1]);
-      break;
-    case "bottom":
-      points.push([sector.x2, sector.y1]);
-      cutsBetween(xCuts, sector.x1, sector.x2).reverse().forEach((x) => points.push([x, sector.y1]));
-      points.push([sector.x1, sector.y1]);
-      break;
-    case "left":
-      points.push([sector.x1, sector.y1]);
-      cutsBetween(yCuts, sector.y1, sector.y2).forEach((y) => points.push([sector.x1, y]));
-      points.push([sector.x1, sector.y2]);
-      break;
-    default:
-      throw new Error(`Unknown sector side: ${side}`);
-  }
-  return points.slice(0, -1).map((point, index) => ({
-    a: point,
-    b: points[index + 1],
-    sector,
-    side,
-    overrideTexture: sector.labelSide === side ? sector.labelTexture : undefined,
-  }));
-};
-
-const segmentKey = (a, b) => {
-  const first = pointKey(a);
-  const second = pointKey(b);
-  return first < second ? `${first}:${second}` : `${second}:${first}`;
-};
-
-const edgeGroups = new Map();
-for (const sector of sectors) {
-  sector.edges = ["top", "right", "bottom", "left"].flatMap((side) => splitEdge(sector, side));
-  for (const edge of sector.edges) {
-    vertexId(edge.a);
-    vertexId(edge.b);
-    const key = segmentKey(edge.a, edge.b);
-    const group = edgeGroups.get(key) ?? [];
-    group.push(edge);
-    edgeGroups.set(key, group);
-  }
-}
-
-const angleFor = ([x1, y1], [x2, y2]) => {
-  const radians = Math.atan2(y2 - y1, x2 - x1);
-  const turns = radians < 0 ? radians / (Math.PI * 2) + 1 : radians / (Math.PI * 2);
-  return Math.round(turns * 65536) & 0xffff;
-};
-
-const sidedefs = [];
-const linedefs = [];
-
-const sidedef = (sectorIndex, topTexture, bottomTexture, midTexture, textureOffset = 0) => {
-  const index = sidedefs.length;
-  sidedefs.push({
-    sectorIndex,
-    textureOffset,
-    topTexture,
-    bottomTexture,
-    midTexture,
-  });
-  return index;
-};
 
 const isDoorPair = (first, second) =>
   Boolean(first && second && (first.kind === "door" || second.kind === "door"));
@@ -865,231 +662,7 @@ const textureOffsetFor = (edge, sector, other, overrideTexture) => {
   return 0;
 };
 
-for (const group of edgeGroups.values()) {
-  if (group.length > 2) {
-    throw new Error(`More than two sectors share edge ${segmentKey(group[0].a, group[0].b)}`);
-  }
-  const frontEdge = chooseFrontEdge(group);
-  const backEdge = group.find((edge) => edge !== frontEdge);
-  const front = frontEdge.sector;
-  const back = backEdge?.sector;
-  const frontTextures = sideTextures(front, back, frontEdge.overrideTexture, frontEdge);
-  const frontSide = sidedef(
-    sectors.indexOf(front),
-    frontTextures.top,
-    frontTextures.bottom,
-    frontTextures.mid,
-    textureOffsetFor(frontEdge, front, back, frontEdge.overrideTexture)
-  );
-  const backTextures = back ? sideTextures(back, front, backEdge.overrideTexture, backEdge) : undefined;
-  const backSide = back && backTextures
-    ? sidedef(
-      sectors.indexOf(back),
-      backTextures.top,
-      backTextures.bottom,
-      backTextures.mid,
-      textureOffsetFor(backEdge, back, front, backEdge.overrideTexture)
-    )
-    : -1;
-  let flags = back ? lineFlags.twoSided : lineFlags.blocking;
-  let special = 0;
-  if (back && (front.kind === "outside" || back.kind === "outside")) {
-    flags |= lineFlags.blocking | lineFlags.lowerUnpegged;
-  }
-  if (back && isDoorPair(front, back)) {
-    flags |= lineFlags.lowerUnpegged;
-    special = 1;
-  }
 
-  const linedefIndex = linedefs.length;
-  linedefs.push({
-    v1: vertexId(frontEdge.a),
-    v2: vertexId(frontEdge.b),
-    flags,
-    special,
-    tag: lineTagFor(front, back, frontEdge.overrideTexture ?? backEdge?.overrideTexture),
-    frontSide,
-    backSide,
-  });
-  frontEdge.linedef = linedefIndex;
-  frontEdge.linedefSide = 0;
-  if (backEdge) {
-    backEdge.linedef = linedefIndex;
-    backEdge.linedefSide = 1;
-  }
-}
-
-const segs = [];
-const subsectors = [];
-for (const sector of sectors) {
-  const firstSeg = segs.length;
-  for (const edge of sector.edges) {
-    segs.push({
-      v1: vertexId(edge.a),
-      v2: vertexId(edge.b),
-      angle: angleFor(edge.a, edge.b),
-      linedef: edge.linedef,
-      side: edge.linedefSide,
-    });
-  }
-  subsectors.push({
-    numSegs: segs.length - firstSeg,
-    firstSeg,
-  });
-}
-
-const bboxFor = (indices) => ({
-  x1: Math.min(...indices.map((index) => sectors[index].x1)),
-  y1: Math.min(...indices.map((index) => sectors[index].y1)),
-  x2: Math.max(...indices.map((index) => sectors[index].x2)),
-  y2: Math.max(...indices.map((index) => sectors[index].y2)),
-});
-
-const splitCandidatesFor = (indices) => {
-  const candidates = [];
-  for (const coordinate of xCuts) {
-    const west = [];
-    const east = [];
-    let straddled = false;
-    for (const index of indices) {
-      const sector = sectors[index];
-      if (sector.x2 <= coordinate) {
-        west.push(index);
-      } else if (sector.x1 >= coordinate) {
-        east.push(index);
-      } else {
-        straddled = true;
-        break;
-      }
-    }
-    if (!straddled && west.length && east.length) {
-      candidates.push({ axis: "x", coordinate, child0: east, child1: west });
-    }
-  }
-  for (const coordinate of yCuts) {
-    const south = [];
-    const north = [];
-    let straddled = false;
-    for (const index of indices) {
-      const sector = sectors[index];
-      if (sector.y2 <= coordinate) {
-        south.push(index);
-      } else if (sector.y1 >= coordinate) {
-        north.push(index);
-      } else {
-        straddled = true;
-        break;
-      }
-    }
-    if (!straddled && south.length && north.length) {
-      candidates.push({ axis: "y", coordinate, child0: south, child1: north });
-    }
-  }
-  return candidates.sort((first, second) => {
-    const firstBalance = Math.abs(first.child0.length - first.child1.length);
-    const secondBalance = Math.abs(second.child0.length - second.child1.length);
-    return firstBalance - secondBalance;
-  });
-};
-
-const nodes = [];
-
-const bspFor = (indices) => {
-  const bbox = bboxFor(indices);
-  if (indices.length === 1) {
-    return {
-      ref: 0x8000 | indices[0],
-      bbox,
-    };
-  }
-  const split = splitCandidatesFor(indices)[0];
-  if (!split) {
-    throw new Error(`Cannot split BSP group: ${indices.map((index) => sectors[index].id).join(", ")}`);
-  }
-  const child0 = bspFor(split.child0);
-  const child1 = bspFor(split.child1);
-  const index = nodes.length;
-  const lineBox = bboxFor(indices);
-  nodes.push({
-    axis: split.axis,
-    coordinate: split.coordinate,
-    bounds: lineBox,
-    child0,
-    child1,
-  });
-  return {
-    ref: index,
-    bbox,
-  };
-};
-
-bspFor(sectors.map((_, index) => index));
-
-const buildThings = () =>
-  Buffer.concat(things.map(({ x, y, angle, type, options }) => record(i16(x), i16(y), i16(angle), i16(type), i16(options))));
-
-const buildVertexes = () => Buffer.concat(vertices.map(([x, y]) => record(i16(x), i16(y))));
-
-const buildSideDefs = () =>
-  Buffer.concat(
-    sidedefs.map(({ sectorIndex, textureOffset, topTexture, bottomTexture, midTexture }) =>
-      record(i16(textureOffset), i16(0), ascii8(topTexture), ascii8(bottomTexture), ascii8(midTexture), i16(sectorIndex))
-    )
-  );
-
-const buildLineDefs = () =>
-  Buffer.concat(
-    linedefs.map(({ v1, v2, flags, special, tag, frontSide, backSide }) =>
-      record(u16(v1), u16(v2), u16(flags), u16(special), u16(tag), i16(frontSide), i16(backSide))
-    )
-  );
-
-const buildSegs = () =>
-  Buffer.concat(
-    segs.map(({ v1, v2, angle, linedef, side }) =>
-      record(u16(v1), u16(v2), u16(angle), u16(linedef), u16(side), u16(0))
-    )
-  );
-
-const buildSubsectors = () =>
-  Buffer.concat(subsectors.map(({ numSegs, firstSeg }) => record(u16(numSegs), u16(firstSeg))));
-
-const buildSectors = () =>
-  Buffer.concat(
-    sectors.map(({ floor, ceiling, floorFlat, ceilingFlat, light, special, tag }) =>
-      record(i16(floor), i16(ceiling), ascii8(floorFlat), ascii8(ceilingFlat), i16(light), i16(special ?? 0), i16(tag ?? 0))
-    )
-  );
-
-const bboxRecord = ({ x1, y1, x2, y2 }) => record(i16(y2), i16(y1), i16(x1), i16(x2));
-
-const buildNodes = () =>
-  Buffer.concat(
-    nodes.map(({ axis, coordinate, bounds, child0, child1 }) => {
-      const partition = axis === "x"
-        ? record(i16(coordinate), i16(bounds.y1), i16(0), i16(bounds.y2 - bounds.y1))
-        : record(i16(bounds.x1), i16(coordinate), i16(bounds.x2 - bounds.x1), i16(0));
-      return record(partition, bboxRecord(child0.bbox), bboxRecord(child1.bbox), u16(child0.ref), u16(child1.ref));
-    })
-  );
-
-const buildReject = () => Buffer.alloc(Math.ceil((sectors.length * sectors.length) / 8));
-
-const buildBlockMap = () => {
-  const minX = Math.min(...vertices.map(([x]) => x));
-  const minY = Math.min(...vertices.map(([, y]) => y));
-  const maxX = Math.max(...vertices.map(([x]) => x));
-  const maxY = Math.max(...vertices.map(([, y]) => y));
-  const originX = minX - 8;
-  const originY = minY - 8;
-  const width = Math.ceil((maxX - originX + 1) / 128);
-  const height = Math.ceil((maxY - originY + 1) / 128);
-  const blockCount = width * height;
-  const sharedListOffset = 4 + blockCount;
-  const offsets = Buffer.concat(Array.from({ length: blockCount }, () => u16(sharedListOffset)));
-  const allLines = Buffer.concat([...linedefs.map((_, index) => u16(index)), i16(-1)]);
-  return record(i16(originX), i16(originY), i16(width), i16(height), offsets, allLines);
-};
 
 const readWadLump = (wadBytes, lumpName) => {
   const numLumps = wadBytes.readInt32LE(4);
@@ -1104,347 +677,6 @@ const readWadLump = (wadBytes, lumpName) => {
     }
   }
   throw new Error(`Missing ${lumpName} in ${baseIwadPath}`);
-};
-
-const glyphs = {
-  " ": ["00000", "00000", "00000", "00000", "00000", "00000", "00000"],
-  A: ["01110", "10001", "10001", "11111", "10001", "10001", "10001"],
-  C: ["01111", "10000", "10000", "10000", "10000", "10000", "01111"],
-  D: ["11110", "10001", "10001", "10001", "10001", "10001", "11110"],
-  E: ["11111", "10000", "10000", "11110", "10000", "10000", "11111"],
-  G: ["01111", "10000", "10000", "10111", "10001", "10001", "01110"],
-  I: ["11111", "00100", "00100", "00100", "00100", "00100", "11111"],
-  K: ["10001", "10010", "10100", "11000", "10100", "10010", "10001"],
-  L: ["10000", "10000", "10000", "10000", "10000", "10000", "11111"],
-  M: ["10001", "11011", "10101", "10101", "10001", "10001", "10001"],
-  N: ["10001", "11001", "10101", "10011", "10001", "10001", "10001"],
-  O: ["01110", "10001", "10001", "10001", "10001", "10001", "01110"],
-  P: ["11110", "10001", "10001", "11110", "10000", "10000", "10000"],
-  Q: ["01110", "10001", "10001", "10001", "10101", "10010", "01101"],
-  R: ["11110", "10001", "10001", "11110", "10100", "10010", "10001"],
-  S: ["01111", "10000", "10000", "01110", "00001", "00001", "11110"],
-  T: ["11111", "00100", "00100", "00100", "00100", "00100", "00100"],
-  U: ["10001", "10001", "10001", "10001", "10001", "10001", "01110"],
-  V: ["10001", "10001", "10001", "10001", "10001", "01010", "00100"],
-  W: ["10001", "10001", "10001", "10101", "10101", "11011", "10001"],
-  Y: ["10001", "10001", "01010", "00100", "00100", "00100", "00100"],
-  Z: ["11111", "00001", "00010", "00100", "01000", "10000", "11111"],
-  "0": ["01110", "10001", "10011", "10101", "11001", "10001", "01110"],
-  "1": ["00100", "01100", "00100", "00100", "00100", "00100", "01110"],
-  "2": ["01110", "10001", "00001", "00110", "01000", "10000", "11111"],
-  "3": ["11110", "00001", "00001", "01110", "00001", "00001", "11110"],
-  "4": ["00010", "00110", "01010", "10010", "11111", "00010", "00010"],
-  "5": ["11111", "10000", "11110", "00001", "00001", "10001", "01110"],
-  "6": ["00110", "01000", "10000", "11110", "10001", "10001", "01110"],
-  "7": ["11111", "00001", "00010", "00100", "01000", "01000", "01000"],
-  "8": ["01110", "10001", "10001", "01110", "10001", "10001", "01110"],
-  "9": ["01110", "10001", "10001", "01111", "00001", "00010", "01100"],
-  ":": ["00000", "01100", "01100", "00000", "01100", "01100", "00000"],
-  "/": ["00001", "00001", "00010", "00100", "01000", "10000", "10000"],
-  ".": ["00000", "00000", "00000", "00000", "00000", "01100", "01100"],
-  "-": ["00000", "00000", "00000", "11111", "00000", "00000", "00000"],
-  "%": ["11000", "11001", "00010", "00100", "01000", "10011", "00011"],
-  "=": ["00000", "00000", "11111", "00000", "11111", "00000", "00000"],
-  "_": ["00000", "00000", "00000", "00000", "00000", "00000", "11111"],
-};
-
-const drawRect = (pixels, width, height, x1, y1, x2, y2, color) => {
-  for (let y = Math.max(0, y1); y < Math.min(height, y2); y += 1) {
-    for (let x = Math.max(0, x1); x < Math.min(width, x2); x += 1) {
-      pixels[y * width + x] = color;
-    }
-  }
-};
-
-const buildPatch = (pixels, width, height, {
-  leftOffset = 0,
-  topOffset = 0,
-  transparent,
-} = {}) => {
-  const headerSize = 8 + width * 4;
-  const columns = [];
-  let offset = headerSize;
-  const header = record(i16(width), i16(height), i16(leftOffset), i16(topOffset));
-  const offsets = Buffer.alloc(width * 4);
-  for (let x = 0; x < width; x += 1) {
-    offsets.writeInt32LE(offset, x * 4);
-    const posts = [];
-    let y = 0;
-    while (y < height) {
-      while (y < height && pixels[y * width + x] === transparent) {
-        y += 1;
-      }
-      if (y >= height) {
-        break;
-      }
-      const top = y;
-      const columnPixels = [];
-      while (y < height && pixels[y * width + x] !== transparent && columnPixels.length < 254) {
-        columnPixels.push(pixels[y * width + x]);
-        y += 1;
-      }
-      posts.push(record(
-        Buffer.from([top, columnPixels.length, 0]),
-        Buffer.from(columnPixels),
-        Buffer.from([0])
-      ));
-    }
-    const column = record(...posts, Buffer.from([255]));
-    columns.push(column);
-    offset += column.length;
-  }
-  return record(header, offsets, ...columns);
-};
-
-const textWidthFor = (text, scale) => text.length * 5 * scale + Math.max(0, text.length - 1) * scale;
-
-const drawCenteredText = (pixels, width, height, text, y, maxScale, color, left = 0, right = width) => {
-  let scale = maxScale;
-  while (scale > 1 && textWidthFor(text, scale) > right - left - 8) {
-    scale -= 1;
-  }
-  const startX = Math.floor(left + (right - left - textWidthFor(text, scale)) / 2);
-  [...text].forEach((character, characterIndex) => {
-    const glyph = glyphs[character];
-    if (!glyph) {
-      throw new Error(`Missing label glyph for ${character}`);
-    }
-    glyph.forEach((row, rowIndex) => {
-      [...row].forEach((pixel, pixelIndex) => {
-        if (pixel === "1") {
-          const x = startX + characterIndex * 6 * scale + pixelIndex * scale;
-          const pixelY = y + rowIndex * scale;
-          drawRect(pixels, width, height, x + 1, pixelY + 1, x + scale + 1, pixelY + scale + 1, 8);
-          drawRect(pixels, width, height, x, pixelY, x + scale, pixelY + scale, color);
-        }
-      });
-    });
-  });
-};
-
-const buildLabelPatch = (text, color) => {
-  const { width, height } = labelTextureSize;
-  const panelWidth = doorWidth;
-  const panelLeft = Math.floor((width - panelWidth) / 2);
-  const panelRight = panelLeft + panelWidth;
-  const pixels = new Uint8Array(width * height);
-  pixels.fill(5);
-  drawRect(pixels, width, height, panelLeft + 4, 0, panelRight - 4, height, 0);
-  drawRect(pixels, width, height, panelLeft + 4, 0, panelLeft + 8, height, 96);
-  drawRect(pixels, width, height, panelRight - 8, 0, panelRight - 4, height, 96);
-
-  const scale = text.length > 6 ? 2 : 3;
-  const startY = Math.floor((height - 7 * scale) / 2);
-  drawCenteredText(pixels, width, height, text, startY, scale, color);
-  return buildPatch(pixels, width, height);
-};
-
-// A short, wide plate for the free-standing floor placards at each CPU sub-area
-// entrance: a metal frame around a dark panel with the green area name. Drawn on
-// the placard block's low riser, so it must be short (matches signTextureSize).
-const buildSignPatch = (text) => {
-  const { width, height } = signTextureSize;
-  const pixels = new Uint8Array(width * height);
-  pixels.fill(96);
-  drawRect(pixels, width, height, 5, 5, width - 5, height - 5, 0);
-  const scale = text.length > 6 ? 4 : 5;
-  const startY = Math.floor((height - 7 * scale) / 2);
-  drawCenteredText(pixels, width, height, text, startY, scale, signTextColor, 10, width - 10);
-  return buildPatch(pixels, width, height);
-};
-
-const buildTerminalPatch = ({ lines }) => {
-  const { width, height } = terminalTextureSize;
-  const screenTop = 8;
-  const screenBottom = height - 8;
-  const pixels = new Uint8Array(width * height);
-  pixels.fill(5);
-  // Bezel + dark screen.
-  drawRect(pixels, width, height, 6, screenTop - 2, width - 6, screenBottom + 2, 96);
-  drawRect(pixels, width, height, 10, screenTop + 2, width - 10, screenBottom - 2, 8);
-  drawRect(pixels, width, height, 14, screenTop + 6, width - 14, screenBottom - 6, 0);
-  // Simulated console output, then blurred so the individual glyphs can't be
-  // read -- it reads as out-of-focus streaming logs. We rasterise gibberish
-  // monospace text (left-aligned, ragged right) into an intensity buffer,
-  // box-blur it (more horizontally, so log lines stay separate), and map the
-  // intensity onto Doom's green ramp (112 bright -> ~124 dim), leaving the
-  // screen black where there is no text. Seeded from the screen name
-  // (mulberry32) for stable, per-terminal output.
-  let a = 0;
-  for (const ch of lines.join("|")) a = (Math.imul(a, 31) + ch.charCodeAt(0)) | 0;
-  const rand = () => {
-    a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-  // Only glyphs the font actually has (no B/F/H/J/X).
-  const pool = "ACDEGIKLMNOPQRSTUVWYZ0123456789:/.-%=_".split("");
-  const left = 16;
-  const charW = 6;
-  const lineH = 9;
-  const maxCols = Math.floor((width - 16 - left) / charW);
-  const ink = new Float32Array(width * height);
-  const mark = (x, y) => {
-    if (x >= 0 && x < width && y >= 0 && y < height) ink[y * width + x] = 1;
-  };
-  const stampGlyph = (ch, gx, gy) => {
-    glyphs[ch].forEach((row, ri) => {
-      for (let ci = 0; ci < 5; ci += 1) if (row[ci] === "1") mark(gx + ci, gy + ri);
-    });
-  };
-  let cursorX = null;
-  let cursorY = 0;
-  for (let y = screenTop + 8; y + 7 <= screenBottom - 6; y += lineH) {
-    if (rand() < 0.12) continue; // occasional blank line for rhythm
-    const cols = 2 + Math.floor(rand() * (maxCols - 2)); // ragged right: variable length
-    let c = 0;
-    while (c < cols) {
-      const wordLen = Math.min(2 + Math.floor(rand() * 8), cols - c);
-      for (let i = 0; i < wordLen; i += 1) {
-        stampGlyph(pool[Math.floor(rand() * pool.length)], left + c * charW, y);
-        c += 1;
-      }
-      c += 1; // space between words
-    }
-    cursorX = left + Math.min(c, maxCols) * charW;
-    cursorY = y;
-  }
-  if (cursorX !== null)
-    for (let yy = 0; yy < 7; yy += 1) for (let xx = 0; xx < 4; xx += 1) mark(cursorX + xx, cursorY + yy);
-  // Separable box blur (horizontal radius rx, vertical radius ry).
-  const blur = (rx, ry) => {
-    if (rx > 0) {
-      const t = new Float32Array(ink.length);
-      for (let y = 0; y < height; y += 1)
-        for (let x = 0; x < width; x += 1) {
-          let s = 0;
-          let n = 0;
-          for (let k = -rx; k <= rx; k += 1) {
-            const xx = x + k;
-            if (xx >= 0 && xx < width) { s += ink[y * width + xx]; n += 1; }
-          }
-          t[y * width + x] = s / n;
-        }
-      ink.set(t);
-    }
-    if (ry > 0) {
-      const t = new Float32Array(ink.length);
-      for (let x = 0; x < width; x += 1)
-        for (let y = 0; y < height; y += 1) {
-          let s = 0;
-          let n = 0;
-          for (let k = -ry; k <= ry; k += 1) {
-            const yy = y + k;
-            if (yy >= 0 && yy < height) { s += ink[yy * width + x]; n += 1; }
-          }
-          t[y * width + x] = s / n;
-        }
-      ink.set(t);
-    }
-  };
-  blur(2, 1);
-  blur(2, 1);
-  let peak = 0;
-  for (let i = 0; i < ink.length; i += 1) if (ink[i] > peak) peak = ink[i];
-  if (peak > 0) {
-    const sx0 = 15;
-    const sy0 = screenTop + 7;
-    const sx1 = width - 15;
-    const sy1 = screenBottom - 7;
-    for (let y = sy0; y < sy1; y += 1)
-      for (let x = sx0; x < sx1; x += 1) {
-        const v = ink[y * width + x] / peak;
-        if (v < 0.15) continue;
-        pixels[y * width + x] = Math.min(124, 112 + Math.round((1 - v) * 13));
-      }
-  }
-  return buildPatch(pixels, width, height);
-};
-
-const buildCpuColumnPatch = () => {
-  const { width, height } = labelTextureSize;
-  const pixels = new Uint8Array(width * height);
-  pixels.fill(96);
-  drawRect(pixels, width, height, 0, 0, width, 8, 96);
-  drawRect(pixels, width, height, 0, height - 8, width, height, 96);
-  for (let x = 0; x < width; x += 32) {
-    drawRect(pixels, width, height, x, 0, x + 4, height, 0);
-    drawRect(pixels, width, height, x + 28, 0, x + 32, height, 0);
-    drawRect(pixels, width, height, x + 4, 12, x + 28, height - 12, 8);
-    drawRect(pixels, width, height, x + 7, 12, x + 25, height - 12, 112);
-    drawRect(pixels, width, height, x + 9, 16, x + 23, height - 16, 5);
-    [200, 112, 231, 176].forEach((color, thread) => {
-      const threadX = x + 11 + thread * 3;
-      for (let y = 18 + thread * 5; y < height - 18; y += 28) {
-        drawRect(pixels, width, height, threadX + 1, y + 2, threadX + 3, y + 18, 8);
-        drawRect(pixels, width, height, threadX, y, threadX + 2, y + 16, color);
-      }
-    });
-  }
-  for (let y = 24; y < height - 24; y += 48) {
-    drawRect(pixels, width, height, 0, y, width, y + 4, 0);
-    drawRect(pixels, width, height, 0, y + 4, width, y + 6, 96);
-  }
-  return buildPatch(pixels, width, height);
-};
-
-// Rack-mounted server panel for the wall below the terminal screens. Gray metal
-// split by horizontal rack seams into stacked units, each carrying an irregular,
-// non-repeating mix of equipment -- black mini-screens with green data, amber/
-// green/red LED clusters, vent slots, label plates and bare metal -- placed by a
-// seeded RNG so it reads as real gear rather than a uniform decorative pattern.
-// 256 wide -> spans the whole riser once (via flowOffsetFor), so nothing repeats.
-const buildControlPanelPatch = () => {
-  const { width: W, height: H } = controlPanelTextureSize; // 256 x 32
-  const px = new Uint8Array(W * H);
-  px.fill(96); // gray rack metal
-  const R = (x, y, w, h, c) => drawRect(px, W, H, x, y, x + w, y + h, c);
-  let a = 0x1a2b3c4d | 0;
-  const rnd = () => {
-    a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-  const pick = (arr) => arr[Math.floor(rnd() * arr.length)];
-  const screen = (x, w, y0, y1) => {                 // black mini-screen, green data
-    R(x, y0, w, y1 - y0, 8); R(x + 1, y0 + 1, w - 2, y1 - y0 - 2, 0);
-    for (let gx = x + 2; gx < x + w - 2;) {
-      const bw = 1 + Math.floor(rnd() * 3);
-      if (rnd() > 0.25) { const bh = 1 + Math.floor(rnd() * (y1 - y0 - 4)); R(gx, y1 - 2 - bh, bw, bh, rnd() > 0.4 ? 112 : 118); }
-      gx += bw + 1;
-    }
-  };
-  const leds = (x, w, y0, y1) => {                   // recessed bar of small lamps
-    const my = y0 + Math.max(0, Math.floor((y1 - y0 - 4) / 2));
-    R(x, my, w, 4, 8);
-    for (let lx = x + 2; lx < x + w - 2; lx += 4) if (rnd() > 0.3) R(lx, my + 1, 2, 2, pick([231, 231, 112, 176]));
-  };
-  const vent = (x, w, y0, y1) => { for (let yy = y0 + 1; yy < y1 - 1; yy += 2) R(x, yy, w, 1, 0); };
-  const label = (x, w, y0, y1) => { R(x, y0, w, y1 - y0, 8); R(x, y0, w, 1, 96); R(x + 2, y0 + 3, w - 5, 1, 5); R(x + 2, y0 + 5, Math.floor((w - 4) / 2), 1, 5); };
-  const fillRow = (y0, y1) => {
-    let x = 2 + Math.floor(rnd() * 8);
-    while (x < W - 10) {
-      const type = pick(["screen", "screen", "leds", "leds", "vent", "label", "blank", "screen"]);
-      const w = Math.min(12 + Math.floor(rnd() * 38), W - 4 - x);
-      if (w < 8) break;
-      if (type === "screen") screen(x, w, y0, y1);
-      else if (type === "leds") leds(x, w, y0, y1);
-      else if (type === "vent") vent(x, w, y0, y1);
-      else if (type === "label") label(x, w, y0, y1);
-      else { R(x + 1, y0, 1, 1, 8); R(x + w - 2, y1 - 1, 1, 1, 8); } // bare metal + screws
-      x += w + 3 + Math.floor(rnd() * 10);
-    }
-  };
-  fillRow(2, 13);
-  fillRow(16, 27);
-  // Rack seams: top edge, the unit divider, and a ventilation grille along the base.
-  R(0, 0, W, 1, 0); R(0, 1, W, 1, 8);
-  R(0, 13, W, 1, 8); R(0, 14, W, 1, 0); R(0, 15, W, 1, 8);
-  R(0, 27, W, 1, 8);
-  for (let yy = 28; yy < H; yy += 2) { R(0, yy, W, 1, 0); R(0, yy + 1, W, 1, 8); }
-  return buildPatch(px, W, H);
 };
 
 // ===== Floor name inscriptions (custom flats) =====
@@ -1533,7 +765,7 @@ const textureConfigs = [
   ...labelConfigs.map(({ label, labelTexture, labelPatch, labelColor }) => ({
     texture: labelTexture,
     patch: labelPatch,
-    build: () => buildLabelPatch(label, labelColor),
+    build: () => buildLabelPatch(label, labelColor, doorWidth),
   })),
   {
     texture: cpuCoreWallTexture,
@@ -1598,32 +830,29 @@ const buildTexture2 = () => {
   return record(i32(definitions.length), ...offsets, ...definitions);
 };
 
-const buildWad = (lumps) => {
-  let fileOffset = 12;
-  const directory = [];
-  const body = Buffer.concat(
-    lumps.map(({ name, data }) => {
-      directory.push({ name, offset: fileOffset, size: data.length });
-      fileOffset += data.length;
-      return data;
-    })
-  );
-  const directoryOffset = 12 + body.length;
-  const header = Buffer.alloc(12);
-  header.write("PWAD", 0, "ascii");
-  header.writeInt32LE(lumps.length, 4);
-  header.writeInt32LE(directoryOffset, 8);
-  const directoryBuffer = Buffer.concat(
-    directory.map(({ name, offset, size }) => {
-      const entry = Buffer.alloc(16);
-      entry.writeInt32LE(offset, 0);
-      entry.writeInt32LE(size, 4);
-      ascii8(name).copy(entry, 8);
-      return entry;
-    })
-  );
-  return record(header, body, directoryBuffer);
+// Per-line flags: two-sided where there's a back sector, blocking otherwise; an
+// outside edge also blocks and lower-unpegs; a door pair lower-unpegs and gets
+// the DR-door special. Passed to compile() so the builder stays map-agnostic.
+const lineFlagsFor = (front, back) => {
+  let flags = back ? lineFlags.twoSided : lineFlags.blocking;
+  let special = 0;
+  if (back && (front.kind === "outside" || back.kind === "outside")) {
+    flags |= lineFlags.blocking | lineFlags.lowerUnpegged;
+  }
+  if (back && isDoorPair(front, back)) {
+    flags |= lineFlags.lowerUnpegged;
+    special = 1;
+  }
+  return { flags, special };
 };
+
+const map = compile({
+  chooseFrontEdge,
+  sideTextures,
+  textureOffsetFor,
+  lineFlagsFor,
+  lineTagFor,
+});
 
 const mapLumps = [
   lump("PNAMES", buildPNames()),
@@ -1634,16 +863,16 @@ const mapLumps = [
   ...inscriptionFlats,
   lump("F_END"),
   lump("E1M1"),
-  lump("THINGS", buildThings()),
-  lump("LINEDEFS", buildLineDefs()),
-  lump("SIDEDEFS", buildSideDefs()),
-  lump("VERTEXES", buildVertexes()),
-  lump("SEGS", buildSegs()),
-  lump("SSECTORS", buildSubsectors()),
-  lump("NODES", buildNodes()),
-  lump("SECTORS", buildSectors()),
-  lump("REJECT", buildReject()),
-  lump("BLOCKMAP", buildBlockMap()),
+  lump("THINGS", map.things),
+  lump("LINEDEFS", map.linedefs),
+  lump("SIDEDEFS", map.sidedefs),
+  lump("VERTEXES", map.vertexes),
+  lump("SEGS", map.segs),
+  lump("SSECTORS", map.subsectors),
+  lump("NODES", map.nodes),
+  lump("SECTORS", map.sectors),
+  lump("REJECT", map.reject),
+  lump("BLOCKMAP", map.blockmap),
 ];
 
 mkdirSync(dirname(outputPath), { recursive: true });

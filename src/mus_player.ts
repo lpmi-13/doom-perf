@@ -12,20 +12,23 @@ const BASS_PROGRAMS = new Set([32, 33, 34, 35, 36, 37, 38, 39]);
 
 function createSynthForProgram(program: number): Tone.PolySynth {
   if (GUITAR_PROGRAMS.has(program)) {
-    return new Tone.PolySynth(Tone.FMSynth, {
+    return new Tone.PolySynth({
       maxPolyphony: 6,
-      voice: { oscillator: { type: "sawtooth" }, envelope: { attack: 0.005, decay: 0.15, sustain: 0.6, release: 0.2 } },
+      voice: Tone.FMSynth,
+      options: { oscillator: { type: "sawtooth" }, envelope: { attack: 0.005, decay: 0.15, sustain: 0.6, release: 0.2 } },
     });
   }
   if (BASS_PROGRAMS.has(program)) {
-    return new Tone.PolySynth(Tone.Synth, {
+    return new Tone.PolySynth({
       maxPolyphony: 4,
-      voice: { oscillator: { type: "square" }, envelope: { attack: 0.005, decay: 0.1, sustain: 0.8, release: 0.15 } },
+      voice: Tone.Synth,
+      options: { oscillator: { type: "square" }, envelope: { attack: 0.005, decay: 0.1, sustain: 0.8, release: 0.15 } },
     });
   }
-  return new Tone.PolySynth(Tone.Synth, {
+  return new Tone.PolySynth({
     maxPolyphony: 6,
-    voice: { oscillator: { type: "triangle" }, envelope: { attack: 0.01, decay: 0.2, sustain: 0.5, release: 0.3 } },
+    voice: Tone.Synth,
+    options: { oscillator: { type: "triangle" }, envelope: { attack: 0.01, decay: 0.2, sustain: 0.5, release: 0.3 } },
   });
 }
 
