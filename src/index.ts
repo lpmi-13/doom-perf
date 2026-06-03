@@ -230,14 +230,30 @@ const start = async () => {
     const terminal = createTerminalOverlay();
     let lastLiveTelemetry: TelemetrySnapshot | undefined;
     let lastEffectiveTelemetry: TelemetrySnapshot | undefined;
+    // A simulated scenario is re-sampled at the command's interval (1s) and the
+    // sample is held between ticks, so the terminal popups advance once per
+    // second like a real `vmstat 1`/`mpstat 1` instead of flickering at the
+    // 250ms engine-refresh rate. Live telemetry is left alone — the collector
+    // already streams a fresh snapshot once per second.
+    const scenarioSampleMs = 1000;
+    let lastScenario: TelemetrySnapshot | undefined;
+    let lastScenarioAt = 0;
 
-    const refreshEffectiveTelemetry = () => {
+    const refreshEffectiveTelemetry = (forceScenarioSample = false) => {
       const engine = getEngine();
       if (lastLiveTelemetry) {
         pushTelemetryToEngine(engine, lastLiveTelemetry);
       }
-      const scenario = scenarioTelemetry(engine, lastLiveTelemetry);
-      lastEffectiveTelemetry = scenario ?? lastLiveTelemetry;
+      const mode = engine?._DoomPerf_GetSimMode?.() ?? 0;
+      const inScenario = mode === 1 || mode === 2;
+      const now = Date.now();
+      if (!inScenario) {
+        lastScenario = undefined;
+      } else if (forceScenarioSample || !lastScenario || now - lastScenarioAt >= scenarioSampleMs) {
+        lastScenario = scenarioTelemetry(engine, lastLiveTelemetry);
+        lastScenarioAt = now;
+      }
+      lastEffectiveTelemetry = lastScenario ?? lastLiveTelemetry;
       if (lastEffectiveTelemetry) {
         terminal.update(lastEffectiveTelemetry);
       }
@@ -279,7 +295,7 @@ const start = async () => {
       (getEngine()?._DoomPerf_SectorOpenRange?.(probeX, probeY) ?? 0) > doorOpenThreshold;
 
     const openTerminal = (sign: TerminalSign) => {
-      refreshEffectiveTelemetry();
+      refreshEffectiveTelemetry(true);
       const telemetry = lastEffectiveTelemetry ?? lastLiveTelemetry;
       if (telemetry) {
         terminal.open(sign, telemetry);

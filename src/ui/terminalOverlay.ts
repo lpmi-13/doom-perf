@@ -67,9 +67,10 @@ const dashSpan = (label: string, width: number): string => {
   const left = Math.floor(pad / 2);
   return "-".repeat(left) + label + "-".repeat(pad - left);
 };
-// Keep the two most recent distinct samples so `vmstat 1 2` shows two rows that
-// genuinely differ as live telemetry arrives (250ms re-renders of the same
-// sample reuse the previous pair rather than duplicating it).
+// Keep the two most recent samples so `vmstat 1 2` shows two rows a sample
+// apart. The overlay only re-renders when a new snapshot arrives (~1s cadence),
+// so each call advances the pair: the previous row becomes row 1, the new one
+// row 2.
 let runQueuePrevRow: number[] | null = null;
 let runQueueLastRow: number[] | null = null;
 let runQueueLastTs = -1;
@@ -221,6 +222,10 @@ export const createTerminalOverlay = () => {
   const bar = panel.querySelector(".doomTerminal__bar") as HTMLElement;
   const body = panel.querySelector(".doomTerminal__body") as HTMLElement;
   let current: TerminalSign | null = null;
+  // updatedAt of the snapshot currently on screen; used to skip re-rendering
+  // when the periodic refresh hands us the same sample (avoids needless DOM
+  // writes and the scroll reset they cause).
+  let renderedAt: number | null = null;
   const resizeTerminalText = () => {
     const { width, height } = panel.getBoundingClientRect();
     if (width <= 0 || height <= 0) return;
@@ -246,12 +251,14 @@ export const createTerminalOverlay = () => {
       current = sign;
       bar.textContent = terminalTitle[sign];
       body.textContent = renderTerminal(sign, telemetry);
+      renderedAt = telemetry.updatedAt;
       panel.style.display = "flex";
       requestAnimationFrame(resizeTerminalText);
     },
     update(telemetry: TelemetrySnapshot) {
-      if (current) {
+      if (current && telemetry.updatedAt !== renderedAt) {
         body.textContent = renderTerminal(current, telemetry);
+        renderedAt = telemetry.updatedAt;
       }
     },
     close() {
