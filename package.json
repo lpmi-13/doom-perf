@@ -7,7 +7,10 @@
     "build": "node scripts/build-web.mjs",
     "build:engine": "bash scripts/build-doom-wasm.sh",
     "dev": "node scripts/build-web.mjs --watch --serve",
-    "dev:telemetry": "bash scripts/dev-with-telemetry.sh"
+    "dev:telemetry": "bash scripts/dev-with-telemetry.sh",
+    "typecheck": "tsc --noEmit",
+    "test:go": "go test ./...",
+    "check": "npm run typecheck && npm run test:go && npm run build"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",
