@@ -18,7 +18,7 @@ import {
 import { createMapBuilder } from "./lib/map-builder.mjs";
 
 const outputPath = fileURLToPath(new URL("../public/maps/doomperf-lab.wad", import.meta.url));
-const baseIwadPath = fileURLToPath(new URL("../public/wads/Doom1.WAD", import.meta.url));
+const baseIwadPath = fileURLToPath(new URL("../public/wads/freedoom1.wad", import.meta.url));
 
 const lineFlags = {
   blocking: 1,

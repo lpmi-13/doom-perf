@@ -2,8 +2,8 @@
 
 Doom Perf is a fork of the original `doom-typescript` browser port. The base
 project brought the open-source Doom engine into the browser with TypeScript,
-WebAssembly, WebGL, Web Audio, and Tone.js. This fork keeps that run/build
-shape, then amends the game into a USE-methodology performance diagnostics lab.
+WebAssembly, Web Audio, and Tone.js. This fork keeps that run/build shape, then
+amends the game into a USE-methodology performance diagnostics lab.
 
 The current goal is not to make a normal Doom game. It is to turn Doom into an
 explorable systems observability space where CPU, memory, storage, and network
@@ -16,8 +16,8 @@ signals.
 
 The project currently runs as a browser-hosted Doom experience using the same
 esbuild and `public/` hosting flow as the fork source. The default runtime path
-loads the patched Doom WASM engine, the shareware `Doom1.WAD`, and the generated
-Doom Perf map PWAD.
+loads the patched Doom WASM engine, the redistributable Freedoom Phase 1
+`freedoom1.wad` IWAD, and the generated Doom Perf map PWAD.
 
 What currently works:
 
@@ -38,8 +38,6 @@ What currently works:
   average pressure.
 - Interactive terminal overlay near CPU wall terminals for core, run queue, and load
   readouts.
-- Alternate `?renderer=webgl` path that renders the WAD with the TypeScript
-  WebGL renderer and overlays telemetry in the Doom status bar.
 
 What is still left:
 
@@ -51,9 +49,7 @@ What is still left:
 - Refine the CPU wing visual language per `VISUAL_REVAMP.md`, especially
   separating metric-bearing instruments from decorative Doom atmosphere.
 - Add per-room music or audio cues.
-- Investigate replacing the shareware IWAD dependency with Freedoom Phase 1 for
-  a fully bundleable base asset set.
-- Clean up strict TypeScript checking in the copied browser/WebGL sources. The
+- Clean up strict TypeScript checking in the copied browser sources. The
   supported project build is currently `npm run build`, which uses esbuild.
 
 ## Installation And Running
@@ -64,7 +60,7 @@ Prerequisites:
 - npm
 - Go 1.22 or newer for the local telemetry SSE service
 - Emscripten SDK only if rebuilding the WASM engine
-- A compatible Doom IWAD at `public/wads/Doom1.WAD`
+- The bundled Freedoom Phase 1 IWAD at `public/wads/freedoom1.wad`
 
 Install dependencies:
 
@@ -95,9 +91,7 @@ Useful URL variants:
 
 ```text
 http://localhost:8000/
-http://localhost:8000/?telemetry=http://127.0.0.1:9999/telemetry
 http://localhost:8000/?telemetry=off
-http://localhost:8000/?renderer=webgl
 ```
 
 ## Controls
@@ -117,8 +111,10 @@ Perf is currently an observational lab, not a combat game.
 
 `npm run dev:telemetry` starts two processes:
 
-- `go run ./cmd/telemetry`
-- esbuild's static web host for `public/`
+- `go run ./cmd/telemetry` (the SSE collector on `127.0.0.1:9999`)
+- the dev web server (`scripts/build-web.mjs --watch --serve`), which serves
+  `public/` and the in-memory bundle, and proxies `/telemetry` and `/healthz`
+  to the collector — the same same-origin fronting nginx provides in prod.
 
 The Go service samples Linux state once per second and emits Server-Sent Events.
 The current live feed includes:
@@ -130,16 +126,17 @@ The current live feed includes:
 - `/proc/net/dev` for network throughput, drops, and errors
 
 The browser accepts either `telemetry` events or JSON `message` events. With no
-query parameter it uses local telemetry on `localhost` and same-origin
-telemetry everywhere else:
+query parameter it always connects same-origin to `/telemetry`:
 
 ```text
-http://127.0.0.1:9999/telemetry  # localhost development
-/telemetry                       # production / iximiuz Labs
+/telemetry   # dev: dev-server proxy -> 127.0.0.1:9999
+/telemetry   # prod / iximiuz Labs: nginx -> 127.0.0.1:9999
 ```
 
-Use `?telemetry=same-origin` to force the production path locally, or
-`?telemetry=off` to disable telemetry.
+Because the request is same-origin in both environments, the collector serves no
+CORS headers. Use `?telemetry=off` to disable telemetry, or
+`?telemetry=<url>` to point at a loopback collector directly (restricted to the
+`127.0.0.1:9999` / `localhost:9999` dev endpoint by the client).
 
 ## iximiuz Labs Deployment
 
@@ -185,7 +182,7 @@ Local telemetry service
     -> SSE stream
 
 Build inputs
-  src/                 TypeScript browser host and renderers
+  src/                 TypeScript browser host, telemetry, and UI
   wasm/                Emscripten platform adapters
   patches/             Ordered linuxdoom-1.10 patches
   scripts/             map and engine build scripts
@@ -209,7 +206,7 @@ truth for changes to the Doom C engine:
 | `0005-strip-map-items.patch` | Strip normal gameplay items while keeping selected lab props. |
 | `0006-unlock-all-doors.patch` | Remove key requirements from locked doors. |
 | `0007-cpu-core-floor-display.patch` | Add CPU floor instruments for cores and pressure. |
-| `0008-allow-project-pwads.patch` | Allow the project PWAD with the local shareware IWAD. |
+| `0008-allow-project-pwads.patch` | Allow the project PWAD with the base IWAD. |
 | `0009-allow-pwad-sprite-overrides.patch` | Allow project sprite replacements for lab signs. |
 | `0010-disable-combat-controls.patch` | Ignore fire and weapon-selection controls. |
 | `0011-title-page-only.patch` | Hold the opening title page instead of cycling demos. |
@@ -262,11 +259,9 @@ npm run build:map
 
 | Path | Role |
 | --- | --- |
-| `src/index.ts` | Browser entry point and WASM/WebGL renderer selection. |
+| `src/index.ts` | Browser entry point: WASM engine, telemetry, and UI wiring. |
 | `src/telemetry.ts` | Telemetry normalization and terminal overlay rendering. |
 | `src/engine_bootstrap.ts` | WASM engine bootstrap and data file mounting. |
-| `src/webgl_bootstrap.ts` | Alternate TypeScript WebGL renderer bootstrap. |
-| `src/engine-webgl/` | TypeScript WAD parsing and WebGL rendering path. |
 | `cmd/telemetry/main.go` | Linux SSE telemetry service. |
 | `scripts/build-doomperf-map.mjs` | Project PWAD generator. |
 | `scripts/build-doom-wasm.sh` | Patch and compile pipeline for the Doom C engine. |
@@ -274,15 +269,19 @@ npm run build:map
 | `patches/doom/linuxdoom-1.10/` | Ordered engine patches. |
 | `public/engine/` | Generated patched engine artifacts. |
 | `public/maps/` | Generated Doom Perf PWAD. |
-| `public/wads/` | Runtime IWAD files. |
+| `public/wads/` | Runtime IWAD files and Freedoom license notice. |
 | `VISUAL_REVAMP.md` | Design notes for the CPU wing revamp. |
 
 ## License
 
-The original Doom source code is released under GPLv2. Doom IWAD data is owned
-by id Software and has separate distribution terms. Doom Perf keeps the
+The original Doom source code is released under GPLv2. Doom Perf keeps the
 browser-port code under the same GPLv2-compatible footing as the forked
 `doom-typescript` project.
+
+The bundled base IWAD is Freedoom Phase 1 (`public/wads/freedoom1.wad`), which
+is distributed under the Freedoom license notice in `public/wads/COPYING.txt`.
+Local `Doom1.WAD` files are not required and are intentionally ignored/excluded
+from Docker packaging.
 
 ## Acknowledgments
 

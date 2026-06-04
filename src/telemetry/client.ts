@@ -17,7 +17,12 @@ export const resolveTelemetrySource = (): string | null => {
   const params = new URLSearchParams(window.location.search);
   const raw = params.get("telemetry") ?? params.get("telemetryUrl");
   if (!raw) {
-    return isLocalHost(window.location.hostname) ? "http://127.0.0.1:9999/telemetry" : "/telemetry";
+    // Same-origin in every environment: the iximiuz prod VM fronts the collector
+    // with nginx, and the local dev server (scripts/build-web.mjs) proxies
+    // /telemetry to the Go collector the same way. No cross-origin request, so
+    // the collector needs no CORS. An explicit ?telemetry=<url> can still point
+    // at the loopback collector directly (see isAllowedLocalTelemetryEndpoint).
+    return "/telemetry";
   }
   const value = raw.trim();
   if (!value || /^(0|false|off|none|disabled)$/i.test(value)) {

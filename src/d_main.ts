@@ -38,7 +38,7 @@ const D_DoomLoop = () => {
 };
 
 export const D_DoomMain = async (
-  wadUrl = "/wads/Doom1.WAD",
+  wadUrl = "/wads/freedoom1.wad",
   canvas?: HTMLCanvasElement,
 ) => {
   const wad = await loadWad(wadUrl);

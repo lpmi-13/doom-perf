@@ -76,10 +76,11 @@ const attachAudioUnlock = () => {
 
 const wadParam = new URLSearchParams(window.location.search).get("wad")?.toLowerCase();
 const wadMap: Record<string, string> = {
-  doom1: "/wads/Doom1.WAD",
+  doom1: "/wads/freedoom1.wad",
+  freedoom1: "/wads/freedoom1.wad",
   doom2: "/wads/Doom2.wad",
 };
-const wadUrl = wadParam && wadMap[wadParam] ? wadMap[wadParam] : "/wads/Doom1.WAD";
+const wadUrl = wadParam && wadMap[wadParam] ? wadMap[wadParam] : "/wads/freedoom1.wad";
 const telemetrySource = resolveTelemetrySource();
 const doomPerfMapWad = {
   url: `/maps/doomperf-lab.wad?v=${assetVersion(__WAD_VERSION__)}`,
