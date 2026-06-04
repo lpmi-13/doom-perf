@@ -16,6 +16,7 @@ public/dist/
 # Local base IWADs. Doom Perf map PWADs under public/maps/ are authored here.
 public/wads/*.wad
 public/wads/*.WAD
+!public/wads/freedoom1.wad
 
 # IDE
 .idea/
