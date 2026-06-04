@@ -4,6 +4,7 @@ import { createTelemetryClient, createTerminalOverlay, resolveTelemetrySource } 
 import type { TelemetrySnapshot, TerminalSign } from "./telemetry";
 import { createInteractPrompt } from "./interact";
 import { createMovementPad } from "./ui/movementPad";
+import { createMenuControls } from "./ui/menuControls";
 import { mapManifest } from "./doomperf-map-manifest";
 
 // Cache-bust versions injected at build time by scripts/build-web.mjs (content
@@ -239,6 +240,7 @@ const start = async () => {
     attachAudioUnlock();
     const terminal = createTerminalOverlay();
     const movementPad = createMovementPad();
+    const menuControls = createMenuControls();
 
     // On touch, the engine's SDL layer turns canvas drags into mouse-look. Stop
     // canvas-targeted touch/pointer/mouse events in the capture phase (which runs
@@ -381,13 +383,22 @@ const start = async () => {
 
     const prompt = createInteractPrompt(() => interact(true));
     const updatePrompt = () => {
-      // The movement pad rides the same poll: visible only on touch while a
-      // level is live and no terminal is open (so you can't walk while reading a
-      // terminal or sitting in a menu). hide() also releases any held arrow keys.
+      // The touch controls ride the same poll. In a live level the movement pad
+      // shows; on the title/menu screens the menu controls show instead; while a
+      // terminal overlay is open, neither does. pad.hide() also releases any
+      // held arrow keys.
       if (isTouchDevice) {
-        const inLevel = !terminal.isOpen() && !!getEngine()?._DoomPerf_PlayerActive?.();
-        if (inLevel) movementPad.show();
-        else movementPad.hide();
+        const playerActive = !!getEngine()?._DoomPerf_PlayerActive?.();
+        if (terminal.isOpen()) {
+          movementPad.hide();
+          menuControls.hide();
+        } else if (playerActive) {
+          menuControls.hide();
+          movementPad.show();
+        } else {
+          movementPad.hide();
+          menuControls.show();
+        }
       }
       if (terminal.isOpen()) {
         prompt.hide();
@@ -439,6 +450,30 @@ const start = async () => {
       args: ["doom", "-file", doomPerfMapWad.name],
       onStatus: (message) => console.log(message),
     });
+
+    // Bring the main menu up automatically so neither desktop nor mobile needs
+    // an initial click to dismiss the title screen. We synthesize one ESC — the
+    // key Doom's title screen uses to open the menu — shortly after the engine
+    // starts, but skip it if the player already pressed or tapped something (a
+    // second ESC would just toggle the menu back off). On touch the menu BACK
+    // button (also ESC) is a fallback if this is ever missed.
+    let userActed = false;
+    const noteUserAction = () => { userActed = true; };
+    window.addEventListener("keydown", noteUserAction, { once: true, capture: true });
+    window.addEventListener("pointerdown", noteUserAction, { once: true, capture: true });
+    window.setTimeout(() => {
+      window.removeEventListener("keydown", noteUserAction, true);
+      window.removeEventListener("pointerdown", noteUserAction, true);
+      if (userActed) return;
+      const escape = (type: "keydown" | "keyup") => {
+        const event = new KeyboardEvent(type, { key: "Escape", code: "Escape", bubbles: true, cancelable: true });
+        Object.defineProperty(event, "keyCode", { get: () => 27 });
+        Object.defineProperty(event, "which", { get: () => 27 });
+        document.dispatchEvent(event);
+      };
+      escape("keydown");
+      window.setTimeout(() => escape("keyup"), 90);
+    }, 800);
     return;
   }
   console.warn("Engine bundle not found, falling back to stub renderer.");
