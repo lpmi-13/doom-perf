@@ -53,7 +53,23 @@ export const createInteractPrompt = (onActivate: () => void) => {
       font-size: 0.78em;
     }
     @media (pointer: coarse) {
-      .doomInteract { font-size: 22px; padding: 0.7em 1.1em; }
+      /* Two-thumb layout: the movement pad sits bottom-left, so the interact
+         button moves to the bottom-right. A smaller font gives it some breathing
+         room from the pad, and it is vertically centred on the pad's mid-line
+         (pad geometry comes from the CSS vars movementPad.ts publishes) so the
+         two controls share a y-axis. translateY(50%) drops the button's own
+         centre onto that line regardless of its height. */
+      .doomInteract {
+        font-size: 18px;
+        padding: 0.7em 1.1em;
+        left: auto;
+        right: max(4vw, env(safe-area-inset-right, 0px));
+        bottom: calc(
+          var(--doom-pad-bottom, max(4vh, env(safe-area-inset-bottom, 0px))) +
+          var(--doom-pad-size, min(38vw, 168px)) / 2
+        );
+        transform: translateY(50%);
+      }
       /* Touch devices have no SPACE key; the button itself is the control. */
       .doomInteract__key { display: none; }
     }

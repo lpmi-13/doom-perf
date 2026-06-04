@@ -3,6 +3,7 @@ import { D_DoomMain } from "./d_main";
 import { createTelemetryClient, createTerminalOverlay, resolveTelemetrySource } from "./telemetry";
 import type { TelemetrySnapshot, TerminalSign } from "./telemetry";
 import { createInteractPrompt } from "./interact";
+import { createMovementPad } from "./ui/movementPad";
 import { mapManifest } from "./doomperf-map-manifest";
 
 // Cache-bust versions injected at build time by scripts/build-web.mjs (content
@@ -61,6 +62,14 @@ if (!audio) {
 
 // Let the engine set the canvas backing resolution — CSS stretches it to fill viewport
 audio.preload = "auto";
+
+// Touch devices (phones/tablets) get the on-screen movement pad and have the
+// engine's drag-to-look suppressed; desktops keep mouse + keyboard untouched.
+// `(pointer: coarse)` (the same query interact.ts uses to reposition its button)
+// means the primary pointer is touch — true on phones/tablets, false on a
+// mouse-driven laptop even if its screen happens to be touch-capable.
+const isTouchDevice =
+  typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches;
 
 // Resume any AudioContext on first user interaction (browser autoplay policy)
 const attachAudioUnlock = () => {
@@ -229,6 +238,30 @@ const start = async () => {
   if (engineResponse.ok) {
     attachAudioUnlock();
     const terminal = createTerminalOverlay();
+    const movementPad = createMovementPad();
+
+    // On touch, the engine's SDL layer turns canvas drags into mouse-look. Stop
+    // canvas-targeted touch/pointer/mouse events in the capture phase (which runs
+    // before SDL's own canvas listeners) so the movement pad is the only steering
+    // input. The pad and interact button have their own element as the event
+    // target, so their taps pass through untouched.
+    if (isTouchDevice) {
+      const swallowCanvasInput = (event: Event) => {
+        if (event.target === canvas) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+        }
+      };
+      const canvasInputEvents = [
+        "touchstart", "touchmove", "touchend", "touchcancel",
+        "pointerdown", "pointermove", "pointerup",
+        "mousedown", "mousemove", "mouseup",
+      ];
+      for (const type of canvasInputEvents) {
+        window.addEventListener(type, swallowCanvasInput, { capture: true, passive: false });
+      }
+    }
+
     let lastLiveTelemetry: TelemetrySnapshot | undefined;
     let lastEffectiveTelemetry: TelemetrySnapshot | undefined;
     // A simulated scenario is re-sampled at the command's interval (1s) and the
@@ -296,6 +329,7 @@ const start = async () => {
       (getEngine()?._DoomPerf_SectorOpenRange?.(probeX, probeY) ?? 0) > doorOpenThreshold;
 
     const openTerminal = (sign: TerminalSign) => {
+      movementPad.hide();
       refreshEffectiveTelemetry(true);
       const telemetry = lastEffectiveTelemetry ?? lastLiveTelemetry;
       if (telemetry) {
@@ -347,6 +381,14 @@ const start = async () => {
 
     const prompt = createInteractPrompt(() => interact(true));
     const updatePrompt = () => {
+      // The movement pad rides the same poll: visible only on touch while a
+      // level is live and no terminal is open (so you can't walk while reading a
+      // terminal or sitting in a menu). hide() also releases any held arrow keys.
+      if (isTouchDevice) {
+        const inLevel = !terminal.isOpen() && !!getEngine()?._DoomPerf_PlayerActive?.();
+        if (inLevel) movementPad.show();
+        else movementPad.hide();
+      }
       if (terminal.isOpen()) {
         prompt.hide();
         return;
