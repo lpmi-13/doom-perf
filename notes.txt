@@ -1,3 +1,6 @@
 - see if there are example doom-style sprites we can use as models of the look-and-feel for the additional elements we want to add.
 - have the music be different in each room.
-- investigate swapping the IWAD from shareware Doom1.WAD to Freedoom Phase 1 (free/bundleable, full texture set, keeps ExMy/E1M1 so no map rename; revalidate texture/flat names + check procedural palette indices render correctly).
+- make sure the font is responsive on mobile (currently too big)
+- possibly rework the run queue into a more intuitive visual. Either a circle like a ring buffer or a guage or something.
+- build out the other 3 rooms
+- after music is set up for each room, see about getting distinct soundscapes per issues (U/S/E)...maybe skip errors, not sure how to reliably trigger.

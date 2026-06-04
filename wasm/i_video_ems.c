@@ -210,6 +210,19 @@ int DoomPerf_PlayerY(void)
     return players[0].mo ? (players[0].mo->y >> FRACBITS) : 0;
 }
 
+// Doom Perf: report the player's facing as degrees in [0,360), with 0 = east
+// (+x) and 90 = north (+y), matching the world axes DoomPerf_PlayerX/Y use. The
+// mobj angle is a full-circle BAM (angle_t spans 0..2^32), so we scale by
+// 360/2^32. The browser uses this to suppress the interact prompt when the
+// player is turned away from the door/terminal they are standing near.
+EMSCRIPTEN_KEEPALIVE
+int DoomPerf_PlayerAngle(void)
+{
+    return players[0].mo
+        ? (int)(((uint64_t)(uint32_t)players[0].mo->angle * 360u) >> 32)
+        : 0;
+}
+
 // Doom Perf: report the vertical opening (ceiling minus floor, in map units)
 // of the sector at a world point so the browser can tell whether a hub door is
 // currently shut. A closed DR door (linedef special 1) has its ceiling dropped

@@ -24,27 +24,41 @@ const assetVersion = (version: string): string => (version === "dev" ? String(Da
 // drift out of sync with the actual map layout.
 const useRange = mapManifest.useRange;
 
-// World positions (CPU/north wing) of the wall terminal screens. Pressing
-// USE/space within range opens that terminal.
-const terminalSigns: { sign: TerminalSign; x: number; y: number }[] = mapManifest.terminals.map(
-  (terminal) => ({ sign: terminal.sign, x: terminal.x, y: terminal.y })
-);
+// World positions (CPU/north wing) of the wall terminal screens. Each carries
+// one or more trigger *segments* spanning an interactable face (ax,ay)-(bx,by);
+// pressing USE/space within range of a segment — anywhere along the screen, not
+// just in front of its centre — opens that terminal. (A terminal has a single
+// segment, its screen face.)
+type TriggerSegment = { ax: number; ay: number; bx: number; by: number };
+const copySegments = (segments: readonly TriggerSegment[]): TriggerSegment[] =>
+  segments.map(({ ax, ay, bx, by }) => ({ ax, ay, bx, by }));
+const terminalSigns: { sign: TerminalSign; segments: TriggerSegment[] }[] =
+  mapManifest.terminals.map((terminal) => ({
+    sign: terminal.sign,
+    segments: copySegments(terminal.segments),
+  }));
 const terminalRange = useRange;
 
-// World positions of the four hub doors, one per cardinal exit. These derive
-// from build-doomperf-map.mjs: each door sits at hubRadius (384) along its
-// direction (north/east/south/west -> +y/+x/-y/-x). Each point lies exactly on
-// the door's trigger line, so the radial distance below equals the perpendicular
-// distance the engine's USE trace measures on a head-on approach. Used only to
-// decide when to surface the interact prompt; the engine itself handles the
-// door once it receives the USE/space press.
-// `probe` is a point at the centre of the door sector just beyond the trigger
-// line (the 64-deep door sector spans hubRadius..448, so its centre is at 416).
-// The engine reports that sector's live ceiling opening there, letting us tell
-// a shut door from one the player has already opened.
-const doorSigns: { x: number; y: number; probeX: number; probeY: number }[] = mapManifest.doors.map(
-  (door) => ({ x: door.x, y: door.y, probeX: door.probeX, probeY: door.probeY })
-);
+// The four hub doors, one per cardinal exit. These derive from
+// build-doomperf-map.mjs: each door sits at hubRadius (384) along its direction
+// (north/east/south/west -> +y/+x/-y/-x). Each door carries two trigger
+// segments — the inner line at hubRadius and the outer line at doorOuterRadius
+// (448) — because both lines bounding the door sector are DR doors, so the
+// player can open it from the hub side or from inside the wing. Measuring the
+// player's distance to a segment matches the engine's USE trace, which opens the
+// door from anywhere along its width — not just dead-centre. Used only to decide
+// when to surface the interact prompt; the engine itself handles the door once
+// it receives the USE/space press.
+// `probe` is a point at the centre of the door sector between the two lines (the
+// 64-deep door sector spans hubRadius..448, so its centre is at 416). The engine
+// reports that sector's live ceiling opening there, letting us tell a shut door
+// from one the player has already opened.
+const doorSigns: { segments: TriggerSegment[]; probeX: number; probeY: number }[] =
+  mapManifest.doors.map((door) => ({
+    segments: copySegments(door.segments),
+    probeX: door.probeX,
+    probeY: door.probeY,
+  }));
 const doorRange = useRange;
 // A shut DR door reports a ceiling opening of 0; once it has lifted past this
 // many map units it is opening/open, so the "Open Door" prompt is suppressed.
@@ -118,6 +132,8 @@ type DoomPerfEngine = {
   _DoomPerf_PlayerActive?: () => number;
   _DoomPerf_PlayerX?: () => number;
   _DoomPerf_PlayerY?: () => number;
+  // Player facing in degrees [0,360): 0 = east (+x), 90 = north (+y).
+  _DoomPerf_PlayerAngle?: () => number;
   _DoomPerf_SectorOpenRange?: (x: number, y: number) => number;
 };
 
@@ -302,9 +318,55 @@ const start = async () => {
 
     const terminalRefresh = window.setInterval(refreshEffectiveTelemetry, 250);
 
+    // Closest point on a trigger segment to the player. Working against the
+    // whole segment (the object's full face/width) rather than its midpoint is
+    // what lets the prompt fire when the player stands at an *edge* of a
+    // terminal or door, not only in front of its centre. For points alongside
+    // the segment the closest point is the foot of the perpendicular; past the
+    // ends it is the nearer endpoint (so the in-range zone is a capsule of
+    // radius useRange hugging the face).
+    const closestPointOnSegment = (
+      px: number,
+      py: number,
+      { ax, ay, bx, by }: TriggerSegment
+    ): { x: number; y: number } => {
+      const dx = bx - ax;
+      const dy = by - ay;
+      const lengthSq = dx * dx + dy * dy;
+      const t =
+        lengthSq === 0 ? 0 : Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lengthSq));
+      return { x: ax + t * dx, y: ay + t * dy };
+    };
+
+    // True when the player is close enough to a trigger segment AND roughly
+    // facing it. "Facing" = the player's view direction is within 90° of the
+    // direction to the nearest point on the object: the dot product of the two
+    // is non-negative. This mirrors the engine's USE trace (which only reaches a
+    // door the player faces) and stops a terminal/door prompt from showing when
+    // the player has walked past and turned away. Angle comes from the engine in
+    // degrees (0 = +x, 90 = +y); when the player is essentially on top of the
+    // object the direction is undefined, so proximity alone qualifies.
+    const inRangeAndFacing = (
+      px: number,
+      py: number,
+      facingX: number,
+      facingY: number,
+      segment: TriggerSegment,
+      range: number
+    ): boolean => {
+      const { x, y } = closestPointOnSegment(px, py, segment);
+      const toX = x - px;
+      const toY = y - py;
+      const distance = Math.hypot(toX, toY);
+      if (distance > range) return false;
+      if (distance < 1) return true;
+      return facingX * toX + facingY * toY >= 0;
+    };
+
     // The interactable (terminal or door) the player is currently standing
-    // close enough to use, or null. Doors are checked only when no terminal is
-    // in range; the two never overlap in the map, but terminals win to be safe.
+    // close enough to use and facing, or null. Doors are checked only when no
+    // terminal is in range; the two never overlap in the map, but terminals win
+    // to be safe.
     const currentTarget = ():
       | { kind: "terminal"; sign: TerminalSign }
       | { kind: "door"; probeX: number; probeY: number }
@@ -313,12 +375,17 @@ const start = async () => {
       if (!engine?._DoomPerf_PlayerActive?.()) return null;
       const px = engine._DoomPerf_PlayerX?.() ?? 0;
       const py = engine._DoomPerf_PlayerY?.() ?? 0;
-      const nearTerminal = terminalSigns.find(
-        ({ x, y }) => Math.hypot(px - x, py - y) <= terminalRange
+      const angle = ((engine._DoomPerf_PlayerAngle?.() ?? 0) * Math.PI) / 180;
+      const facingX = Math.cos(angle);
+      const facingY = Math.sin(angle);
+      const nearTerminal = terminalSigns.find((terminal) =>
+        terminal.segments.some((seg) =>
+          inRangeAndFacing(px, py, facingX, facingY, seg, terminalRange)
+        )
       );
       if (nearTerminal) return { kind: "terminal", sign: nearTerminal.sign };
-      const door = doorSigns.find(
-        ({ x, y }) => Math.hypot(px - x, py - y) <= doorRange
+      const door = doorSigns.find((door) =>
+        door.segments.some((seg) => inRangeAndFacing(px, py, facingX, facingY, seg, doorRange))
       );
       if (door) return { kind: "door", probeX: door.probeX, probeY: door.probeY };
       return null;

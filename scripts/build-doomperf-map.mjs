@@ -922,27 +922,73 @@ console.log(`Wrote ${outputPath}`);
 // This is the single source of truth for those coordinates: src/index.ts reads
 // this file instead of re-hardcoding values that silently drift when the map
 // layout changes (e.g. when a terminal moves to a new back wall).
-const terminalReadOffset = 60; // a wall terminal is read from ~this far in front (< useRange)
 const doorOuterRadius = 448;   // a hub door sector spans hubRadius..doorOuterRadius
 const roomCenterU = (room) => (room.u1 + room.u2) / 2;
 const doorProbeRadius = hubRadius + (doorOuterRadius - hubRadius) / 2;
+// Each interactable is described by one or more trigger *segments* — the
+// object's actual interactable face/line(s) — rather than a single centre point,
+// so the browser UI can offer the prompt anywhere along the object (including
+// its edges) by measuring the player's distance to a segment instead of to its
+// midpoint. Crucially a segment sits ON the object's face (a terminal's screen
+// wall, a door's trigger line), so the prompt's range (useRange) is measured
+// straight from the screen/door — the player must be within useRange of the
+// actual object, not of a point standing out in front of it. A terminal's
+// screen spans the panel's full width (terminalTextureSize.width); a door's
+// trigger lines span doorWidth on the axis the door faces. Half-widths:
+const terminalHalfWidth = terminalTextureSize.width / 2;
+const doorHalfWidth = doorWidth / 2;
+// Terminal read segment: the screen face itself, on the room's back wall (v2),
+// running terminalHalfWidth either side of the room centre (all CPU/north-wing
+// screens are on a back wall, so the face is x-axis).
+const terminalSegment = (room) => {
+  const cx = roomCenterU(room);
+  const y = room.v2;
+  return { ax: cx - terminalHalfWidth, ay: y, bx: cx + terminalHalfWidth, by: y };
+};
+// A hub door's two trigger lines. Both lines bounding the door sector are DR
+// doors (special 1) — the inner line at hubRadius (entered from the hub) and the
+// outer line at doorOuterRadius (entered from inside the wing) — so USE/space
+// opens the door from either side. We surface the prompt for whichever line the
+// player is near, so leaving a wing prompts just like entering it does. `dir` is
+// the cardinal the door faces; the line spans doorHalfWidth on the cross axis.
+const doorSegments = (dir) => {
+  const line = (radius) => {
+    switch (dir) {
+      case "north":
+        return { ax: -doorHalfWidth, ay: radius, bx: doorHalfWidth, by: radius };
+      case "south":
+        return { ax: -doorHalfWidth, ay: -radius, bx: doorHalfWidth, by: -radius };
+      case "east":
+        return { ax: radius, ay: -doorHalfWidth, bx: radius, by: doorHalfWidth };
+      case "west":
+        return { ax: -radius, ay: -doorHalfWidth, bx: -radius, by: doorHalfWidth };
+      default:
+        throw new Error(`Unknown door direction: ${dir}`);
+    }
+  };
+  return [line(hubRadius), line(doorOuterRadius)];
+};
 const mapManifest = {
   useRange: 64,          // engine USERANGE (linuxdoom p_local.h) — USE trace reach
   doorOpenThreshold: 16, // ceiling lift past which a DR door reads as already open
   // CPU/north-wing terminal screens sit centred on each room's back wall; the
-  // player reads them from terminalReadOffset units in front (south).
+  // player reads one from anywhere within useRange of its screen face (a single
+  // segment lying on that back wall).
   terminals: [
-    { sign: "cores", x: roomCenterU(cpuRoomBounds.main), y: cpuRoomBounds.main.v2 - terminalReadOffset },
-    { sign: "runqueue", x: roomCenterU(cpuRoomBounds.runQueue), y: cpuRoomBounds.runQueue.v2 - terminalReadOffset },
-    { sign: "load", x: roomCenterU(cpuRoomBounds.load), y: cpuRoomBounds.load.v2 - terminalReadOffset },
+    { sign: "cores", segments: [terminalSegment(cpuRoomBounds.main)] },
+    { sign: "runqueue", segments: [terminalSegment(cpuRoomBounds.runQueue)] },
+    { sign: "load", segments: [terminalSegment(cpuRoomBounds.load)] },
   ],
-  // Four hub doors, one per cardinal exit, on the trigger line at hubRadius; the
-  // probe point sits at the centre of the door sector just beyond it.
+  // Four hub doors, one per cardinal exit. Each has two trigger segments (the
+  // inner line at hubRadius and the outer line at doorOuterRadius), so the
+  // prompt shows whether the player approaches from the hub or from inside the
+  // wing. The probe point sits at the centre of the door sector between them and
+  // reports that sector's live ceiling opening (shut vs. already open).
   doors: [
-    { x: 0, y: hubRadius, probeX: 0, probeY: doorProbeRadius },
-    { x: hubRadius, y: 0, probeX: doorProbeRadius, probeY: 0 },
-    { x: 0, y: -hubRadius, probeX: 0, probeY: -doorProbeRadius },
-    { x: -hubRadius, y: 0, probeX: -doorProbeRadius, probeY: 0 },
+    { segments: doorSegments("north"), probeX: 0, probeY: doorProbeRadius },
+    { segments: doorSegments("east"), probeX: doorProbeRadius, probeY: 0 },
+    { segments: doorSegments("south"), probeX: 0, probeY: -doorProbeRadius },
+    { segments: doorSegments("west"), probeX: -doorProbeRadius, probeY: 0 },
   ],
 };
 const manifestPath = fileURLToPath(new URL("../src/doomperf-map-manifest.ts", import.meta.url));
