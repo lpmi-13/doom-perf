@@ -20,9 +20,14 @@
         display: grid;
         place-items: center;
         padding: 24px;
-        background:
-          linear-gradient(90deg, rgba(5, 5, 5, 0.9), rgba(5, 5, 5, 0.54)),
-          url("/assets/menu-bg.jpg") center / cover no-repeat;
+        /* Generic dark "diagnostics" backdrop: a soft top glow over a faint grid,
+           replacing the old Doom title-screen screenshot. */
+        background-color: #050505;
+        background-image:
+          radial-gradient(1100px 520px at 50% -8%, rgba(120, 140, 170, 0.08), transparent 62%),
+          linear-gradient(180deg, #0b0d12 0%, #070809 55%, #050505 100%),
+          repeating-linear-gradient(0deg, transparent 0 39px, rgba(150, 165, 190, 0.05) 39px 40px),
+          repeating-linear-gradient(90deg, transparent 0 39px, rgba(150, 165, 190, 0.05) 39px 40px);
       }
       main {
         width: min(680px, 100%);
