@@ -1,0 +1,19 @@
+diff --git a/p_map.c b/p_map.c
+index aba15d8..5f39607 100644
+--- a/p_map.c
++++ b/p_map.c
+@@ -1101,10 +1101,11 @@ boolean	PTR_UseTraverse (intercept_t* in)
+ 	P_LineOpening (in->d.line);
+ 	if (openrange <= 0)
+ 	{
+-	    S_StartSound (usething, sfx_noway);
+-	    
++	    // Doom Perf: suppress the "no way" grunt when USE meets a solid wall.
++	    // The browser opens a terminal overlay on USE near the diagnostic
++	    // screens, so the original wall-bump grunt is an unwanted holdover.
+ 	    // can't use through a wall
+-	    return false;	
++	    return false;
+ 	}
+ 	// not a special line, but keep checking
+ 	return true ;		

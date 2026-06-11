@@ -127,6 +127,23 @@ export const buildSignPatch = (text) => {
   return buildPatch(pixels, width, height);
 };
 
+// A wall-mounted sign for the RUN QUEUE track recesses (QUEUE / RUNNING), read
+// across the tracks from the overlook. Width matches labelTextureSize.width so
+// the engine's label-centering offset (overrideTextureOffsetFor) maps it once,
+// centred, on the (narrower) recess back wall -- no tiling. Text is centred well
+// inside the wall's visible middle; green text on a dark, framed panel.
+export const wallSignSize = { width: 256, height: 128 };
+export const buildWallSignPatch = (text) => {
+  const { width, height } = wallSignSize;
+  const pixels = new Uint8Array(width * height);
+  pixels.fill(96);
+  drawRect(pixels, width, height, 40, 10, width - 40, height - 10, 0);
+  const scale = text.length > 6 ? 4 : 5;
+  const startY = Math.floor((height - 7 * scale) / 2);
+  drawCenteredText(pixels, width, height, text, startY, scale, signTextColor, 48, width - 48);
+  return buildPatch(pixels, width, height);
+};
+
 export const buildTerminalPatch = ({ lines }) => {
   const { width, height } = terminalTextureSize;
   const screenTop = 8;
@@ -261,6 +278,36 @@ export const buildCpuColumnPatch = () => {
     drawRect(pixels, width, height, 0, y + 4, width, y + 6, 96);
   }
   return buildPatch(pixels, width, height);
+};
+
+// Doom Perf: a small round "task orb" sprite. Replaces an unused IWAD item
+// sprite by name in the project PWAD (e.g. PINSA0), so the run-queue mobjs render
+// as orbs rather than the stock item. Procedural filled disc shaded from a bright
+// core (ramp[0]) to a dark rim (ramp[last]); pixels outside the disc are
+// transparent so it reads round on any background.
+export const orbSpriteSize = { width: 22, height: 22 };
+export const buildOrbPatch = (ramp) => {
+  const { width, height } = orbSpriteSize;
+  const TRANSPARENT = 247;
+  const pixels = new Uint8Array(width * height).fill(TRANSPARENT);
+  const cx = (width - 1) / 2;
+  const cy = (height - 1) / 2;
+  const radius = width / 2 - 1;
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const dx = x - cx;
+      const dy = y - cy;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist > radius) continue;
+      const k = Math.min(ramp.length - 1, Math.floor((dist / radius) * ramp.length));
+      pixels[y * width + x] = ramp[k];
+    }
+  }
+  return buildPatch(pixels, width, height, {
+    leftOffset: Math.round(width / 2),
+    topOffset: height,
+    transparent: TRANSPARENT,
+  });
 };
 
 // Rack-mounted server panel for the wall below the terminal screens. Gray metal

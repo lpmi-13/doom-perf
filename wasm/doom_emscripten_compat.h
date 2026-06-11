@@ -15,7 +15,16 @@
 extern int doomperf_cpu_core_count;
 extern int doomperf_cpu_cores[DOOMPERF_MAX_CPU_CORES];
 extern int doomperf_cpu_run_queue_pressure;
+extern int doomperf_cpu_run_queue_count;
+extern int doomperf_cpu_blocked_count;
 extern int doomperf_cpu_load_pressure;
+
+// Sim-aware runnable count, D-state count, and logical-core count (defined in
+// i_video_ems.c); read by the run-queue particle tick in p_tick.c.
+int DoomPerf_EffectiveRunQueueCount(void);
+int DoomPerf_EffectiveBlockedCount(void);
+int DoomPerf_GetEffectiveCpuCoreCount(void);
+int DoomPerf_GetEffectiveCpuLoadPressure(void);
 
 // Load averages (1m/5m/15m) in milli-load (load * 1000), set from the browser
 // telemetry stream and read by the LOAD room gauge renderer.

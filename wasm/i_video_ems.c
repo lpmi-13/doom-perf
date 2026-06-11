@@ -12,6 +12,7 @@
 #include "i_video.h"
 #include "v_video.h"
 #include "m_fixed.h"
+#include "m_random.h"
 #include "p_mobj.h"
 #include "r_main.h"
 
@@ -21,6 +22,8 @@
 int doomperf_cpu_core_count = 0;
 int doomperf_cpu_cores[DOOMPERF_MAX_CPU_CORES];
 int doomperf_cpu_run_queue_pressure = 0;
+int doomperf_cpu_run_queue_count = 0;
+int doomperf_cpu_blocked_count = 0;
 int doomperf_cpu_load_pressure = 0;
 int doomperf_load[3] = {0, 0, 0};
 int doomperf_sim_mode = 0;
@@ -60,6 +63,23 @@ EMSCRIPTEN_KEEPALIVE
 void DoomPerf_SetCpuRunQueuePressure(int permille)
 {
     doomperf_cpu_run_queue_pressure = DoomPerf_ClampPermille(permille);
+}
+
+// Raw runnable-task count (vmstat 'r'): runnable processes, including those
+// already on a CPU. Drives the run-queue reservoir's fill level and overflow
+// token count in p_tick.c.
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_SetCpuRunQueueCount(int count)
+{
+    doomperf_cpu_run_queue_count = (count < 0) ? 0 : count;
+}
+
+// Uninterruptible-sleep (D-state, vmstat 'b') count: threads blocked on I/O, not
+// the CPU run queue. Drives the I/O-wait orbs that gather off the main flow.
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_SetCpuBlockedCount(int count)
+{
+    doomperf_cpu_blocked_count = (count < 0) ? 0 : count;
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -176,6 +196,75 @@ EMSCRIPTEN_KEEPALIVE
 int DoomPerf_GetEffectiveCpuRunQueuePressure(void)
 {
     return DoomPerf_ClampPermille(DoomPerf_EffectiveRunQueuePressureValue());
+}
+
+// Sim-aware runnable count for the reservoir tick (p_tick.c). In live mode this
+// is the raw vmstat 'r' pushed from the browser; in a simulation there is no
+// real count, so derive one from the synthetic run-queue pressure
+// (pressure = (r - cores) / cores, so r = cores * (1 + pressure/1000)).
+int DoomPerf_EffectiveRunQueueCount(void)
+{
+    int cores = DoomPerf_EffectiveCoreCountValue();
+    int pressure;
+    if (cores < 1)
+        cores = 1;
+    // Live telemetry with a raw count (vmstat 'r') is authoritative; otherwise
+    // (simulations, or live without the collector's count) derive from pressure.
+    if (doomperf_sim_mode == 0 && doomperf_cpu_run_queue_count > 0)
+        return doomperf_cpu_run_queue_count;
+    pressure = DoomPerf_EffectiveRunQueuePressureValue();
+    return cores + (pressure * cores + 500) / 1000;
+}
+
+// Sim-aware D-state (vmstat 'b') count for the I/O-wait stack. Live uses the
+// pushed count. The high-saturation sim (mode 2) synthesizes a value that wanders
+// in [10,18] with bursty, dramatic rises (a "rising" second adds ~4 orbs/sec) and
+// a gradual 1/sec cool-down, like a load average; the high-util sim shows a small
+// constant. The synthetic value advances once per tic (gated on leveltime) so
+// repeat calls within a tic never double-step it.
+int DoomPerf_EffectiveBlockedCount(void)
+{
+    static int blocked = 14;
+    static int rising = 0;
+    static int last_tic = -1;
+
+    if (doomperf_sim_mode == 2)
+    {
+        if (leveltime != last_tic)
+        {
+            last_tic = leveltime;
+            if (leveltime == 0)
+            {
+                blocked = 14;
+                rising = 0;
+            }
+            else
+            {
+                // ~1/sec: re-roll the rising/cooling phase and cool one orb.
+                if ((leveltime % 35) == 0)
+                {
+                    rising = (P_Random() < 64);  // ~25% of seconds are rising
+                    if (blocked > 10)
+                        blocked--;
+                }
+                // ~4/sec: while rising, add one orb (a dramatic spike).
+                if (rising && (leveltime % 9) == 0 && blocked < 18)
+                    blocked++;
+            }
+        }
+        return blocked;
+    }
+    if (doomperf_sim_mode != 0)
+        return 4;
+    return doomperf_cpu_blocked_count;
+}
+
+// Exposed to the browser so the vmstat `b` column shows the same D-state count
+// that drives the green I/O-wait orb stack (single source of truth in sim mode).
+EMSCRIPTEN_KEEPALIVE
+int DoomPerf_GetEffectiveCpuBlockedCount(void)
+{
+    return DoomPerf_EffectiveBlockedCount();
 }
 
 EMSCRIPTEN_KEEPALIVE

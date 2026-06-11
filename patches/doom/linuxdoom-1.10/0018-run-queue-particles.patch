@@ -1,0 +1,539 @@
+diff --git a/info.c b/info.c
+index 230c72b..d761d0c 100644
+--- a/info.c
++++ b/info.c
+@@ -1099,7 +1099,17 @@ state_t	states[NUMSTATES] = {
+     {SPR_TLP2,32768,4,{NULL},S_TECH2LAMP2,0,0},	// S_TECH2LAMP
+     {SPR_TLP2,32769,4,{NULL},S_TECH2LAMP3,0,0},	// S_TECH2LAMP2
+     {SPR_TLP2,32770,4,{NULL},S_TECH2LAMP4,0,0},	// S_TECH2LAMP3
+-    {SPR_TLP2,32771,4,{NULL},S_TECH2LAMP,0,0}	// S_TECH2LAMP4
++    {SPR_TLP2,32771,4,{NULL},S_TECH2LAMP,0,0},	// S_TECH2LAMP4
++    // Doom Perf: run-queue task orb. Reuses the blursphere sprite (SPR_PINS),
++    // frame A fullbright, static (tics -1). The PINSA0 lump is replaced with orb
++    // art in the project PWAD; only frame A is used, so the other PINS frames are
++    // irrelevant.
++    {SPR_PINS,32768,-1,{NULL},S_NULL,0,0},	// S_DP_CPUTASK
++    // I/O-wait orb: reuses the soulsphere sprite (SPR_SOUL), frame A, static.
++    // SOULA0 is replaced with a green orb in the project PWAD. NOT fullbright --
++    // these sit in the D-state pen whose light patch 0018 pulses, so the orbs
++    // brighten/dim with it (a sleeping-thread "glow").
++    {SPR_SOUL,0,-1,{NULL},S_NULL,0,0}	// S_DP_IOTASK
+ };
+ 
+ 
+@@ -4665,6 +4675,58 @@ mobjinfo_t mobjinfo[NUMMOBJTYPES] = {
+ 	sfx_None,		// activesound
+ 	MF_NOBLOCKMAP,		// flags
+ 	S_NULL		// raisestate
++    },
++
++    {		// MT_DP_CPUTASK -- run-queue task orb (solid, no AI, no pickup)
++	-1,		// doomednum (runtime-spawned only)
++	S_DP_CPUTASK,		// spawnstate
++	1000,		// spawnhealth
++	S_NULL,		// seestate
++	sfx_None,		// seesound
++	8,		// reactiontime
++	sfx_None,		// attacksound
++	S_NULL,		// painstate
++	0,		// painchance
++	sfx_None,		// painsound
++	S_NULL,		// meleestate
++	S_NULL,		// missilestate
++	S_NULL,		// deathstate
++	S_NULL,		// xdeathstate
++	sfx_None,		// deathsound
++	0,		// speed
++	6*FRACUNIT,		// radius
++	16*FRACUNIT,		// height
++	100,		// mass
++	0,		// damage
++	sfx_None,		// activesound
++	MF_SOLID,		// flags
++	S_NULL		// raisestate
++    },
++
++    {		// MT_DP_IOTASK -- I/O-wait orb (solid, no AI, no pickup)
++	-1,		// doomednum (runtime-spawned only)
++	S_DP_IOTASK,		// spawnstate
++	1000,		// spawnhealth
++	S_NULL,		// seestate
++	sfx_None,		// seesound
++	8,		// reactiontime
++	sfx_None,		// attacksound
++	S_NULL,		// painstate
++	0,		// painchance
++	sfx_None,		// painsound
++	S_NULL,		// meleestate
++	S_NULL,		// missilestate
++	S_NULL,		// deathstate
++	S_NULL,		// xdeathstate
++	sfx_None,		// deathsound
++	0,		// speed
++	6*FRACUNIT,		// radius
++	16*FRACUNIT,		// height
++	100,		// mass
++	0,		// damage
++	sfx_None,		// activesound
++	MF_SOLID,		// flags
++	S_NULL		// raisestate
+     }
+ };
+ 
+diff --git a/info.h b/info.h
+index 786a717..80f01cf 100644
+--- a/info.h
++++ b/info.h
+@@ -1140,6 +1140,8 @@ typedef enum
+     S_TECH2LAMP2,
+     S_TECH2LAMP3,
+     S_TECH2LAMP4,
++    S_DP_CPUTASK,
++    S_DP_IOTASK,
+     NUMSTATES
+ } statenum_t;
+ 
+@@ -1298,6 +1300,8 @@ typedef enum {
+     MT_MISC84,
+     MT_MISC85,
+     MT_MISC86,
++    MT_DP_CPUTASK,
++    MT_DP_IOTASK,
+     NUMMOBJTYPES
+ 
+ } mobjtype_t;
+diff --git a/p_tick.c b/p_tick.c
+index 0a1e232..adf9ff0 100644
+--- a/p_tick.c
++++ b/p_tick.c
+@@ -1,4 +1,4 @@
+-// Emacs style mode select   -*- C++ -*- 
++// Emacs style mode select   -*- C++ -*-
+ //-----------------------------------------------------------------------------
+ //
+ // $Id:$
+@@ -31,6 +31,8 @@ rcsid[] = "$Id: p_tick.c,v 1.4 1997/02/03 16:47:55 b1 Exp $";
+ #include "doomstat.h"
+ 
+ #include "m_fixed.h"
++#include "m_random.h"
++#include "p_mobj.h"
+ #include "r_state.h"
+ 
+ 
+@@ -71,6 +73,381 @@ void DoomPerf_UpdatePillars (void)
+     }
+ }
+ 
++// Doom Perf: RUN QUEUE "subway". CPU task-orbs (MT_DP_CPUTASK) are runnable
++// threads. They appear under the QUEUE sign (the player's left / south end of the
++// trench) and glide NORTH up the lanes toward the constriction gates (sector tags
++// 230..237). `cores` gates open; the rest raise into solid blockers. Up to
++// `cores` threads "run": they pass through an open gate and stream on north to
++// despawn under the RUNNING sign (the player's right). The overflow -- exactly
++// (runnable - cores) of them -- cannot get a core, so they hold STOPPED in tidy
++// per-lane columns just south of the gates: that parked total is the run queue's
++// excess over capacity. The columns rotate -- every so often a lane dispatches its
++// parked front orb through the gate (it "gets the CPU") and a fresh arrival
++// refills the back -- so under sustained saturation an orb is only *temporarily*
++// waylaid before its turn. There is NO collision pile-up: every orb homes to an
++// assigned lane/row slot, so the parked count is deterministic and nothing clumps
++// at the spawn. Each lane fires on its own randomized phase each cycle, so the
++// flow scatters instead of marching across in a fixed cascade. Separately, D-state
++// (I/O-wait) threads are shown as a STACK of motionless green orbs (MT_DP_IOTASK)
++// in a single west-wall pen (map sector rq-io-pen, tag 245) just south of the
++// gates: they pile up 2x2 per level, the pile growing with the blocked count
++// (uninterruptible sleep), while the pen light PULSES ~once/sec so the sleeping
++// pile glows. World coords match build-doomperf-map.mjs (CPU/north wing =
++// identity): trench x[-1024,-768], gates at y~1104, pen at x[-1136,-1024].
++#define DOOMPERF_RQ_GATE_TAG_BASE	230
++#define DOOMPERF_RQ_GATE_COUNT		8
++#define DOOMPERF_RQ_GATE_OPEN_Z		(-56 * FRACUNIT)
++#define DOOMPERF_RQ_GATE_SHUT_Z		(224 * FRACUNIT)
++#define DOOMPERF_RQ_DEPTH		5		// max queued (stopped) orbs per lane
++#define DOOMPERF_RQ_MAX_RUN		28		// dispatched orbs in flight to the exit
++#define DOOMPERF_RQ_BUDGET		56		// hard cap on live CPU orbs (WASM perf)
++#define DOOMPERF_RQ_LANE_X0		(-1006)		// centre x of gate lane 0 (cu+18, cu=-1024)
++#define DOOMPERF_RQ_LANE_PITCH		32		// lane spacing (= rqCell)
++#define DOOMPERF_RQ_SPEED		(6 * FRACUNIT)	// forward glide / run speed
++#define DOOMPERF_RQ_STEER		(3 * FRACUNIT)	// lateral homing toward a lane centre
++#define DOOMPERF_RQ_SPAWN_Y		980		// arrival line, south of the gates (QUEUE side)
++#define DOOMPERF_RQ_SPAWN_JITTER	24		// +/- random on spawn y (break the uniform line)
++#define DOOMPERF_RQ_FRONT_Y		1088		// front (row 0) waiter parks here, just S of gates@1104
++#define DOOMPERF_RQ_ROW_PITCH		24		// south-ward spacing between queued rows
++#define DOOMPERF_RQ_EXIT_Y		(1540 * FRACUNIT)	// north exit (player's right)
++#define DOOMPERF_RQ_DISPATCH		80		// tics per dispatch cycle on one lane (slow rotation)
++// D-state pen: a motionless 2x2 stack of green orbs whose height tracks the
++// blocked count, in the pulsing tag-245 sector (map: rq-io-pen).
++#define DOOMPERF_RQ_MAX_IO		48		// max stacked orbs (12 levels of 2x2)
++#define DOOMPERF_RQ_PEN_TAG		245
++#define DOOMPERF_RQ_PEN_DIM		176		// pulse trough light (avoids sentinels 144/160)
++#define DOOMPERF_RQ_PEN_LIT		255		// pulse peak light
++#define DOOMPERF_RQ_PULSE		35		// pulse period in tics (~1 sec)
++#define DOOMPERF_RQ_STACK_CX		(-1080)		// stack centre x (deep in the pen)
++#define DOOMPERF_RQ_STACK_CY		1030		// stack centre y
++#define DOOMPERF_RQ_STACK_OFF		8		// 2x2 half-spacing (orbs 16 apart)
++#define DOOMPERF_RQ_STACK_Z		(-56 * FRACUNIT)	// level-0 base z (pen floor)
++#define DOOMPERF_RQ_STACK_PITCH		(16 * FRACUNIT)	// per-level z step (orb height)
++
++// Per-lane FIFO of waiting orbs (row 0 = front, parked at the gate). Dispatched
++// orbs move to the run pool and stream north to the exit. The phase array gives
++// each lane a random dispatch tic within the cycle (re-rolled each cycle) so the
++// flow never repeats. doomperf_rq_io[] is the D-state stack (index 0 = bottom).
++// All reset on level reload (the menu's sim-mode switch reloads the map, freeing
++// every mobj and leaving these pools full of dangling pointers).
++static mobj_t*	doomperf_rq_q[DOOMPERF_RQ_GATE_COUNT][DOOMPERF_RQ_DEPTH];
++static int	doomperf_rq_qn[DOOMPERF_RQ_GATE_COUNT];
++static int	doomperf_rq_phase[DOOMPERF_RQ_GATE_COUNT];
++static mobj_t*	doomperf_rq_run[DOOMPERF_RQ_MAX_RUN];
++static mobj_t*	doomperf_rq_io[DOOMPERF_RQ_MAX_IO];
++
++// Ease one orb's momentum toward the map-unit target (tx,ty): it decelerates into
++// the slot so P_XYMovement's STOPSPEED parks it cleanly on arrival. `fwd` caps the
++// north/south glide; lateral homing is capped at the steer rate.
++static void DoomPerf_RqHome (mobj_t* mo, int tx, int ty, fixed_t fwd)
++{
++    fixed_t	dx;
++    fixed_t	dy;
++
++    dx = (tx << FRACBITS) - mo->x;
++    dy = (ty << FRACBITS) - mo->y;
++    if (dx > DOOMPERF_RQ_STEER)
++	dx = DOOMPERF_RQ_STEER;
++    else if (dx < -DOOMPERF_RQ_STEER)
++	dx = -DOOMPERF_RQ_STEER;
++    if (dy > fwd)
++	dy = fwd;
++    else if (dy < -fwd)
++	dy = -fwd;
++    mo->momx = dx;
++    mo->momy = dy;
++}
++
++void DoomPerf_UpdateRunQueueParticles (void)
++{
++    int		cores;
++    int		runnable;
++    int		run_target;
++    int		wait_target;
++    int		total;
++    int		base;
++    int		rem;
++    int		i;
++    int		L;
++    int		r;
++    int		idx;
++    mobj_t*	mo;
++
++    // Level reload frees every mobj; drop the dangling pool refs on the first tic.
++    if (leveltime == 0)
++    {
++	for (L = 0; L < DOOMPERF_RQ_GATE_COUNT; L++)
++	{
++	    doomperf_rq_qn[L] = 0;
++	    doomperf_rq_phase[L] = P_Random() % DOOMPERF_RQ_DISPATCH;
++	    for (r = 0; r < DOOMPERF_RQ_DEPTH; r++)
++		doomperf_rq_q[L][r] = NULL;
++	}
++	for (i = 0; i < DOOMPERF_RQ_MAX_RUN; i++)
++	    doomperf_rq_run[i] = NULL;
++	for (i = 0; i < DOOMPERF_RQ_MAX_IO; i++)
++	    doomperf_rq_io[i] = NULL;
++    }
++
++    // Re-roll each lane's dispatch phase at the start of every cycle, so dispatches
++    // fire at random (per-lane, non-repeating) tics rather than a fixed cascade.
++    if ((leveltime % DOOMPERF_RQ_DISPATCH) == 0)
++	for (L = 0; L < DOOMPERF_RQ_GATE_COUNT; L++)
++	    doomperf_rq_phase[L] = P_Random() % DOOMPERF_RQ_DISPATCH;
++
++    cores = DoomPerf_GetEffectiveCpuCoreCount();
++    if (cores < 1)
++	cores = 1;
++    if (cores > DOOMPERF_RQ_GATE_COUNT)
++	cores = DOOMPERF_RQ_GATE_COUNT;
++    runnable = DoomPerf_EffectiveRunQueueCount();
++    if (runnable < 0)
++	runnable = 0;
++
++    // Up to `cores` threads run; the rest (runnable - cores) wait in the queue.
++    run_target = (runnable < cores) ? runnable : cores;
++    wait_target = runnable - cores;
++    if (wait_target < 0)
++	wait_target = 0;
++    if (wait_target > cores * DOOMPERF_RQ_DEPTH)
++	wait_target = cores * DOOMPERF_RQ_DEPTH;
++
++    // Lane gates: open `cores` lanes, raise the rest into solid blockers.
++    for (i = 0; i < numsectors; i++)
++    {
++	idx = sectors[i].tag - DOOMPERF_RQ_GATE_TAG_BASE;
++	if (idx < 0 || idx >= DOOMPERF_RQ_GATE_COUNT)
++	    continue;
++	sectors[i].floorheight =
++	    (idx < cores) ? DOOMPERF_RQ_GATE_OPEN_Z : DOOMPERF_RQ_GATE_SHUT_Z;
++    }
++
++    // --- CPU run-queue orbs ----------------------------------------------------
++    // Pass 1: advance the dispatched runners (stream north, centred in lane) and
++    // count the live population for the budget.
++    total = 0;
++    for (i = 0; i < DOOMPERF_RQ_MAX_RUN; i++)
++    {
++	int	lane;
++	int	cx;
++	fixed_t	dx;
++
++	mo = doomperf_rq_run[i];
++	if (!mo)
++	    continue;
++	if (mo->thinker.function.acv == (actionf_v)(-1))
++	{
++	    doomperf_rq_run[i] = NULL;
++	    continue;
++	}
++	if (mo->y > DOOMPERF_RQ_EXIT_Y)
++	{
++	    P_RemoveMobj (mo);
++	    doomperf_rq_run[i] = NULL;
++	    continue;
++	}
++	lane = ((mo->x >> FRACBITS) - DOOMPERF_RQ_LANE_X0
++		+ DOOMPERF_RQ_LANE_PITCH / 2) / DOOMPERF_RQ_LANE_PITCH;
++	if (lane < 0)
++	    lane = 0;
++	if (lane > cores - 1)
++	    lane = cores - 1;
++	cx = DOOMPERF_RQ_LANE_X0 + lane * DOOMPERF_RQ_LANE_PITCH;
++	dx = (cx << FRACBITS) - mo->x;
++	if (dx > DOOMPERF_RQ_STEER)
++	    dx = DOOMPERF_RQ_STEER;
++	else if (dx < -DOOMPERF_RQ_STEER)
++	    dx = -DOOMPERF_RQ_STEER;
++	mo->momx = dx;
++	mo->momy = DOOMPERF_RQ_SPEED;
++	total++;
++    }
++
++    // Pass 2: compact each per-lane queue (drop any removed orbs) and count it.
++    for (L = 0; L < DOOMPERF_RQ_GATE_COUNT; L++)
++    {
++	int	w = 0;
++
++	for (r = 0; r < doomperf_rq_qn[L]; r++)
++	{
++	    mo = doomperf_rq_q[L][r];
++	    if (!mo || mo->thinker.function.acv == (actionf_v)(-1))
++		continue;
++	    doomperf_rq_q[L][w++] = mo;
++	}
++	for (r = w; r < doomperf_rq_qn[L]; r++)
++	    doomperf_rq_q[L][r] = NULL;
++	doomperf_rq_qn[L] = w;
++	total += w;
++    }
++
++    // Pass 3: per lane -- trim surplus, home the column to its slots, refill from
++    // the south, and dispatch the parked front orb through the gate on its turn.
++    // The waiters are distributed round-robin across the open lanes, so the parked
++    // total is exactly wait_target = (runnable - cores).
++    base = wait_target / cores;
++    rem  = wait_target % cores;
++    for (L = 0; L < DOOMPERF_RQ_GATE_COUNT; L++)
++    {
++	int	depth;
++	int	lanex;
++
++	lanex = DOOMPERF_RQ_LANE_X0 + L * DOOMPERF_RQ_LANE_PITCH;
++	depth = (L < cores) ? base + ((L < rem) ? 1 : 0) : 0;
++	if (depth > DOOMPERF_RQ_DEPTH)
++	    depth = DOOMPERF_RQ_DEPTH;
++
++	// Instant clear: when the queue shrinks, vanish the surplus from the back.
++	while (doomperf_rq_qn[L] > depth)
++	{
++	    mo = doomperf_rq_q[L][--doomperf_rq_qn[L]];
++	    doomperf_rq_q[L][doomperf_rq_qn[L]] = NULL;
++	    if (mo)
++		P_RemoveMobj (mo);
++	    total--;
++	}
++
++	// Home each queued orb to its (lane,row) slot; row 0 parks at the gate.
++	for (r = 0; r < doomperf_rq_qn[L]; r++)
++	    DoomPerf_RqHome (doomperf_rq_q[L][r], lanex,
++			     DOOMPERF_RQ_FRONT_Y - r * DOOMPERF_RQ_ROW_PITCH,
++			     DOOMPERF_RQ_SPEED);
++
++	// Refill: queue grew -> add an arrival at the south spawn line, but only
++	// once the previous arrival has cleared the spawn zone, so arrivals stay
++	// spaced (never overlap) and the spawn area never clumps.
++	if (doomperf_rq_qn[L] < depth && total < DOOMPERF_RQ_BUDGET)
++	{
++	    mobj_t*	back = (doomperf_rq_qn[L] > 0)
++		? doomperf_rq_q[L][doomperf_rq_qn[L] - 1] : NULL;
++
++	    if (!back
++		|| (back->y >> FRACBITS) > DOOMPERF_RQ_SPAWN_Y + DOOMPERF_RQ_SPAWN_JITTER + 16)
++	    {
++		fixed_t	sy = (DOOMPERF_RQ_SPAWN_Y
++			       + P_Random() % (2 * DOOMPERF_RQ_SPAWN_JITTER + 1)
++			       - DOOMPERF_RQ_SPAWN_JITTER) << FRACBITS;
++
++		mo = P_SpawnMobj (lanex << FRACBITS, sy, ONFLOORZ, MT_DP_CPUTASK);
++		mo->momy = DOOMPERF_RQ_SPEED;
++		doomperf_rq_q[L][doomperf_rq_qn[L]++] = mo;
++		total++;
++	    }
++	}
++
++	// Dispatch on this lane's randomized phase tic: hand the core its next
++	// thread. The phase is re-rolled each cycle, so the flow never repeats.
++	if (L < cores
++	    && (leveltime % DOOMPERF_RQ_DISPATCH) == doomperf_rq_phase[L])
++	{
++	    int	slot = -1;
++
++	    for (i = 0; i < DOOMPERF_RQ_MAX_RUN; i++)
++		if (!doomperf_rq_run[i])
++		{
++		    slot = i;
++		    break;
++		}
++	    if (slot >= 0)
++	    {
++		mo = NULL;
++		if (doomperf_rq_qn[L] >= 1
++		    && doomperf_rq_q[L][0]
++		    && (doomperf_rq_q[L][0]->y >> FRACBITS)
++			>= DOOMPERF_RQ_FRONT_Y - DOOMPERF_RQ_ROW_PITCH)
++		{
++		    // Saturated lane: promote the parked front orb (rotation). The
++		    // column shifts forward; a fresh arrival refills the back next tic.
++		    mo = doomperf_rq_q[L][0];
++		    for (r = 1; r < doomperf_rq_qn[L]; r++)
++			doomperf_rq_q[L][r - 1] = doomperf_rq_q[L][r];
++		    doomperf_rq_q[L][--doomperf_rq_qn[L]] = NULL;
++		}
++		else if (depth == 0 && L < run_target
++			 && total < DOOMPERF_RQ_BUDGET)
++		{
++		    // Undersaturated lane (no queue): a thread flows straight
++		    // through, spawned south so it visibly travels the whole hall.
++		    fixed_t	sy = (DOOMPERF_RQ_SPAWN_Y
++				      + P_Random() % (2 * DOOMPERF_RQ_SPAWN_JITTER + 1)
++				      - DOOMPERF_RQ_SPAWN_JITTER) << FRACBITS;
++
++		    mo = P_SpawnMobj (lanex << FRACBITS, sy, ONFLOORZ, MT_DP_CPUTASK);
++		    total++;
++		}
++		if (mo)
++		{
++		    mo->momy = DOOMPERF_RQ_SPEED;
++		    doomperf_rq_run[slot] = mo;
++		}
++	    }
++	}
++    }
++
++    // D-state I/O-wait STACK: blocked (uninterruptible-sleep) threads pile up as
++    // motionless green orbs in the pen (tag 245), 2x2 per level, the pile growing
++    // with the blocked count. The orbs never move (sleeping); the pen light PULSES
++    // ~once/sec so the pile glows. The array is a LIFO -- index 0 is the bottom.
++    {
++	int	blocked;
++	int	io_target;
++	int	io_live;
++	int	light;
++	int	phase;
++
++	// Pulse the pen light with a triangle wave (~1 sec) so the pile breathes.
++	// The 176..255 range stays clear of the floor-display sentinels (144/160).
++	phase = leveltime % DOOMPERF_RQ_PULSE;
++	if (phase > DOOMPERF_RQ_PULSE / 2)
++	    phase = DOOMPERF_RQ_PULSE - phase;
++	light = DOOMPERF_RQ_PEN_DIM
++	    + phase * (DOOMPERF_RQ_PEN_LIT - DOOMPERF_RQ_PEN_DIM)
++		/ (DOOMPERF_RQ_PULSE / 2);
++	for (i = 0; i < numsectors; i++)
++	    if (sectors[i].tag == DOOMPERF_RQ_PEN_TAG)
++		sectors[i].lightlevel = (short) light;
++
++	blocked = DoomPerf_EffectiveBlockedCount();
++	if (blocked < 0)
++	    blocked = 0;
++	io_target = (blocked > DOOMPERF_RQ_MAX_IO) ? DOOMPERF_RQ_MAX_IO : blocked;
++
++	// io_live = contiguous live orbs from the bottom (push/pop-only stack).
++	io_live = 0;
++	while (io_live < DOOMPERF_RQ_MAX_IO && doomperf_rq_io[io_live])
++	    io_live++;
++
++	// Pop from the top when the pile shrinks (threads woke up).
++	while (io_live > io_target)
++	{
++	    P_RemoveMobj (doomperf_rq_io[--io_live]);
++	    doomperf_rq_io[io_live] = NULL;
++	}
++
++	// Push onto the top when the pile grows: a motionless orb at the next 2x2
++	// slot (level = index / 4, corner = index % 4). NOGRAVITY holds its place;
++	// non-SOLID so the sleeping pile never blocks the player.
++	while (io_live < io_target)
++	{
++	    int		lvl = io_live / 4;
++	    int		corner = io_live % 4;
++	    fixed_t	x = (DOOMPERF_RQ_STACK_CX
++			     + ((corner & 1) ? DOOMPERF_RQ_STACK_OFF
++					     : -DOOMPERF_RQ_STACK_OFF)) << FRACBITS;
++	    fixed_t	y = (DOOMPERF_RQ_STACK_CY
++			     + ((corner & 2) ? DOOMPERF_RQ_STACK_OFF
++					     : -DOOMPERF_RQ_STACK_OFF)) << FRACBITS;
++	    fixed_t	z = DOOMPERF_RQ_STACK_Z + lvl * DOOMPERF_RQ_STACK_PITCH;
++
++	    mo = P_SpawnMobj (x, y, z, MT_DP_IOTASK);
++	    mo->flags &= ~MF_SOLID;
++	    mo->flags |= MF_NOGRAVITY;
++	    mo->momx = mo->momy = mo->momz = 0;
++	    doomperf_rq_io[io_live++] = mo;
++	}
++    }
++}
++
+ //
+ // THINKERS
+ // All thinkers should be allocated by Z_Malloc
+@@ -168,11 +545,11 @@ void P_RunThinkers (void)
+ void P_Ticker (void)
+ {
+     int		i;
+-    
++
+     // run the tic
+     if (paused)
+ 	return;
+-		
++
+     // pause if in menu and at least one tic has been run
+     if ( !netgame
+ 	 && menuactive
+@@ -181,9 +558,10 @@ void P_Ticker (void)
+     {
+ 	return;
+     }
+-    
+-		
++
++
+     DoomPerf_UpdatePillars ();
++    DoomPerf_UpdateRunQueueParticles ();
+ 
+     for (i=0 ; i<MAXPLAYERS ; i++)
+ 	if (playeringame[i])
+@@ -194,5 +572,5 @@ void P_Ticker (void)
+     P_RespawnSpecials ();
+ 
+     // for par times
+-    leveltime++;	
++    leveltime++;
+ }

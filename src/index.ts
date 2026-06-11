@@ -121,12 +121,15 @@ type DoomPerfEngine = {
   _DoomPerf_SetCpuCoreCount?: (count: number) => void;
   _DoomPerf_SetCpuCore?: (id: number, permille: number) => void;
   _DoomPerf_SetCpuRunQueuePressure?: (permille: number) => void;
+  _DoomPerf_SetCpuRunQueueCount?: (count: number) => void;
+  _DoomPerf_SetCpuBlockedCount?: (count: number) => void;
   _DoomPerf_SetCpuLoadPressure?: (permille: number) => void;
   _DoomPerf_SetLoad?: (index: number, milliLoad: number) => void;
   _DoomPerf_GetSimMode?: () => number;
   _DoomPerf_GetEffectiveCpuCoreCount?: () => number;
   _DoomPerf_GetEffectiveCpuCore?: (id: number) => number;
   _DoomPerf_GetEffectiveCpuRunQueuePressure?: () => number;
+  _DoomPerf_GetEffectiveCpuBlockedCount?: () => number;
   _DoomPerf_GetEffectiveCpuLoadPressure?: () => number;
   _DoomPerf_GetEffectiveLoad?: (index: number) => number;
   _DoomPerf_PlayerActive?: () => number;
@@ -154,6 +157,8 @@ const pushTelemetryToEngine = (engine: DoomPerfEngine | undefined, telemetry: Te
     engine?._DoomPerf_SetCpuCore?.(id, Math.round(utilization * 1000));
   });
   engine?._DoomPerf_SetCpuRunQueuePressure?.(Math.round(telemetry.cpu.runQueuePressure * 1000));
+  engine?._DoomPerf_SetCpuRunQueueCount?.(Math.max(0, Math.round(telemetry.cpu.runQueue ?? 0)));
+  engine?._DoomPerf_SetCpuBlockedCount?.(Math.max(0, Math.round(telemetry.cpu.blocked ?? 0)));
   engine?._DoomPerf_SetCpuLoadPressure?.(Math.round(telemetry.cpu.loadPressure * 1000));
   engine?._DoomPerf_SetLoad?.(0, Math.round(telemetry.cpu.load1 * 1000));
   engine?._DoomPerf_SetLoad?.(1, Math.round(telemetry.cpu.load5 * 1000));
@@ -232,7 +237,9 @@ const scenarioTelemetry = (
       cores,
       // vmstat detail derived from the simulated CPU state (no live source).
       runQueue: Math.max(count, Math.round(count * (1 + runQueuePressure))),
-      blocked: 0,
+      // Read the engine's effective D-state count (the same value that drives the
+      // green I/O-wait orb stack) so the vmstat `b` column tracks the orbs exactly.
+      blocked: Math.max(0, engine?._DoomPerf_GetEffectiveCpuBlockedCount?.() ?? 0),
       user: clampRatio(utilization * 0.7),
       system: clampRatio(utilization * 0.3),
       idle: clampRatio(1 - utilization),

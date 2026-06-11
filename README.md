@@ -138,6 +138,48 @@ CORS headers. Use `?telemetry=off` to disable telemetry, or
 `?telemetry=<url>` to point at a loopback collector directly (restricted to the
 `127.0.0.1:9999` / `localhost:9999` dev endpoint by the client).
 
+## CPU Errors Are Intentionally Not Visualized
+
+Doom Perf maps the full USE triad — utilization, saturation, and errors — onto
+the lab, but the CPU wing deliberately ships only **utilization** (per-core
+instruments) and **saturation** (run queue and load gauges). There is no CPU
+**errors** instrument, and that omission is intentional.
+
+In Brendan Gregg's USE method, a CPU *error* is a hardware fault: a Machine
+Check Exception (MCE), an ECC/cache parity error, or thermal throttling. Those
+are surfaced through `/sys/devices/system/machinecheck/`, the EDAC counters
+under `/sys/devices/system/edac/mc/`, the per-core `thermal_throttle` counters
+under `/sys/devices/system/cpu/`, or the kernel log.
+
+Utilization and saturation are products of *workload* — any unprivileged process
+can produce them on demand (a busy loop for utilization, an oversubscribed run
+queue for saturation). A genuine CPU error is a product of *hardware*, and
+userspace cannot make one happen. The only facilities that can fabricate one
+deterministically are:
+
+- `mce-inject` — software injection of a synthetic MCE record into the kernel's
+  machine-check path (needs `CONFIG_X86_MCE_INJECT`, root, and the
+  `/sys/kernel/debug/mce-inject` debugfs node).
+- ACPI APEI `einj` — firmware-mediated injection through the platform's real
+  error hardware (needs `CONFIG_ACPI_APEI_EINJ`, root, debugfs, and server-class
+  firmware that implements the EINJ table).
+
+Both require root and debugfs, EINJ additionally requires server firmware, and
+neither exists inside the unprivileged container the lab runs in (iximiuz Labs).
+Scraping `dmesg`/`journalctl` is not a workaround either: `dmesg_restrict`
+blocks unprivileged kernel-log reads, so it would mean granting the collector
+root/`CAP_SYSLOG` and shelling out — abandoning its clean, unprivileged
+`/proc` + `/sys` design.
+
+The upshot is that a live CPU error instrument would read zero in every
+environment Doom Perf actually runs in, with no reliable way to demonstrate a
+non-zero state, so it is omitted rather than shown as a permanently dead gauge.
+The data model itself already carries `errors` for every resource
+(`src/telemetry/types.ts`), and the collector populates it where an error signal
+is reachable: **memory** errors from OOM kills (`/proc/vmstat` `oom_kill`) and
+**network** errors from NIC RX/TX error counters (`/proc/net/dev`). CPU is simply
+the one resource whose USE error is purely a hardware fault.
+
 ## iximiuz Labs Deployment
 
 The iximiuz Labs playground scaffold lives under `playground/iximiuz/`. It

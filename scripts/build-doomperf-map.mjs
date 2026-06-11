@@ -14,6 +14,9 @@ import {
   buildTerminalPatch,
   buildCpuColumnPatch,
   buildControlPanelPatch,
+  buildOrbPatch,
+  wallSignSize,
+  buildWallSignPatch,
 } from "./lib/textures.mjs";
 import { createMapBuilder } from "./lib/map-builder.mjs";
 
@@ -70,8 +73,8 @@ const ringPillarIndex = new Map(ringOrder.map(([c, r], i) => [`${c},${r}`, i]));
 
 const cpuRoomBounds = {
   main: { u1: -320, v1: 896, u2: 320, v2: 1624 },
-  runQueue: { u1: -768, v1: 896, u2: -384, v2: 1496 },
-  load: { u1: 384, v1: 896, u2: 768, v2: 1496 },
+  runQueue: { u1: -1024, v1: 768, u2: -384, v2: 1600 },
+  load: { u1: 384, v1: 896, u2: 884, v2: 1676 },
   sideEntry: { v1: 1024, v2: 1216 },
 };
 
@@ -351,28 +354,92 @@ const addResourceArea = (direction) => {
       const v1 = cpuRoomBounds.sideEntry.v1 + k * 64;
       areaRect(direction, `load-inscription-${k}`, { u1: cpuRoomBounds.main.u2, v1, u2: cpuRoomBounds.load.u1, v2: v1 + 64 }, { ...corridor, floorFlat: flatName });
     });
-    // ===== LEFT room: RUN QUEUE conveyor (light 144) + sky window =====
-    const runQueueFloor = {
-      ...base,
-      kind: "run-queue",
-      wall: "METAL1",
-      floorFlat: "FLOOR1_7",
-      ceilingFlat: "CEIL5_1",
-      ceiling: 224,
-      light: cpuRunQueueDisplay.light,
-    };
-    areaRect(direction, "rq-room-west", { ...cpuRoomBounds.runQueue, u2: -704 }, runQueueFloor);
-    const rqTerminalPanelV = cpuRoomBounds.runQueue.v2 - terminalPanelDepth;
-    areaRect(direction, "rq-terminal-walk", { ...cpuRoomBounds.runQueue, u1: -704, u2: -448, v2: rqTerminalPanelV }, runQueueFloor);
-    areaRect(direction, "rq-terminal", { ...cpuRoomBounds.runQueue, u1: -704, u2: -448, v1: rqTerminalPanelV }, {
-      ...runQueueFloor,
+    // ===== LEFT wing: RUN QUEUE — a "subway" hall. The player enters from the
+    // east onto a raised PLATFORM (floor 0; RUN QUEUE wall terminal on its north
+    // end wall) and looks WEST down into the sunken TRACKS (a ravine at floor -56)
+    // that run far north & south past the platform, like a subway. Task-orbs
+    // stream along the tracks (north->south) through a constriction whose open
+    // lanes track CPU core count; stairs run the full west edge of the platform.
+    // The footprint is a T: a long N-S track trench (west) with the platform as an
+    // east nub at the middle, so the platform's N/S end walls are solid (terminal
+    // fits) and the tracks extend past it both ways. Orbs, lane gates (sector tags
+    // 230..237) and load halos are animated by patch 0018; this is static geometry
+    // + tags only. Light levels avoid the floor-display sentinels (144/160).
+    const rqRavineFloor = -56;
+    const rqCeil = 224;
+    const rqPlatU1 = -704, rqPlatU2 = cpuRoomBounds.runQueue.u2; // platform E-W (-704..-384)
+    const rqPlatV1 = 928, rqPlatV2 = 1312;                        // platform N-S (384 long)
+    const rqStairU1 = -768, rqStairU2 = -704;                     // egress stairs (64 wide)
+    const rqTrU1 = -1024, rqTrU2 = -768;                          // track trench E-W (256 wide)
+    // South end held at v768 so the trench clears the west (network) wing, whose
+    // geometry tops out near y704 — a solid-wall gap keeps the wings unconnected.
+    const rqTrV1 = 768, rqTrV2 = 1600;                            // track trench N-S
+    const rqHall = { ...base, wall: "METAL1", ceilingFlat: "CEIL5_1", ceiling: rqCeil };
+    const platform = { ...rqHall, kind: "rq-overlook", floorFlat: "FLOOR4_8", floor: 0, light: 176 };
+    const tracks = { ...rqHall, kind: "rq-ravine", floorFlat: "FLOOR1_7", floor: rqRavineFloor, light: 168 };
+
+    // Platform (raised) + RUN QUEUE wall terminal on its solid north end wall.
+    const rqTermV = rqPlatV2 - terminalPanelDepth;   // 1296
+    const rqTermU1 = -640;                            // 256-wide screen, east-aligned
+    areaRect(direction, "rq-platform", { u1: rqPlatU1, v1: rqPlatV1, u2: rqPlatU2, v2: rqTermV }, platform);
+    areaRect(direction, "rq-plat-nw", { u1: rqPlatU1, v1: rqTermV, u2: rqTermU1, v2: rqPlatV2 }, platform);
+    areaRect(direction, "rq-terminal", { u1: rqTermU1, v1: rqTermV, u2: rqPlatU2, v2: rqPlatV2 }, {
+      ...platform,
       floor: terminalPanelFloor,
       ceiling: terminalPanelFloor + terminalTextureSize.height,
       labelSide: "top",
       labelTexture: cpuTerminalScreens.runQueue.texture,
     });
-    areaRect(direction, "rq-room-east", { ...cpuRoomBounds.runQueue, u1: -448 }, runQueueFloor);
-    areaRect(direction, "rq-view", { u1: cpuRoomBounds.runQueue.u1 - 64, v1: 1080, u2: cpuRoomBounds.runQueue.u1, v2: 1200 }, {
+
+    // Egress stairs: full length of the platform's west edge, -56 -> 0 eastward.
+    const rqStep = [-42, -28, -14, 0];
+    rqStep.forEach((fz, k) => {
+      const su1 = rqStairU1 + k * 16;
+      areaRect(direction, `rq-stair-${k}`, { u1: su1, v1: rqPlatV1, u2: su1 + 16, v2: rqPlatV2 }, {
+        ...tracks, kind: "rq-stair", floor: fz, floorFlat: "FLOOR4_8", light: 176,
+      });
+    });
+
+    // Tracks (sunken ravine) running far north & south past the platform.
+    const rqConV1 = 1104, rqConV2 = 1136;            // constriction band (mid, at the platform)
+    areaRect(direction, "rq-spawn", { u1: rqTrU1, v1: 1500, u2: rqTrU2, v2: rqTrV2 }, { ...tracks, kind: "rq-spawn", light: 184 });
+    areaRect(direction, "rq-flow-up", { u1: rqTrU1, v1: rqConV2, u2: rqTrU2, v2: 1500 }, tracks);
+    // Constriction: 8 lane gates (tags 230..237) split by solid dividers across
+    // the track width; the tick sinks `cores` gates open and raises the rest.
+    const rqLanes = 8;
+    const rqCell = (rqTrU2 - rqTrU1) / rqLanes;      // 32
+    for (let i = 0; i < rqLanes; i += 1) {
+      const cu = rqTrU1 + i * rqCell;
+      areaRect(direction, `rq-divider-${i}`, { u1: cu, v1: rqConV1, u2: cu + 4, v2: rqConV2 }, {
+        ...tracks, kind: "rq-divider", floor: rqCeil, ceiling: rqCeil, wall: cpuCoreWallTexture, light: 176,
+      });
+      areaRect(direction, `rq-gate-${i}`, { u1: cu + 4, v1: rqConV1, u2: cu + rqCell, v2: rqConV2 }, {
+        ...tracks, kind: "rq-gate", tag: 230 + i, wall: cpuCoreWallTexture,
+      });
+    }
+    areaRect(direction, "rq-flow-down", { u1: rqTrU1, v1: 868, u2: rqTrU2, v2: rqConV1 }, tracks);
+    areaRect(direction, "rq-exit", { u1: rqTrU1, v1: rqTrV1, u2: rqTrU2, v2: 868 }, { ...tracks, kind: "rq-exit" });
+
+    // D-state I/O-wait PEN: a single recess cut WEST into the track wall just south
+    // of the gates, off the run-queue flow. Blocked (uninterruptible-sleep) threads
+    // STACK here as motionless green orbs (patch 0018) in a 2x2 footprint that piles
+    // up level by level -- the taller the pile, the more threads asleep on I/O. The
+    // sector light (tag 245) PULSES ~once/sec so the sleeping pile glows. Only this
+    // one pen remains (the southern one was dropped so it no longer blocks the
+    // QUEUED sign behind it). World coords (CPU/north wing = identity): x[-1136,-1024].
+    const rqPenU1 = rqTrU1 - 112;                    // -1136: back wall of the pen
+    areaRect(direction, "rq-io-pen", { u1: rqPenU1, v1: 988, u2: rqTrU1, v2: 1072 }, {
+      ...tracks,
+      kind: "rq-io-pen",
+      wall: "METAL1",
+      floorFlat: "FLOOR4_8",
+      floor: rqRavineFloor,                          // -56: track level; orbs stack up from here
+      light: 192,                                    // base; patch 0018 pulses it ~1/sec
+      tag: 245,
+    });
+
+    // West sky window high in the tracks' far wall.
+    areaRect(direction, "rq-view", { u1: rqTrU1 - 64, v1: 1080, u2: rqTrU1, v2: 1200 }, {
       kind: "outside",
       resource,
       floor: 72,
@@ -381,6 +448,31 @@ const addResourceArea = (direction) => {
       ceilingFlat: "F_SKY1",
       wall: "STONE3",
       light: 255,
+    });
+
+    // Side signs recessed into the far (west) track wall, facing the overlook:
+    // QUEUED at the far south (arrival/left end of the queue), RUNNING on the north
+    // (dispatch/right, past the gates). The I/O pools now occupy the near-gate
+    // stretch the QUEUED sign used to hold. Floor is raised above the track floor
+    // so the text sits near eye level; labelSide "left" paints the sign on each
+    // recess's far wall.
+    const rqSignDepth = 32;
+    const rqSignFloor = 0;
+    const rqSignCeil = rqSignFloor + wallSignSize.height;
+    [
+      { name: "rq-sign-queue", v1: 780, v2: 972, tex: "DPSGQUE" },
+      { name: "rq-sign-run", v1: 1208, v2: 1400, tex: "DPSGRUN" },
+    ].forEach(({ name, v1, v2, tex }) => {
+      areaRect(direction, name, { u1: rqTrU1 - rqSignDepth, v1, u2: rqTrU1, v2 }, {
+        ...tracks,
+        kind: "rq-sign",
+        wall: "METAL1",
+        floor: rqSignFloor,
+        ceiling: rqSignCeil,
+        light: 208,
+        labelSide: "left",
+        labelTexture: tex,
+      });
     });
     // ===== RIGHT room: LOAD — three vertical load-average gauges + sky window.
     // The player enters walking east, so left->right reads north->south (high->
@@ -407,25 +499,29 @@ const addResourceArea = (direction) => {
       ceilingFlat: "CEIL5_1",
       light: 176,
     };
-    areaRect(direction, "load-walk-w", { u1: cpuRoomBounds.load.u1, v1: cpuRoomBounds.load.v1, u2: 512, v2: 1240 }, loadWalk);
-    areaRect(direction, "load-margin-s", { u1: 512, v1: cpuRoomBounds.load.v1, u2: 640, v2: 1000 }, loadWalk);
-    areaRect(direction, "load-gauge-15m", { u1: 512, v1: 1000, u2: 640, v2: 1048 }, { ...loadGauge, lineTag: 123 });
-    areaRect(direction, "load-gap-1", { u1: 512, v1: 1048, u2: 640, v2: 1096 }, loadWalk);
-    areaRect(direction, "load-gauge-5m", { u1: 512, v1: 1096, u2: 640, v2: 1144 }, { ...loadGauge, lineTag: 122 });
-    areaRect(direction, "load-gap-2", { u1: 512, v1: 1144, u2: 640, v2: 1192 }, loadWalk);
-    areaRect(direction, "load-gauge-1m", { u1: 512, v1: 1192, u2: 640, v2: 1240 }, { ...loadGauge, lineTag: 121 });
-    areaRect(direction, "load-walk-e", { u1: 640, v1: cpuRoomBounds.load.v1, u2: cpuRoomBounds.load.u2, v2: 1240 }, loadWalk);
-    areaRect(direction, "load-north-west", { u1: cpuRoomBounds.load.u1, v1: 1240, u2: 448, v2: cpuRoomBounds.load.v2 }, loadWalk);
+    // Gauge column + terminal are centred on the (now wider) room centre u=634.
+    const loadGU1 = 570, loadGU2 = 698;            // gauge column (128 wide), centred
+    const loadTermU1 = 506, loadTermU2 = 762;      // terminal (256 wide), centred
+    const loadGaugeV2 = 1240;                       // south gauge band top
+    areaRect(direction, "load-walk-w", { u1: cpuRoomBounds.load.u1, v1: cpuRoomBounds.load.v1, u2: loadGU1, v2: loadGaugeV2 }, loadWalk);
+    areaRect(direction, "load-margin-s", { u1: loadGU1, v1: cpuRoomBounds.load.v1, u2: loadGU2, v2: 1000 }, loadWalk);
+    areaRect(direction, "load-gauge-15m", { u1: loadGU1, v1: 1000, u2: loadGU2, v2: 1048 }, { ...loadGauge, lineTag: 123 });
+    areaRect(direction, "load-gap-1", { u1: loadGU1, v1: 1048, u2: loadGU2, v2: 1096 }, loadWalk);
+    areaRect(direction, "load-gauge-5m", { u1: loadGU1, v1: 1096, u2: loadGU2, v2: 1144 }, { ...loadGauge, lineTag: 122 });
+    areaRect(direction, "load-gap-2", { u1: loadGU1, v1: 1144, u2: loadGU2, v2: 1192 }, loadWalk);
+    areaRect(direction, "load-gauge-1m", { u1: loadGU1, v1: 1192, u2: loadGU2, v2: 1240 }, { ...loadGauge, lineTag: 121 });
+    areaRect(direction, "load-walk-e", { u1: loadGU2, v1: cpuRoomBounds.load.v1, u2: cpuRoomBounds.load.u2, v2: loadGaugeV2 }, loadWalk);
+    areaRect(direction, "load-north-west", { u1: cpuRoomBounds.load.u1, v1: loadGaugeV2, u2: loadTermU1, v2: cpuRoomBounds.load.v2 }, loadWalk);
     const loadTerminalPanelV = cpuRoomBounds.load.v2 - terminalPanelDepth;
-    areaRect(direction, "load-terminal-walk", { u1: 448, v1: 1240, u2: 704, v2: loadTerminalPanelV }, loadWalk);
-    areaRect(direction, "load-terminal", { u1: 448, v1: loadTerminalPanelV, u2: 704, v2: cpuRoomBounds.load.v2 }, {
+    areaRect(direction, "load-terminal-walk", { u1: loadTermU1, v1: loadGaugeV2, u2: loadTermU2, v2: loadTerminalPanelV }, loadWalk);
+    areaRect(direction, "load-terminal", { u1: loadTermU1, v1: loadTerminalPanelV, u2: loadTermU2, v2: cpuRoomBounds.load.v2 }, {
       ...loadWalk,
       floor: terminalPanelFloor,
       ceiling: terminalPanelFloor + terminalTextureSize.height,
       labelSide: "top",
       labelTexture: cpuTerminalScreens.load.texture,
     });
-    areaRect(direction, "load-north-east", { u1: 704, v1: 1240, u2: cpuRoomBounds.load.u2, v2: cpuRoomBounds.load.v2 }, loadWalk);
+    areaRect(direction, "load-north-east", { u1: loadTermU2, v1: loadGaugeV2, u2: cpuRoomBounds.load.u2, v2: cpuRoomBounds.load.v2 }, loadWalk);
     areaRect(direction, "load-view", { u1: cpuRoomBounds.load.u2, v1: 1080, u2: cpuRoomBounds.load.u2 + 64, v2: 1200 }, {
       kind: "outside",
       resource,
@@ -831,6 +927,17 @@ const textureConfigs = [
     height: signTextureSize.height,
     build: () => buildSignPatch(sign.text),
   })),
+  // RUN QUEUE track-side wall signs (recessed into the far wall, facing the player).
+  ...[
+    { texture: "DPSGQUE", patch: "DPPQUE", text: "QUEUED" },
+    { texture: "DPSGRUN", patch: "DPPRUN", text: "RUNNING" },
+  ].map(({ texture, patch, text }) => ({
+    texture,
+    patch,
+    width: wallSignSize.width,
+    height: wallSignSize.height,
+    build: () => buildWallSignPatch(text),
+  })),
 ];
 
 const buildPNames = () =>
@@ -896,6 +1003,13 @@ const mapLumps = [
   lump("PNAMES", buildPNames()),
   ...textureConfigs.map(({ patch, build }) => lump(patch, build())),
   lump("TEXTURE2", buildTexture2()),
+  // Doom Perf: replace the (unused) blursphere sprite with a blue run-queue task
+  // orb. modifiedgame + W_GetNumForName resolve PINSA0 to this PWAD copy, and
+  // patch 0009 supplies its sprite metadata; MT_DP_CPUTASK renders frame A only.
+  lump("PINSA0", buildOrbPatch([4, 194, 196, 198, 200, 203])),
+  // ...and the (unused) soulsphere sprite with a green I/O-wait orb -- a third
+  // hue, distinct from the blue CPU orbs and the (red) trench floor.
+  lump("SOULA0", buildOrbPatch([4, 112, 114, 116, 118, 121])),
   lump("F_START"),
   ...iwadFlats,
   ...inscriptionFlats,
@@ -976,7 +1090,9 @@ const mapManifest = {
   // segment lying on that back wall).
   terminals: [
     { sign: "cores", segments: [terminalSegment(cpuRoomBounds.main)] },
-    { sign: "runqueue", segments: [terminalSegment(cpuRoomBounds.runQueue)] },
+    // RUN QUEUE terminal sits on the platform's north end wall (v 1312, the
+    // platform's v2 — not the long track trench's v2), centred at u -512.
+    { sign: "runqueue", segments: [{ ax: -512 - terminalHalfWidth, ay: 1312, bx: -512 + terminalHalfWidth, by: 1312 }] },
     { sign: "load", segments: [terminalSegment(cpuRoomBounds.load)] },
   ],
   // Four hub doors, one per cardinal exit. Each has two trigger segments (the
