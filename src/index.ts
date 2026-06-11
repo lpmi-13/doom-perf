@@ -125,6 +125,14 @@ type DoomPerfEngine = {
   _DoomPerf_SetCpuBlockedCount?: (count: number) => void;
   _DoomPerf_SetCpuLoadPressure?: (permille: number) => void;
   _DoomPerf_SetLoad?: (index: number, milliLoad: number) => void;
+  // Storage service time (await) as permille of a 250ms full scale, driving the
+  // media-pit latency gauges in the disk wing; and disk busy fraction (%util) in
+  // permille, driving the platter's pulsing rings.
+  _DoomPerf_SetStorageAwait?: (permille: number) => void;
+  _DoomPerf_SetStorageUtil?: (permille: number) => void;
+  // Disk request-queue depth (iostat aqu-sz) as permille of a 24-request full
+  // channel, driving the media-pit queue channel's flowing request blocks.
+  _DoomPerf_SetStorageQueue?: (permille: number) => void;
   _DoomPerf_GetSimMode?: () => number;
   _DoomPerf_GetEffectiveCpuCoreCount?: () => number;
   _DoomPerf_GetEffectiveCpuCore?: (id: number) => number;
@@ -163,6 +171,12 @@ const pushTelemetryToEngine = (engine: DoomPerfEngine | undefined, telemetry: Te
   engine?._DoomPerf_SetLoad?.(0, Math.round(telemetry.cpu.load1 * 1000));
   engine?._DoomPerf_SetLoad?.(1, Math.round(telemetry.cpu.load5 * 1000));
   engine?._DoomPerf_SetLoad?.(2, Math.round(telemetry.cpu.load15 * 1000));
+  // Disk service time (iostat await) for the media-pit latency gauges, scaled to
+  // a 250ms full bar — the same scale the iostat terminal's await bar uses. In a
+  // disk sim the engine synthesizes its own await, so this live value is ignored.
+  engine?._DoomPerf_SetStorageAwait?.(Math.round(clampRatio((telemetry.storage.awaitMillis ?? 0) / 250) * 1000));
+  engine?._DoomPerf_SetStorageUtil?.(Math.round(clampRatio(telemetry.storage.utilization) * 1000));
+  engine?._DoomPerf_SetStorageQueue?.(Math.round(clampRatio((telemetry.storage.queueDepth ?? 0) / 24) * 1000));
 };
 
 const scenarioTelemetry = (
@@ -170,7 +184,7 @@ const scenarioTelemetry = (
   liveTelemetry: TelemetrySnapshot | undefined
 ): TelemetrySnapshot | undefined => {
   const mode = engine?._DoomPerf_GetSimMode?.() ?? 0;
-  if (mode !== 1 && mode !== 2) {
+  if (mode < 1 || mode > 4) {
     return undefined;
   }
 
@@ -183,8 +197,14 @@ const scenarioTelemetry = (
   const runQueuePressure = clampRatio((engine?._DoomPerf_GetEffectiveCpuRunQueuePressure?.() ?? 0) / 1000);
   const loadPressure = clampRatio((engine?._DoomPerf_GetEffectiveCpuLoadPressure?.() ?? 0) / 1000);
   const cpuPressure = mode === 2 ? Math.max(runQueuePressure, loadPressure) : runQueuePressure;
+  const diskMode = mode === 3 || mode === 4;
+  const diskSaturated = mode === 4;
   const quietResource = { utilization: 0.08, saturation: 0, errors: 0 };
-  const source = mode === 1 ? "sim: high CPU utilization" : "sim: high CPU saturation";
+  const source =
+    mode === 1 ? "sim: high CPU utilization"
+    : mode === 2 ? "sim: high CPU saturation"
+    : mode === 3 ? "sim: high disk utilization"
+    : "sim: high disk saturation";
   const now = Date.now();
   // Background system stats so the vmstat memory/swap/io columns aren't blank.
   // They sit at a low baseline and rise gently with CPU activity (a busier box
@@ -209,20 +229,48 @@ const scenarioTelemetry = (
     swapOutPagesPerSecond: swapUsedBytes > 0 ? 60 + utilization * 200 : 0,
   };
   const ioBeat = 1 + Math.abs(Math.sin(now / 1300));
-  const simStorage = {
-    utilization: clampRatio(0.04 + utilization * 0.12),
-    saturation: 0,
-    errors: 0,
-    readBytesPerSecond: (18 + utilization * 180) * ioBeat * 1024,
-    writeBytesPerSecond: (26 + utilization * 260) * ioBeat * 1024,
-  };
+  // Storage: a light I/O background under the CPU sims; the disk sims drive the
+  // media to high utilization (mode 3 — pinned busy, but the queue and service
+  // time stay low) or full saturation (mode 4 — the request queue and await
+  // blow out while throughput plateaus under contention). The fields map
+  // straight onto the iostat terminal's columns (rkB/s, wkB/s, await, aqu-sz,
+  // %util) and its queue/await/util/saturation bars.
+  const mib = 1024 * 1024;
+  const wobble = 0.85 + 0.3 * Math.abs(Math.sin(now / 900));
+  const simStorage = diskMode
+    ? {
+        utilization: diskSaturated
+          ? clampRatio(0.985 + 0.012 * Math.sin(now / 2000))
+          : clampRatio(0.93 + 0.045 * Math.sin(now / 2000)),
+        // Saturation (not raw utilization) is the health signal: ~100% busy is
+        // fine until the queue and await pile up, which only mode 4 does.
+        saturation: diskSaturated
+          ? clampRatio(0.6 + 0.4 * Math.abs(Math.sin(now / 2300)))
+          : clampRatio(0.05 + 0.04 * Math.abs(Math.sin(now / 1900))),
+        errors: 0,
+        // aqu-sz: mode 4 backs up well past the iostat bar's 8.0 full-scale.
+        queueDepth: diskSaturated ? 13 + 6 * Math.abs(Math.sin(now / 1700)) : 1.3 + 0.6 * Math.abs(Math.sin(now / 1500)),
+        // await (ms): mode 4 climbs toward a quarter-second; mode 3 stays single digit.
+        awaitMillis: diskSaturated ? 165 + 55 * Math.abs(Math.sin(now / 1300)) : 6.5 + 3 * Math.abs(Math.sin(now / 1100)),
+        // Contention makes the saturated media serve a little slower per request,
+        // so its throughput is lower than the merely-busy case.
+        readBytesPerSecond: (diskSaturated ? 96 : 168) * mib * wobble,
+        writeBytesPerSecond: (diskSaturated ? 64 : 120) * mib * wobble,
+      }
+    : {
+        utilization: clampRatio(0.04 + utilization * 0.12),
+        saturation: 0,
+        errors: 0,
+        readBytesPerSecond: (18 + utilization * 180) * ioBeat * 1024,
+        writeBytesPerSecond: (26 + utilization * 260) * ioBeat * 1024,
+      };
 
   return {
     status: "live",
     source,
     updatedAt: now,
     host: "doomperf-simulation",
-    health: clampRatio(1 - Math.max(utilization, cpuPressure)),
+    health: clampRatio(1 - Math.max(utilization, cpuPressure, diskMode ? simStorage.saturation : 0)),
     uptimeSeconds: 3 * 86400 + performance.now() / 1000,
     cpu: {
       utilization,
@@ -304,7 +352,7 @@ const start = async () => {
         pushTelemetryToEngine(engine, lastLiveTelemetry);
       }
       const mode = engine?._DoomPerf_GetSimMode?.() ?? 0;
-      const inScenario = mode === 1 || mode === 2;
+      const inScenario = mode >= 1 && mode <= 4;
       const now = Date.now();
       if (!inScenario) {
         lastScenario = undefined;

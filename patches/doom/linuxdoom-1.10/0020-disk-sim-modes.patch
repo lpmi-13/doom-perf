@@ -1,0 +1,42 @@
+diff --git a/m_menu.c b/m_menu.c
+index 91a3f49..a3762e2 100644
+--- a/m_menu.c
++++ b/m_menu.c
+@@ -274,6 +274,8 @@ enum
+     mode_live = 0,
+     mode_simutil,
+     mode_simsat,
++    mode_simdiskutil,
++    mode_simdisksat,
+     mode_end
+ } mode_e;
+ 
+@@ -281,7 +283,9 @@ menuitem_t ModeMenu[]=
+ {
+     {1,"",M_ChooseMode,'l'},
+     {1,"",M_ChooseMode,'u'},
+-    {1,"",M_ChooseMode,'s'}
++    {1,"",M_ChooseMode,'s'},
++    {1,"",M_ChooseMode,'d'},
++    {1,"",M_ChooseMode,'k'}
+ };
+ 
+ menu_t  ModeDef =
+@@ -914,12 +918,15 @@ void M_DrawMode(void)
+     M_WriteText(ModeDef.x, ModeDef.y + LINEHEIGHT*mode_live, "LIVE STATS");
+     M_WriteText(ModeDef.x, ModeDef.y + LINEHEIGHT*mode_simutil, "SIM: HIGH CPU UTILIZATION");
+     M_WriteText(ModeDef.x, ModeDef.y + LINEHEIGHT*mode_simsat, "SIM: HIGH CPU SATURATION");
++    M_WriteText(ModeDef.x, ModeDef.y + LINEHEIGHT*mode_simdiskutil, "SIM: HIGH DISK UTILIZATION");
++    M_WriteText(ModeDef.x, ModeDef.y + LINEHEIGHT*mode_simdisksat, "SIM: HIGH DISK SATURATION");
+ }
+ 
+ void M_ChooseMode(int choice)
+ {
+-    // 0 = live telemetry, 1 = simulated high utilization,
+-    // 2 = simulated high saturation (read by the CPU room renderer).
++    // 0 = live telemetry; 1/2 = simulated high CPU utilization/saturation
++    // (read by the CPU room renderer); 3/4 = simulated high disk utilization/
++    // saturation (read by the browser's iostat terminal scenario).
+     doomperf_sim_mode = choice;
+     G_DeferedInitNew(hurtme,1,1);
+     M_ClearMenus ();

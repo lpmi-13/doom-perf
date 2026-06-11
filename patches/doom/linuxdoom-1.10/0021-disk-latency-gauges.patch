@@ -1,0 +1,146 @@
+diff --git a/r_draw.c b/r_draw.c
+index 372ec4f..17dab45 100644
+--- a/r_draw.c
++++ b/r_draw.c
+@@ -103,6 +103,7 @@ int			doomperf_cpu_column_display = 0;
+ int			doomperf_cpu_column_texture_x = 0;
+ static byte R_DoomPerfCpuStreakPixel (int ty);
+ static byte R_DoomPerfCpuGaugePixel (int gauge, int ty);
++static byte R_DoomPerfDiskGaugePixel (int gauge, int ty);
+ 
+ //
+ // A column is a vertical slice/span from a wall texture that,
+@@ -146,7 +147,10 @@ void R_DrawColumn (void)
+     // This is as fast as it gets.
+     do 
+     {
+-	if (doomperf_cpu_column_display >= 17)
++	if (doomperf_cpu_column_display >= 20)
++	    *dest = dc_colormap[R_DoomPerfDiskGaugePixel(doomperf_cpu_column_display - 20,
++							 (frac>>FRACBITS)&127)];
++	else if (doomperf_cpu_column_display >= 17)
+ 	    *dest = dc_colormap[R_DoomPerfCpuGaugePixel(doomperf_cpu_column_display - 17,
+ 							(frac>>FRACBITS)&127)];
+ 	else if (doomperf_cpu_column_display)
+@@ -704,6 +708,69 @@ static byte R_DoomPerfCpuGaugePixel (int gauge, int ty)
+     return DOOMPERF_CPU_CORE_GREEN;
+ }
+ 
++// Storage (disk) wing: service-latency gauges. Palette aliases reuse the shared
++// instrument indices -- gold is the DISK label's hue (231), red the danger hue.
++#define DOOMPERF_DISK_EMPTY	DOOMPERF_CPU_CORE_DARK	/* 5  */
++#define DOOMPERF_DISK_FRAME	DOOMPERF_CPU_CORE_FRAME	/* 96 */
++#define DOOMPERF_DISK_GOLD	DOOMPERF_CPU_CORE_YELLOW	/* 231 */
++#define DOOMPERF_DISK_RED	DOOMPERF_CPU_CORE_RED	/* 176 */
++
++// Effective disk service time (iostat await) in permille of a 250ms full scale.
++// In live mode it is the value pushed from the browser (doomperf_storage_await);
++// the disk sims synthesize it so the gauges react without a real workload. Mode 3
++// (high utilization) stays low -- a busy disk that keeps up has little latency --
++// while mode 4 (saturation) blows the queue out and spikes await into the red.
++// The CPU sims (1/2) leave it on the live value, since disk isn't their subject.
++static int R_DoomPerfDiskAwaitPermille (void)
++{
++    switch (doomperf_sim_mode)
++    {
++      case 3:
++	return 26 + (leveltime % 16);
++      case 4:
++	return 660 + ((leveltime * 3) % 220);
++      default:
++	return doomperf_storage_await;
++    }
++}
++
++// A bank of three vertical await gauges in the media pit (gauge 0/1/2), with a
++// small per-column phase ripple so they shimmer like a live meter. Each 128-tall
++// niche wall fills from the bottom (ty 127) by await/service time; filled pixels
++// are gold up to the warning line (70% of the 250ms scale, ~175ms) and red above
++// it, so a healthy-busy disk shows a short gold bar and a saturated one spikes red.
++static byte R_DoomPerfDiskGaugePixel (int gauge, int ty)
++{
++    int		await;
++    int		fill_ty;
++    int		warn_ty;
++    int		tx;
++
++    if (gauge < 0 || gauge > 2)
++	return DOOMPERF_DISK_EMPTY;
++
++    tx = doomperf_cpu_column_texture_x & 127;
++    if (tx < 3 || tx > 124)
++	return DOOMPERF_DISK_FRAME;
++
++    await = R_DoomPerfDiskAwaitPermille() + (((leveltime >> 1) + gauge * 13) % 24) - 12;
++    if (await < 0)
++	await = 0;
++    if (await > 1000)
++	await = 1000;
++
++    fill_ty = 127 - (await * 127) / 1000;
++    warn_ty = 127 - (700 * 127) / 1000;
++
++    if (ty == warn_ty)
++	return DOOMPERF_DISK_FRAME;
++    if (ty < fill_ty)
++	return DOOMPERF_DISK_EMPTY;
++    if (ty < warn_ty)
++	return DOOMPERF_DISK_RED;
++    return DOOMPERF_DISK_GOLD;
++}
++
+ static int R_DoomPerfCpuWorldX (fixed_t xfrac)
+ {
+     return xfrac >> FRACBITS;
+diff --git a/r_segs.c b/r_segs.c
+index fffa4ab..110197d 100644
+--- a/r_segs.c
++++ b/r_segs.c
+@@ -46,7 +46,7 @@ rcsid[] = "$Id: r_segs.c,v 1.3 1997/01/29 20:10:19 b1 Exp $";
+ extern int doomperf_cpu_column_display;
+ extern int doomperf_cpu_column_texture_x;
+ 
+-static void R_DoomPerfBeginColumn (int texturecolumn)
++static void R_DoomPerfBeginColumn (int texturecolumn, int is_single_sided)
+ {
+     int		tag;
+ 
+@@ -56,6 +56,11 @@ static void R_DoomPerfBeginColumn (int texturecolumn)
+     else if (tag >= 121 && tag <= 123)
+ 	// LOAD room gauges: encode display as 17/18/19 (gauge 0/1/2 = 1m/5m/15m).
+ 	doomperf_cpu_column_display = tag - 104;
++    else if (is_single_sided && tag >= 660 && tag <= 662)
++	// Storage media-pit latency gauges: the niche back/side walls are
++	// one-sided, so gate on that to keep the tag off the two-sided opening
++	// seal above each niche. Encode display as 20/21/22 (gauge 0/1/2).
++	doomperf_cpu_column_display = tag - 640;
+     else
+ 	doomperf_cpu_column_display = 0;
+     doomperf_cpu_column_texture_x = texturecolumn;
+@@ -306,7 +311,7 @@ void R_RenderSegLoop (void)
+ 	    dc_yh = yh;
+ 	    dc_texturemid = rw_midtexturemid;
+ 	    dc_source = R_GetColumn(midtexture,texturecolumn);
+-	    R_DoomPerfBeginColumn(texturecolumn);
++	    R_DoomPerfBeginColumn(texturecolumn, 1);
+ 	    colfunc ();
+ 	    doomperf_cpu_column_display = 0;
+ 	    ceilingclip[rw_x] = viewheight;
+@@ -330,7 +335,7 @@ void R_RenderSegLoop (void)
+ 		    dc_yh = mid;
+ 		    dc_texturemid = rw_toptexturemid;
+ 		    dc_source = R_GetColumn(toptexture,texturecolumn);
+-		    R_DoomPerfBeginColumn(texturecolumn);
++		    R_DoomPerfBeginColumn(texturecolumn, 0);
+ 		    colfunc ();
+ 		    doomperf_cpu_column_display = 0;
+ 		    ceilingclip[rw_x] = mid;
+@@ -362,7 +367,7 @@ void R_RenderSegLoop (void)
+ 		    dc_texturemid = rw_bottomtexturemid;
+ 		    dc_source = R_GetColumn(bottomtexture,
+ 					    texturecolumn);
+-		    R_DoomPerfBeginColumn(texturecolumn);
++		    R_DoomPerfBeginColumn(texturecolumn, 0);
+ 		    colfunc ();
+ 		    doomperf_cpu_column_display = 0;
+ 		    floorclip[rw_x] = mid;

@@ -154,6 +154,18 @@ const readMemory = (payload: Record<string, unknown>): MemoryTelemetry => {
   if (!source) {
     return base;
   }
+  const topRss = Array.isArray(source.topRss)
+    ? source.topRss.flatMap((value) => {
+        const process = objectValue(value);
+        const pid = process ? numberValue(process.pid) : undefined;
+        const rssBytes = process ? numberValue(process.rssBytes) : undefined;
+        const command = process?.command;
+        if (pid === undefined || rssBytes === undefined || typeof command !== "string") {
+          return [];
+        }
+        return [{ pid: Math.trunc(pid), rssBytes, command }];
+      })
+    : undefined;
   return {
     ...base,
     totalBytes: numberValue(source.totalBytes),
@@ -161,11 +173,23 @@ const readMemory = (payload: Record<string, unknown>): MemoryTelemetry => {
     freeBytes: numberValue(source.freeBytes),
     buffersBytes: numberValue(source.buffersBytes),
     cachedBytes: numberValue(source.cachedBytes),
+    swapTotalBytes: numberValue(source.swapTotalBytes),
+    swapFreeBytes: numberValue(source.swapFreeBytes),
     swapUsedBytes: numberValue(source.swapUsedBytes),
     swapInPagesPerSecond: numberValue(source.swapInPagesPerSecond),
     swapOutPagesPerSecond: numberValue(source.swapOutPagesPerSecond),
     swapPagesPerSecond: numberValue(source.swapPagesPerSecond),
+    pressureSomeAvg10: numberValue(source.pressureSomeAvg10),
+    pressureSomeAvg60: numberValue(source.pressureSomeAvg60),
+    pressureSomeAvg300: numberValue(source.pressureSomeAvg300),
+    pressureSomeTotal: numberValue(source.pressureSomeTotal),
+    pressureFullAvg10: numberValue(source.pressureFullAvg10),
+    pressureFullAvg60: numberValue(source.pressureFullAvg60),
+    pressureFullAvg300: numberValue(source.pressureFullAvg300),
+    pressureFullTotal: numberValue(source.pressureFullTotal),
+    oomKills: numberValue(source.oomKills),
     oomKillsPerSecond: numberValue(source.oomKillsPerSecond),
+    topRss,
   };
 };
 

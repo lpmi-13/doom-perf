@@ -26,6 +26,9 @@ int doomperf_cpu_run_queue_count = 0;
 int doomperf_cpu_blocked_count = 0;
 int doomperf_cpu_load_pressure = 0;
 int doomperf_load[3] = {0, 0, 0};
+int doomperf_storage_await = 0;
+int doomperf_storage_util = 0;
+int doomperf_storage_queue = 0;
 int doomperf_sim_mode = 0;
 
 EMSCRIPTEN_KEEPALIVE
@@ -96,6 +99,34 @@ void DoomPerf_SetLoad(int index, int milliLoad)
     if (milliLoad < 0)
         milliLoad = 0;
     doomperf_load[index] = milliLoad;
+}
+
+// Disk service time (iostat await) as permille of a 250ms full scale. Drives the
+// media-pit latency gauges in the storage wing; ignored there in a disk sim,
+// which synthesizes its own await (see r_draw.c R_DoomPerfDiskAwaitPermille).
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_SetStorageAwait(int permille)
+{
+    doomperf_storage_await = DoomPerf_ClampPermille(permille);
+}
+
+// Disk busy fraction (iostat %util) in permille. Drives the media-pit platter's
+// pulsing rings in the storage wing; ignored there in a disk sim, which
+// synthesizes its own utilization (see p_tick.c DoomPerf_UpdatePlatter).
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_SetStorageUtil(int permille)
+{
+    doomperf_storage_util = DoomPerf_ClampPermille(permille);
+}
+
+// Disk request-queue depth (iostat aqu-sz) as permille of a 24-request full
+// channel. Drives the media-pit queue channel's flowing request blocks; ignored
+// there in a disk sim, which synthesizes its own depth (see r_draw.c
+// R_DoomPerfDiskQueuePermille).
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_SetStorageQueue(int permille)
+{
+    doomperf_storage_queue = DoomPerf_ClampPermille(permille);
 }
 
 static int DoomPerf_EffectiveCoreCountValue(void)

@@ -368,6 +368,43 @@ export const buildControlPanelPatch = () => {
   return buildPatch(px, W, H);
 };
 
+// Vertical service-latency gauge for the storage media pit. Drawn at the shared
+// label width (256) so the central label-centering offset maps it once, centred,
+// on a narrow niche back wall; the gauge itself is a slim column in the middle
+// (the only slice a ~40px-wide niche reveals): a dark track with a gold fill
+// rising from the base, a red danger band capping the scale, and recessed tick
+// marks. Static here (a representative mid reading); a later engine hook can
+// drive the fill height from await/service time via the niche's reserved line
+// tag, the same way the CPU load gauges fill.
+export const diskGaugeSize = { width: 256, height: 128 };
+export const buildDiskGaugePatch = () => {
+  const { width, height } = diskGaugeSize;
+  const pixels = new Uint8Array(width * height);
+  pixels.fill(8); // dark backing (clipped away on the narrow niche wall)
+  const x0 = 110;
+  const x1 = 146;            // slim column, centred on the visible window (~128)
+  const top = 8;
+  const bottom = height - 8;
+  // Amber frame around a dark track.
+  drawRect(pixels, width, height, x0 - 3, top - 3, x1 + 3, bottom + 3, 160);
+  drawRect(pixels, width, height, x0, top, x1, bottom, 0);
+  // Red danger band caps the top of the scale (latency/error territory).
+  const danger = top + Math.round((bottom - top) * 0.18);
+  drawRect(pixels, width, height, x0, top, x1, danger, 231);
+  // Gold fill rising from the base (~55% of scale = a representative service load).
+  const fillTop = bottom - Math.round((bottom - top) * 0.55);
+  for (let y = fillTop; y < bottom; y += 1) {
+    const k = (y - fillTop) / (bottom - fillTop);
+    drawRect(pixels, width, height, x0, y, x1, y + 1, k < 0.5 ? 167 : 164);
+  }
+  // Recessed tick marks at each eighth of the scale.
+  for (let t = 1; t < 8; t += 1) {
+    const y = top + Math.round((bottom - top) * (t / 8));
+    drawRect(pixels, width, height, x0, y, x1, y + 1, 96);
+  }
+  return buildPatch(pixels, width, height);
+};
+
 // ===== Floor name inscriptions (custom 64x64 flats) =====
 // A wing names a stretch of floor by inscribing text flush into it: the green
 // name on a dark high-contrast panel. The map script appends these generated

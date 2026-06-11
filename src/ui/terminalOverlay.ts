@@ -162,8 +162,15 @@ const mib = (bytes?: number) => Math.round(Math.max(0, bytes ?? 0) / (1024 * 102
 const kib = (bytes?: number) => Math.round(Math.max(0, bytes ?? 0) / 1024);
 const rate = (value?: number) => Math.max(0, value ?? 0);
 
-// MEMORY wing — `free -m` table plus the reclaim/OOM rates that drive the wing's
-// saturation/error instruments.
+const freeColumns: [string, number][] = [
+  ["", 6], ["total", 12], ["used", 12], ["free", 12], ["buff/cache", 12], ["available", 12],
+];
+const freeRow = (label: string, values: number[]) =>
+  freeColumns.map(([, width], i) => padStart(i === 0 ? label : String(values[i - 1]), width)).join("");
+
+// MEMORY PAGE BANK: USE utilization from free(1) and /proc/meminfo. This is
+// intentionally distinct from saturation: low available memory is utilization;
+// swap movement and PSI prove stall/queueing.
 const formatMemory = (telemetry: TelemetrySnapshot): string => {
   const m = telemetry.memory;
   const total = mib(m.totalBytes);
@@ -171,25 +178,119 @@ const formatMemory = (telemetry: TelemetrySnapshot): string => {
   const buffCache = mib(m.buffersBytes) + mib(m.cachedBytes);
   const available = mib(m.availableBytes);
   const used = Math.max(0, total - free - buffCache); // free(1): total - free - buff/cache
-  const columns: [string, number][] = [
-    ["", 6], ["total", 12], ["used", 12], ["free", 12], ["buff/cache", 12], ["available", 12],
-  ];
-  const renderRow = (label: string, values: number[]) =>
-    columns.map(([, width], i) => padStart(i === 0 ? label : String(values[i - 1]), width)).join("");
   const lines: string[] = [];
   lines.push("$ free -m");
+  lines.push(freeColumns.map(([label, width]) => padStart(label, width)).join(""));
+  lines.push(freeRow("Mem:", [total, used, free, buffCache, available]));
+  if (m.swapTotalBytes !== undefined || m.swapUsedBytes !== undefined) {
+    const swapTotal = mib(m.swapTotalBytes);
+    const swapUsed = mib(m.swapUsedBytes);
+    const swapFree = m.swapFreeBytes !== undefined ? mib(m.swapFreeBytes) : Math.max(0, swapTotal - swapUsed);
+    lines.push(freeRow("Swap:", [swapTotal, swapUsed, swapFree, 0, 0]));
+  }
+  lines.push("");
+  lines.push("$ grep -E 'MemTotal|MemAvailable|Buffers|^Cached:' /proc/meminfo");
+  lines.push(`MemTotal:      ${padStart(String(kib(m.totalBytes)), 10)} kB`);
+  lines.push(`MemAvailable:  ${padStart(String(kib(m.availableBytes)), 10)} kB`);
+  lines.push(`Buffers:       ${padStart(String(kib(m.buffersBytes)), 10)} kB`);
+  lines.push(`Cached:        ${padStart(String(kib(m.cachedBytes)), 10)} kB`);
+  lines.push("");
+  lines.push(`available     ${bar(total > 0 ? available / total : 0)} ${total > 0 ? Math.round((available / total) * 100) : 0}%`);
+  lines.push(`utilization   ${bar(m.utilization)} ${pctText(m.utilization)}%   (1 - available/total)`);
+  lines.push(`cache+buffers ${padStart(String(buffCache), 6)} MiB   reclaimable context`);
+  return lines.join("\n");
+};
+
+const formatMemoryRss = (telemetry: TelemetrySnapshot): string => {
+  const rows = telemetry.memory.topRss ?? [];
+  const columns: [string, number][] = [["PID", 8], ["RSS KiB", 12], ["COMMAND", 48]];
+  const lines: string[] = [];
+  lines.push("$ ps -eo pid,rss,comm --sort=-rss | head");
   lines.push(columns.map(([label, width]) => padStart(label, width)).join(""));
-  lines.push(renderRow("Mem:", [total, used, free, buffCache, available]));
-  lines.push(`Swap used: ${mib(m.swapUsedBytes)} MB`);
+  if (rows.length === 0) {
+    lines.push(padStart("-", 8) + padStart("0", 12) + padStart("no process RSS sample", 48));
+  } else {
+    rows.forEach(({ pid, rssBytes, command }) => {
+      const cells = [
+        String(pid),
+        String(kib(rssBytes)),
+        command.length > 47 ? `${command.slice(0, 44)}...` : command,
+      ];
+      lines.push(columns.map(([, width], i) => padStart(cells[i], width)).join(""));
+    });
+  }
   lines.push("");
-  lines.push("$ grep -E 'pswp|oom_kill' /proc/vmstat   (per second)");
-  lines.push(`  pages swapped in    ${Math.round(rate(m.swapInPagesPerSecond))} /s`);
-  lines.push(`  pages swapped out   ${Math.round(rate(m.swapOutPagesPerSecond))} /s`);
-  lines.push(`  oom kills           ${rate(m.oomKillsPerSecond).toFixed(2)} /s`);
+  lines.push("RSS is resident RAM. Shared pages can be counted in more than one process.");
+  lines.push("For proportional memory, use smem or /proc/<pid>/smaps_rollup.");
+  return lines.join("\n");
+};
+
+const formatMemorySwap = (telemetry: TelemetrySnapshot): string => {
+  const m = telemetry.memory;
+  const columns: [string, number][] = [
+    ["swpd", 8], ["free", 8], ["buff", 8], ["cache", 8], ["si", 6], ["so", 6],
+  ];
+  const cells = [
+    String(mib(m.swapUsedBytes)),
+    String(mib(m.freeBytes ?? m.availableBytes)),
+    String(mib(m.buffersBytes)),
+    String(mib(m.cachedBytes)),
+    String(Math.round(rate(m.swapInPagesPerSecond))),
+    String(Math.round(rate(m.swapOutPagesPerSecond))),
+  ];
+  const lines: string[] = [];
+  lines.push("$ vmstat 1 2     # memory + swap columns");
+  lines.push(columns.map(([label, width]) => padStart(label, width)).join(""));
+  lines.push(columns.map(([, width], i) => padStart(cells[i], width)).join(""));
   lines.push("");
-  lines.push(`utilization  ${bar(m.utilization)} ${pctText(m.utilization)}%   (1 - available/total)`);
-  lines.push(`saturation   ${bar(m.saturation)} ${pctText(m.saturation)}%   (swap churn / near-full)`);
-  lines.push(`oom errors   ${bar(m.errors)} ${pctText(m.errors)}%`);
+  lines.push("$ sar -W 1 2      # equivalent swap-page rates");
+  lines.push(padStart("pswpin/s", 12) + padStart("pswpout/s", 12));
+  lines.push(padStart(rate(m.swapInPagesPerSecond).toFixed(2), 12) + padStart(rate(m.swapOutPagesPerSecond).toFixed(2), 12));
+  lines.push("");
+  lines.push(`swap churn    ${bar(clamp(rate(m.swapPagesPerSecond) / 2500))} ${Math.round(rate(m.swapPagesPerSecond))} pages/s`);
+  lines.push(`saturation    ${bar(m.saturation)} ${pctText(m.saturation)}%`);
+  return lines.join("\n");
+};
+
+const formatMemoryPressure = (telemetry: TelemetrySnapshot): string => {
+  const m = telemetry.memory;
+  const some = rate(m.pressureSomeAvg10);
+  const full = rate(m.pressureFullAvg10);
+  const pressureLine = (
+    label: string,
+    avg10?: number,
+    avg60?: number,
+    avg300?: number,
+    total?: number
+  ) =>
+    `${label} avg10=${rate(avg10).toFixed(2)} avg60=${rate(avg60).toFixed(2)} avg300=${rate(avg300).toFixed(2)} total=${Math.round(rate(total))}`;
+  const lines: string[] = [];
+  lines.push("$ cat /proc/pressure/memory");
+  lines.push(pressureLine("some", m.pressureSomeAvg10, m.pressureSomeAvg60, m.pressureSomeAvg300, m.pressureSomeTotal));
+  lines.push(pressureLine("full", m.pressureFullAvg10, m.pressureFullAvg60, m.pressureFullAvg300, m.pressureFullTotal));
+  lines.push("");
+  lines.push(`some stalls   ${bar(clamp(some / 20))} ${some.toFixed(2)}% of last 10s`);
+  lines.push(`full stalls   ${bar(clamp(full / 5))} ${full.toFixed(2)}% of last 10s`);
+  lines.push("");
+  lines.push("some > 10% is sustained memory saturation; full > 0 is severe.");
+  return lines.join("\n");
+};
+
+const formatMemoryOom = (telemetry: TelemetrySnapshot): string => {
+  const m = telemetry.memory;
+  const lines: string[] = [];
+  lines.push("$ grep oom_kill /proc/vmstat");
+  lines.push(`oom_kill ${Math.round(rate(m.oomKills))}`);
+  lines.push("");
+  lines.push("$ dmesg -T | grep -iE 'killed process|out of memory|oom-killer' | tail");
+  if (rate(m.oomKillsPerSecond) > 0) {
+    lines.push(`[now] oom_kill counter increasing at ${rate(m.oomKillsPerSecond).toFixed(2)} /s`);
+  } else {
+    lines.push("no live OOM-kill rate detected from /proc/vmstat");
+  }
+  lines.push("");
+  lines.push(`errors        ${bar(m.errors)} ${pctText(m.errors)}%`);
+  lines.push("Kernel log lines identify the victim PID, RSS, and cgroup when available.");
   return lines.join("\n");
 };
 
@@ -254,7 +355,11 @@ const terminals: Record<TerminalSign, { title: string; render: (telemetry: Telem
   cores: { title: "CPU CORES — per-core utilization", render: formatCores },
   runqueue: { title: "RUN QUEUE — scheduler saturation", render: formatRunQueue },
   load: { title: "LOAD AVERAGE — 1m / 5m / 15m", render: formatUptime },
-  memory: { title: "MEMORY — free / swap / OOM", render: formatMemory },
+  memory: { title: "MEMORY — utilization baseline", render: formatMemory },
+  "memory-rss": { title: "MEMORY — top resident sets", render: formatMemoryRss },
+  "memory-swap": { title: "MEMORY — swap churn", render: formatMemorySwap },
+  "memory-pressure": { title: "MEMORY — PSI reclaim stalls", render: formatMemoryPressure },
+  "memory-oom": { title: "MEMORY — OOM errors", render: formatMemoryOom },
   storage: { title: "STORAGE — iostat service & queue", render: formatStorage },
   network: { title: "NETWORK — interface throughput & drops", render: formatNetwork },
 };

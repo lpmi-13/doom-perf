@@ -36,6 +36,72 @@ export const mapManifest = {
           "by": 1676
         }
       ]
+    },
+    {
+      "sign": "memory",
+      "segments": [
+        {
+          "ax": 1520,
+          "ay": 128,
+          "bx": 1520,
+          "by": -128
+        }
+      ]
+    },
+    {
+      "sign": "memory-rss",
+      "segments": [
+        {
+          "ax": 1088,
+          "ay": 768,
+          "bx": 1216,
+          "by": 768
+        }
+      ]
+    },
+    {
+      "sign": "memory-pressure",
+      "segments": [
+        {
+          "ax": 1408,
+          "ay": 448,
+          "bx": 1408,
+          "by": 256
+        }
+      ]
+    },
+    {
+      "sign": "memory-swap",
+      "segments": [
+        {
+          "ax": 1408,
+          "ay": -256,
+          "bx": 1408,
+          "by": -448
+        }
+      ]
+    },
+    {
+      "sign": "memory-oom",
+      "segments": [
+        {
+          "ax": 1152,
+          "ay": -672,
+          "bx": 1248,
+          "by": -672
+        }
+      ]
+    },
+    {
+      "sign": "storage",
+      "segments": [
+        {
+          "ax": 128,
+          "ay": -1776,
+          "bx": -128,
+          "by": -1776
+        }
+      ]
     }
   ],
   "doors": [

@@ -59,16 +59,41 @@ type cpuCoreTelemetry struct {
 
 type memoryTelemetry struct {
 	resourceUSE
-	TotalBytes            uint64  `json:"totalBytes"`
-	AvailableBytes        uint64  `json:"availableBytes"`
-	FreeBytes             uint64  `json:"freeBytes"`
-	BuffersBytes          uint64  `json:"buffersBytes"`
-	CachedBytes           uint64  `json:"cachedBytes"`
-	SwapUsedBytes         uint64  `json:"swapUsedBytes"`
-	SwapPagesPerSecond    float64 `json:"swapPagesPerSecond"`
-	SwapInPagesPerSecond  float64 `json:"swapInPagesPerSecond"`
-	SwapOutPagesPerSecond float64 `json:"swapOutPagesPerSecond"`
-	OOMKillsPerSecond     float64 `json:"oomKillsPerSecond"`
+	TotalBytes            uint64                `json:"totalBytes"`
+	AvailableBytes        uint64                `json:"availableBytes"`
+	FreeBytes             uint64                `json:"freeBytes"`
+	BuffersBytes          uint64                `json:"buffersBytes"`
+	CachedBytes           uint64                `json:"cachedBytes"`
+	SwapTotalBytes        uint64                `json:"swapTotalBytes"`
+	SwapFreeBytes         uint64                `json:"swapFreeBytes"`
+	SwapUsedBytes         uint64                `json:"swapUsedBytes"`
+	SwapPagesPerSecond    float64               `json:"swapPagesPerSecond"`
+	SwapInPagesPerSecond  float64               `json:"swapInPagesPerSecond"`
+	SwapOutPagesPerSecond float64               `json:"swapOutPagesPerSecond"`
+	PressureSomeAvg10     float64               `json:"pressureSomeAvg10"`
+	PressureSomeAvg60     float64               `json:"pressureSomeAvg60"`
+	PressureSomeAvg300    float64               `json:"pressureSomeAvg300"`
+	PressureSomeTotal     uint64                `json:"pressureSomeTotal"`
+	PressureFullAvg10     float64               `json:"pressureFullAvg10"`
+	PressureFullAvg60     float64               `json:"pressureFullAvg60"`
+	PressureFullAvg300    float64               `json:"pressureFullAvg300"`
+	PressureFullTotal     uint64                `json:"pressureFullTotal"`
+	OOMKills              uint64                `json:"oomKills"`
+	OOMKillsPerSecond     float64               `json:"oomKillsPerSecond"`
+	TopRSS                []rssProcessTelemetry `json:"topRss,omitempty"`
+}
+
+type rssProcessTelemetry struct {
+	PID      int    `json:"pid"`
+	RSSBytes uint64 `json:"rssBytes"`
+	Command  string `json:"command"`
+}
+
+type pressureLineTelemetry struct {
+	Avg10  float64
+	Avg60  float64
+	Avg300 float64
+	Total  uint64
 }
 
 type storageTelemetry struct {
@@ -408,7 +433,9 @@ func (s *sampler) sample(now time.Time) (telemetry, error) {
 	swapInRate := counterRate(swapInPages, s.swapIn, elapsed)
 	swapOutRate := counterRate(swapOutPages, s.swapOut, elapsed)
 	oomRate := counterRate(oomKills, s.oomKills, elapsed)
-	memSaturation := clamp(maxFloat(swapRate/2500, maxFloat(memUtil-0.90, 0)*5))
+	psiSome, psiFull := readPressure("/proc/pressure/memory")
+	topRSS := readTopRSSProcesses(5)
+	memSaturation := clamp(maxFloat(swapRate/2500, maxFloat(psiSome.Avg10/100, maxFloat(psiFull.Avg10/20, maxFloat(memUtil-0.90, 0)*5))))
 	memErrors := clamp(oomRate)
 
 	storage, disks, err := sampleStorage(s.disk, elapsed)
@@ -470,15 +497,152 @@ func (s *sampler) sample(now time.Time) (telemetry, error) {
 			FreeBytes:             memFree,
 			BuffersBytes:          memBuffers,
 			CachedBytes:           memCached,
+			SwapTotalBytes:        swapTotal,
+			SwapFreeBytes:         swapFree,
 			SwapUsedBytes:         swapUsed,
 			SwapPagesPerSecond:    swapRate,
 			SwapInPagesPerSecond:  swapInRate,
 			SwapOutPagesPerSecond: swapOutRate,
+			PressureSomeAvg10:     psiSome.Avg10,
+			PressureSomeAvg60:     psiSome.Avg60,
+			PressureSomeAvg300:    psiSome.Avg300,
+			PressureSomeTotal:     psiSome.Total,
+			PressureFullAvg10:     psiFull.Avg10,
+			PressureFullAvg60:     psiFull.Avg60,
+			PressureFullAvg300:    psiFull.Avg300,
+			PressureFullTotal:     psiFull.Total,
+			OOMKills:              oomKills,
 			OOMKillsPerSecond:     oomRate,
+			TopRSS:                topRSS,
 		},
 		Storage: storage,
 		Network: network,
 	}, nil
+}
+
+func readPressure(path string) (some, full pressureLineTelemetry) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return some, full
+	}
+	for _, line := range strings.Split(string(content), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		var pressure pressureLineTelemetry
+		for _, field := range fields[1:] {
+			if value, ok := strings.CutPrefix(field, "avg10="); ok {
+				pressure.Avg10, _ = strconv.ParseFloat(value, 64)
+				continue
+			}
+			if value, ok := strings.CutPrefix(field, "avg60="); ok {
+				pressure.Avg60, _ = strconv.ParseFloat(value, 64)
+				continue
+			}
+			if value, ok := strings.CutPrefix(field, "avg300="); ok {
+				pressure.Avg300, _ = strconv.ParseFloat(value, 64)
+				continue
+			}
+			if value, ok := strings.CutPrefix(field, "total="); ok {
+				pressure.Total, _ = strconv.ParseUint(value, 10, 64)
+			}
+		}
+		switch fields[0] {
+		case "some":
+			some = pressure
+		case "full":
+			full = pressure
+		}
+	}
+	return some, full
+}
+
+func readTopRSSProcesses(limit int) []rssProcessTelemetry {
+	if limit <= 0 {
+		return nil
+	}
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return nil
+	}
+
+	var processes []rssProcessTelemetry
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		pid, err := strconv.Atoi(entry.Name())
+		if err != nil || pid <= 0 {
+			continue
+		}
+		rssKB, name := readProcStatus(pid)
+		if rssKB == 0 {
+			continue
+		}
+		command := readProcCommand(pid)
+		if command == "" {
+			command = name
+		}
+		processes = append(processes, rssProcessTelemetry{
+			PID:      pid,
+			RSSBytes: rssKB * 1024,
+			Command:  command,
+		})
+	}
+
+	for i := 1; i < len(processes); i++ {
+		current := processes[i]
+		j := i - 1
+		for j >= 0 && processes[j].RSSBytes < current.RSSBytes {
+			processes[j+1] = processes[j]
+			j--
+		}
+		processes[j+1] = current
+	}
+	if len(processes) > limit {
+		processes = processes[:limit]
+	}
+	return processes
+}
+
+func readProcStatus(pid int) (rssKB uint64, name string) {
+	content, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", pid))
+	if err != nil {
+		return 0, ""
+	}
+	for _, line := range strings.Split(string(content), "\n") {
+		if value, ok := strings.CutPrefix(line, "Name:"); ok {
+			name = strings.TrimSpace(value)
+			continue
+		}
+		if value, ok := strings.CutPrefix(line, "VmRSS:"); ok {
+			fields := strings.Fields(value)
+			if len(fields) > 0 {
+				rssKB, _ = strconv.ParseUint(fields[0], 10, 64)
+			}
+		}
+	}
+	return rssKB, name
+}
+
+func readProcCommand(pid int) string {
+	content, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+	if err != nil {
+		return ""
+	}
+	parts := strings.Split(strings.TrimRight(string(content), "\x00"), "\x00")
+	var fields []string
+	for _, part := range parts {
+		if part != "" {
+			fields = append(fields, part)
+		}
+	}
+	command := strings.Join(fields, " ")
+	if len(command) > 80 {
+		return command[:77] + "..."
+	}
+	return command
 }
 
 func readCPUCounters() (cpuCounter, []cpuCoreCounter, error) {

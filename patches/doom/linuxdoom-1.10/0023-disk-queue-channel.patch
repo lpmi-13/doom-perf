@@ -1,0 +1,107 @@
+diff --git a/r_draw.c b/r_draw.c
+index 17dab45..56ce5d3 100644
+--- a/r_draw.c
++++ b/r_draw.c
+@@ -104,6 +104,7 @@ int			doomperf_cpu_column_texture_x = 0;
+ static byte R_DoomPerfCpuStreakPixel (int ty);
+ static byte R_DoomPerfCpuGaugePixel (int gauge, int ty);
+ static byte R_DoomPerfDiskGaugePixel (int gauge, int ty);
++static byte R_DoomPerfDiskQueuePixel (fixed_t xfrac, fixed_t yfrac, byte background);
+ 
+ //
+ // A column is a vertical slice/span from a wall texture that,
+@@ -873,6 +874,63 @@ R_DoomPerfCpuRunQueuePixel
+     return background;
+ }
+ 
++// Effective disk queue depth (iostat aqu-sz) in permille of a 24-request full
++// channel. Live mode uses the browser-pushed value; the disk sims synthesize it
++// (mode 3 a shallow queue, mode 4 a deep one that overflows rated capacity). The
++// CPU sims leave it on the live value.
++static int R_DoomPerfDiskQueuePermille (void)
++{
++    switch (doomperf_sim_mode)
++    {
++      case 3:
++	return 40 + (leveltime % 30);
++      case 4:
++	return 560 + ((leveltime * 2) % 240);
++      default:
++	return doomperf_storage_queue;
++    }
++}
++
++// Floor display for the media-pit QUEUE channel (storage wing): request blocks
++// queued along the trough, scrolling toward dispatch. The fill length tracks
++// queue depth; blocks within rated capacity are gold, the excess past the
++// capacity line is red. Bounds-checked to the channel's world box, so the shared
++// light sentinel can never paint another sector's floor.
++static byte R_DoomPerfDiskQueuePixel
++( fixed_t		xfrac,
++  fixed_t		yfrac,
++  byte			background )
++{
++    int		worldx;
++    int		worldy;
++    int		localx;
++    int		queue;
++    int		fill;
++    int		warn;
++
++    worldx = R_DoomPerfCpuWorldX(xfrac);
++    worldy = R_DoomPerfCpuWorldY(yfrac);
++    // Storage is the south wing: the builder rotates local (u,v) -> (-u,-v), so
++    // the channel's u[-256,256] v[1152,1216] maps to this world box.
++    if (worldx < -256 || worldx > 256 || worldy < -1216 || worldy > -1152)
++	return background;
++
++    localx = worldx + 256;		// 0 (arrival) .. 512 (dispatch) along the queue
++    queue = R_DoomPerfDiskQueuePermille();
++    if (queue > 1000)
++	queue = 1000;
++    fill = (queue * 512) / 1000;
++    warn = (333 * 512) / 1000;		// rated-capacity line (~8 of 24 requests)
++
++    if (localx >= fill)
++	return DOOMPERF_DISK_EMPTY;	// past the queue tail: dark trough
++    if (((localx - leveltime * 2) & 15) < 3)
++	return DOOMPERF_DISK_FRAME;	// block separators, scrolling toward dispatch
++    if (localx >= warn)
++	return DOOMPERF_DISK_RED;	// excess queue beyond rated capacity
++    return DOOMPERF_DISK_GOLD;
++}
++
+ static byte
+ R_DoomPerfCpuFloorPixel
+ ( fixed_t		xfrac,
+@@ -883,6 +941,8 @@ R_DoomPerfCpuFloorPixel
+ 	return R_DoomPerfCpuCorePixel(xfrac, yfrac, background);
+     if (doomperf_cpu_floor_display == 2)
+ 	return R_DoomPerfCpuRunQueuePixel(xfrac, yfrac, background);
++    if (doomperf_cpu_floor_display == 3)
++	return R_DoomPerfDiskQueuePixel(xfrac, yfrac, background);
+     return background;
+ }
+ 
+diff --git a/r_plane.c b/r_plane.c
+index 0423686..2bcc9c8 100644
+--- a/r_plane.c
++++ b/r_plane.c
+@@ -48,6 +48,8 @@ planefunction_t		ceilingfunc;
+ // instrument floors in the CPU room.
+ #define DOOMPERF_CPU_CORE_DISPLAY_LIGHT		160
+ #define DOOMPERF_CPU_RUN_QUEUE_DISPLAY_LIGHT	144
++// Storage (disk) wing: the media-pit queue channel's floor (reserved sentinel).
++#define DOOMPERF_DISK_QUEUE_DISPLAY_LIGHT	134
+ extern int doomperf_cpu_floor_display;
+ 
+ //
+@@ -432,6 +434,8 @@ void R_DrawPlanes (void)
+ 		doomperf_cpu_floor_display = 1;
+ 	    else if (pl->lightlevel == DOOMPERF_CPU_RUN_QUEUE_DISPLAY_LIGHT)
+ 		doomperf_cpu_floor_display = 2;
++	    else if (pl->lightlevel == DOOMPERF_DISK_QUEUE_DISPLAY_LIGHT)
++		doomperf_cpu_floor_display = 3;
+ 	    else
+ 		doomperf_cpu_floor_display = 0;
+ 	}

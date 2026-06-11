@@ -1,10 +1,5 @@
 - we need to reimagine the way that the uptime load room is visualizing things.
 - have the music be different in each room.
-- update the spawning runnable threads to be randomly spawned, not in the same sequence along the width of the trench.
 - check if the load visualization is working...I want it to be a more obvious horizontal gauge, and I don't think it's working correctly. Also to be determined, is it ever possible have have a higher load average than number of logical cores? If not, this has implications for how we visualize it. If it is possible, then we want a "this is okay line", with everything under it in gree, and everything over it in red. If it's not, then we want it to be a gradient from pure green at the bottom, to pure red at the top.
-- build out the other 3 rooms (make sure to prompt with the following: 
-
-Building blocks that are cheap in this engine                                                                                         
-Sector floor/ceiling height by count (pillars/gates already do this), sector light changes, animated liquid flats (freedoom has NUKAGE/LAVA/FWATER that vanilla auto-animates), procedural floor-pixel displays keyed by light sentinels (the CPU-core floor + load gauges use these), and custom sprite art via PWAD replacement. What we can't do cheaply: scale an individual sprite per-instance at runtime (vanilla has no per-mobj scale), or recolor a sprite per-pixel live.
-
 - after music is set up for each room, see about getting distinct soundscapes per issues (U/S/E)...maybe skip errors, not sure how to reliably trigger.
+- see if we can get something more interesting for each of the doors in the main atrium

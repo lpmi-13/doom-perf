@@ -42,11 +42,29 @@ export interface MemoryTelemetry extends ResourceTelemetry {
   freeBytes?: number;
   buffersBytes?: number;
   cachedBytes?: number;
+  swapTotalBytes?: number;
+  swapFreeBytes?: number;
   swapUsedBytes?: number;
   swapInPagesPerSecond?: number;
   swapOutPagesPerSecond?: number;
   swapPagesPerSecond?: number;
+  pressureSomeAvg10?: number;
+  pressureSomeAvg60?: number;
+  pressureSomeAvg300?: number;
+  pressureSomeTotal?: number;
+  pressureFullAvg10?: number;
+  pressureFullAvg60?: number;
+  pressureFullAvg300?: number;
+  pressureFullTotal?: number;
+  oomKills?: number;
   oomKillsPerSecond?: number;
+  topRss?: MemoryProcessTelemetry[];
+}
+
+export interface MemoryProcessTelemetry {
+  pid: number;
+  rssBytes: number;
+  command: string;
 }
 
 export interface StorageTelemetry extends ResourceTelemetry {
@@ -91,5 +109,9 @@ export type TerminalSign =
   | "runqueue"
   | "load"
   | "memory"
+  | "memory-rss"
+  | "memory-swap"
+  | "memory-pressure"
+  | "memory-oom"
   | "storage"
   | "network";

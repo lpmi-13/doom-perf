@@ -30,9 +30,24 @@ int DoomPerf_GetEffectiveCpuLoadPressure(void);
 // telemetry stream and read by the LOAD room gauge renderer.
 extern int doomperf_load[3];
 
+// Disk service time (iostat await) as permille of a 250ms full scale, set from
+// the browser telemetry stream and read by the media-pit latency gauges in the
+// storage (disk) wing.
+extern int doomperf_storage_await;
+
+// Disk busy fraction (iostat %util) in permille, set from the browser telemetry
+// stream and read by the media-pit platter's pulsing rings.
+extern int doomperf_storage_util;
+
+// Disk request-queue depth (iostat aqu-sz) as permille of a 24-request full
+// channel, set from the browser telemetry stream and read by the media-pit
+// queue channel's flowing request blocks.
+extern int doomperf_storage_queue;
+
 // Doom Perf data-source mode, chosen on the level-select menu:
-//   0 = live browser telemetry, 1 = simulated high utilization,
-//   2 = simulated high saturation. Read by the CPU room renderer.
+//   0 = live browser telemetry; 1/2 = simulated high CPU utilization/saturation
+//   (CPU room renderer); 3/4 = simulated high disk utilization/saturation
+//   (iostat terminal + media-pit latency gauges).
 extern int doomperf_sim_mode;
 
 #endif

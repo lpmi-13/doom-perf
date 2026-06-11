@@ -1,0 +1,74 @@
+diff --git a/p_tick.c b/p_tick.c
+index adf9ff0..984fc51 100644
+--- a/p_tick.c
++++ b/p_tick.c
+@@ -73,6 +73,61 @@ void DoomPerf_UpdatePillars (void)
+     }
+ }
+ 
++// Doom Perf: the media-pit PLATTER (storage wing). Its three concentric rings
++// carry sector tags 620 (centre spindle), 621, 622. Each tic we set the rings'
++// light as an outward-rippling pulse whose brightness and speed scale with disk
++// %util, so an idle disk barely glimmers while a busy one strobes -- the
++// utilization counterpart to the media-pit latency gauges. The light stays in
++// [169,241], clear of the floor-display sentinels 144/160, so it never trips the
++// CPU floor renderer.
++#define DOOMPERF_PLATTER_TAG_BASE	620
++#define DOOMPERF_PLATTER_RINGS		3
++
++void DoomPerf_UpdatePlatter (void)
++{
++    int		util;
++    int		base;
++    int		amp;
++    int		speed;
++    int		i;
++    int		ring;
++    int		phase;
++    int		tri;
++    int		light;
++
++    // Sim-aware utilization: both disk sims pin the platter busy (mode 4 a touch
++    // harder); the CPU sims and live mode use the browser-pushed value.
++    if (doomperf_sim_mode == 3)
++	util = 910 + (leveltime % 50);
++    else if (doomperf_sim_mode == 4)
++	util = 975 + (leveltime % 20);
++    else
++	util = doomperf_storage_util;
++    if (util < 0)
++	util = 0;
++    if (util > 1000)
++	util = 1000;
++
++    base = 175 + (util * 40) / 1000;	// 175 (idle) .. 215 (busy)
++    amp = 6 + (util * 20) / 1000;	// 6 .. 26: a stronger pulse when busy
++    speed = 2 + (util * 8) / 1000;	// phase units/tic: ~3.7s .. ~0.7s period
++
++    for (i = 0; i < numsectors; i++)
++    {
++	ring = sectors[i].tag - DOOMPERF_PLATTER_TAG_BASE;
++	if (ring < 0 || ring >= DOOMPERF_PLATTER_RINGS)
++	    continue;
++	// Outward ripple: each ring out from the spindle lags a third of a cycle.
++	phase = leveltime * speed - ring * 85;
++	tri = (phase & 255) - 128;	// sawtooth -128..127
++	if (tri < 0)
++	    tri = -tri;
++	tri -= 64;			// triangle -64..63, period 256
++	light = base + (tri * amp) / 64;
++	sectors[i].lightlevel = (short)light;
++    }
++}
++
+ // Doom Perf: RUN QUEUE "subway". CPU task-orbs (MT_DP_CPUTASK) are runnable
+ // threads. They appear under the QUEUE sign (the player's left / south end of the
+ // trench) and glide NORTH up the lanes toward the constriction gates (sector tags
+@@ -561,6 +616,7 @@ void P_Ticker (void)
+ 
+ 
+     DoomPerf_UpdatePillars ();
++    DoomPerf_UpdatePlatter ();
+     DoomPerf_UpdateRunQueueParticles ();
+ 
+     for (i=0 ; i<MAXPLAYERS ; i++)
