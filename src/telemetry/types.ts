@@ -45,11 +45,22 @@ export interface MemoryTelemetry extends ResourceTelemetry {
   swapUsedBytes?: number;
   swapInPagesPerSecond?: number;
   swapOutPagesPerSecond?: number;
+  swapPagesPerSecond?: number;
+  oomKillsPerSecond?: number;
 }
 
 export interface StorageTelemetry extends ResourceTelemetry {
+  queueDepth?: number;
+  awaitMillis?: number;
   readBytesPerSecond?: number;
   writeBytesPerSecond?: number;
+}
+
+export interface NetworkTelemetry extends ResourceTelemetry {
+  rxBytesPerSecond?: number;
+  txBytesPerSecond?: number;
+  dropsPerSecond?: number;
+  errorsPerSecond?: number;
 }
 
 export interface TelemetrySnapshot {
@@ -62,12 +73,23 @@ export interface TelemetrySnapshot {
   cpu: CpuTelemetry;
   memory: MemoryTelemetry;
   storage: StorageTelemetry;
-  network: ResourceTelemetry;
+  network: NetworkTelemetry;
 }
 
 export interface TelemetryClient {
   close: () => void;
 }
 
-// Which instrument terminal a sign opens (see src/ui/terminalOverlay.ts).
-export type TerminalSign = "cores" | "runqueue" | "load";
+// Which instrument terminal a sign opens (see src/ui/terminalOverlay.ts). The
+// CPU wing's three sub-area screens (cores/runqueue/load) plus one primary screen
+// reserved per resource wing. A wing turns its sign on by emitting a matching
+// manifest terminal entry from its builder (scripts/lib/wings/<wing>-wing.mjs);
+// the overlay already renders each one. Add a sign here + a registry entry in
+// terminalOverlay.ts when a wing grows another readable panel.
+export type TerminalSign =
+  | "cores"
+  | "runqueue"
+  | "load"
+  | "memory"
+  | "storage"
+  | "network";

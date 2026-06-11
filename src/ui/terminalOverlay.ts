@@ -158,17 +158,109 @@ const formatUptime = (telemetry: TelemetrySnapshot): string => {
   return lines.join("\n");
 };
 
-const terminalTitle: Record<TerminalSign, string> = {
-  cores: "CPU CORES — per-core utilization",
-  runqueue: "RUN QUEUE — scheduler saturation",
-  load: "LOAD AVERAGE — 1m / 5m / 15m",
+const mib = (bytes?: number) => Math.round(Math.max(0, bytes ?? 0) / (1024 * 1024));
+const kib = (bytes?: number) => Math.round(Math.max(0, bytes ?? 0) / 1024);
+const rate = (value?: number) => Math.max(0, value ?? 0);
+
+// MEMORY wing — `free -m` table plus the reclaim/OOM rates that drive the wing's
+// saturation/error instruments.
+const formatMemory = (telemetry: TelemetrySnapshot): string => {
+  const m = telemetry.memory;
+  const total = mib(m.totalBytes);
+  const free = mib(m.freeBytes);
+  const buffCache = mib(m.buffersBytes) + mib(m.cachedBytes);
+  const available = mib(m.availableBytes);
+  const used = Math.max(0, total - free - buffCache); // free(1): total - free - buff/cache
+  const columns: [string, number][] = [
+    ["", 6], ["total", 12], ["used", 12], ["free", 12], ["buff/cache", 12], ["available", 12],
+  ];
+  const renderRow = (label: string, values: number[]) =>
+    columns.map(([, width], i) => padStart(i === 0 ? label : String(values[i - 1]), width)).join("");
+  const lines: string[] = [];
+  lines.push("$ free -m");
+  lines.push(columns.map(([label, width]) => padStart(label, width)).join(""));
+  lines.push(renderRow("Mem:", [total, used, free, buffCache, available]));
+  lines.push(`Swap used: ${mib(m.swapUsedBytes)} MB`);
+  lines.push("");
+  lines.push("$ grep -E 'pswp|oom_kill' /proc/vmstat   (per second)");
+  lines.push(`  pages swapped in    ${Math.round(rate(m.swapInPagesPerSecond))} /s`);
+  lines.push(`  pages swapped out   ${Math.round(rate(m.swapOutPagesPerSecond))} /s`);
+  lines.push(`  oom kills           ${rate(m.oomKillsPerSecond).toFixed(2)} /s`);
+  lines.push("");
+  lines.push(`utilization  ${bar(m.utilization)} ${pctText(m.utilization)}%   (1 - available/total)`);
+  lines.push(`saturation   ${bar(m.saturation)} ${pctText(m.saturation)}%   (swap churn / near-full)`);
+  lines.push(`oom errors   ${bar(m.errors)} ${pctText(m.errors)}%`);
+  return lines.join("\n");
 };
 
-const renderTerminal = (sign: TerminalSign, telemetry: TelemetrySnapshot): string => {
-  if (sign === "cores") return formatCores(telemetry);
-  if (sign === "runqueue") return formatRunQueue(telemetry);
-  return formatUptime(telemetry);
+// STORAGE wing — `iostat -x` aggregate: service-time / queue-depth latency plus
+// throughput, the inputs to the wing's latency and queue instruments.
+const formatStorage = (telemetry: TelemetrySnapshot): string => {
+  const s = telemetry.storage;
+  const columns: [string, number][] = [
+    ["Device", 10], ["rkB/s", 10], ["wkB/s", 10], ["await", 9], ["aqu-sz", 9], ["%util", 8],
+  ];
+  const cells = [
+    "aggregate",
+    String(kib(s.readBytesPerSecond)),
+    String(kib(s.writeBytesPerSecond)),
+    rate(s.awaitMillis).toFixed(2),
+    rate(s.queueDepth).toFixed(2),
+    (clamp(s.utilization) * 100).toFixed(1),
+  ];
+  const lines: string[] = [];
+  lines.push("$ iostat -x 1 2");
+  lines.push(columns.map(([label, width]) => padStart(label, width)).join(""));
+  lines.push(columns.map(([, width], i) => padStart(cells[i], width)).join(""));
+  lines.push("");
+  lines.push(`queue depth  ${bar(clamp(rate(s.queueDepth) / 8))} ${rate(s.queueDepth).toFixed(2)}`);
+  lines.push(`await (ms)   ${bar(clamp(rate(s.awaitMillis) / 250))} ${rate(s.awaitMillis).toFixed(2)} ms`);
+  lines.push(`utilization  ${bar(s.utilization)} ${pctText(s.utilization)}%`);
+  lines.push(`saturation   ${bar(s.saturation)} ${pctText(s.saturation)}%   (queue + await)`);
+  return lines.join("\n");
 };
+
+// NETWORK wing — `/proc/net/dev` aggregate throughput plus drop/error rates, the
+// inputs to the wing's lane, choke and drop-basin instruments.
+const formatNetwork = (telemetry: TelemetrySnapshot): string => {
+  const n = telemetry.network;
+  const columns: [string, number][] = [
+    ["", 10], ["rx kB/s", 12], ["tx kB/s", 12], ["drops/s", 10], ["errs/s", 10],
+  ];
+  const cells = [
+    "aggregate",
+    String(kib(n.rxBytesPerSecond)),
+    String(kib(n.txBytesPerSecond)),
+    String(Math.round(rate(n.dropsPerSecond))),
+    String(Math.round(rate(n.errorsPerSecond))),
+  ];
+  const lines: string[] = [];
+  lines.push("$ cat /proc/net/dev   (aggregate, per second)");
+  lines.push(columns.map(([label, width]) => padStart(label, width)).join(""));
+  lines.push(columns.map(([, width], i) => padStart(cells[i], width)).join(""));
+  lines.push("");
+  lines.push(`utilization  ${bar(n.utilization)} ${pctText(n.utilization)}%   (throughput vs link speed)`);
+  lines.push(`saturation   ${bar(n.saturation)} ${pctText(n.saturation)}%   (drops)`);
+  lines.push(`errors       ${bar(n.errors)} ${pctText(n.errors)}%`);
+  return lines.join("\n");
+};
+
+// Sign -> instrument terminal. Each wing's screens register one entry here; the
+// CPU wing's three sub-area screens plus one primary screen per resource wing.
+// `Record<TerminalSign, ...>` keeps this exhaustive: adding a sign to the union
+// (src/telemetry/types.ts) without an entry here is a compile error, and vice
+// versa, so the manifest sign vocabulary and the renderers can't drift.
+const terminals: Record<TerminalSign, { title: string; render: (telemetry: TelemetrySnapshot) => string }> = {
+  cores: { title: "CPU CORES — per-core utilization", render: formatCores },
+  runqueue: { title: "RUN QUEUE — scheduler saturation", render: formatRunQueue },
+  load: { title: "LOAD AVERAGE — 1m / 5m / 15m", render: formatUptime },
+  memory: { title: "MEMORY — free / swap / OOM", render: formatMemory },
+  storage: { title: "STORAGE — iostat service & queue", render: formatStorage },
+  network: { title: "NETWORK — interface throughput & drops", render: formatNetwork },
+};
+
+const renderTerminal = (sign: TerminalSign, telemetry: TelemetrySnapshot): string =>
+  terminals[sign].render(telemetry);
 
 export const createTerminalOverlay = () => {
   const panel = document.createElement("aside");
@@ -249,7 +341,7 @@ export const createTerminalOverlay = () => {
     isOpen: () => current !== null,
     open(sign: TerminalSign, telemetry: TelemetrySnapshot) {
       current = sign;
-      bar.textContent = terminalTitle[sign];
+      bar.textContent = terminals[sign].title;
       body.textContent = renderTerminal(sign, telemetry);
       renderedAt = telemetry.updatedAt;
       panel.style.display = "flex";

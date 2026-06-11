@@ -4,6 +4,7 @@
 import type {
   CpuTelemetry,
   MemoryTelemetry,
+  NetworkTelemetry,
   ResourceTelemetry,
   StorageTelemetry,
   TelemetrySnapshot,
@@ -163,6 +164,8 @@ const readMemory = (payload: Record<string, unknown>): MemoryTelemetry => {
     swapUsedBytes: numberValue(source.swapUsedBytes),
     swapInPagesPerSecond: numberValue(source.swapInPagesPerSecond),
     swapOutPagesPerSecond: numberValue(source.swapOutPagesPerSecond),
+    swapPagesPerSecond: numberValue(source.swapPagesPerSecond),
+    oomKillsPerSecond: numberValue(source.oomKillsPerSecond),
   };
 };
 
@@ -174,8 +177,25 @@ const readStorage = (payload: Record<string, unknown>): StorageTelemetry => {
   }
   return {
     ...base,
+    queueDepth: numberValue(source.queueDepth),
+    awaitMillis: numberValue(source.awaitMillis),
     readBytesPerSecond: numberValue(source.readBytesPerSecond),
     writeBytesPerSecond: numberValue(source.writeBytesPerSecond),
+  };
+};
+
+const readNetwork = (payload: Record<string, unknown>): NetworkTelemetry => {
+  const base = readResource(payload, "network");
+  const source = objectValue(findResourceSource(payload, "network"));
+  if (!source) {
+    return base;
+  }
+  return {
+    ...base,
+    rxBytesPerSecond: numberValue(source.rxBytesPerSecond),
+    txBytesPerSecond: numberValue(source.txBytesPerSecond),
+    dropsPerSecond: numberValue(source.dropsPerSecond),
+    errorsPerSecond: numberValue(source.errorsPerSecond),
   };
 };
 
@@ -208,7 +228,7 @@ export const normalizeTelemetry = (
   const cpu = readCpu(obj);
   const memory = readMemory(obj);
   const storage = readStorage(obj);
-  const network = readResource(obj, "network");
+  const network = readNetwork(obj);
   const worst = Math.max(
     cpu.utilization,
     cpu.saturation,
