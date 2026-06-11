@@ -3,7 +3,7 @@
 // terminal screens, the CPU streak columns, and the terminal control panel.
 // Pure pixels -> patch bytes (buildPatch from wad-bytes). The texture dimensions
 // and the sign text colour live here too, since they define those patches.
-import { buildPatch } from "./wad-bytes.mjs";
+import { buildPatch, lump } from "./wad-bytes.mjs";
 
 export const labelTextureSize = {
   width: 256,
@@ -366,4 +366,56 @@ export const buildControlPanelPatch = () => {
   R(0, 27, W, 1, 8);
   for (let yy = 28; yy < H; yy += 2) { R(0, yy, W, 1, 0); R(0, yy + 1, W, 1, 8); }
   return buildPatch(px, W, H);
+};
+
+// ===== Floor name inscriptions (custom 64x64 flats) =====
+// A wing names a stretch of floor by inscribing text flush into it: the green
+// name on a dark high-contrast panel. The map script appends these generated
+// flats to the map's own F_START..F_END (Doom can only add floor flats by
+// re-bundling all stock flats there); this helper just produces the named flat
+// lumps. Doom samples floor flats at flat[((-worldY)&63)*64 + (worldX&63)] (note
+// the negated Y), so we map each flat pixel back to a world position and then to
+// the text image, oriented for the cardinal direction the reading player faces.
+// Cells run along the player's left->right axis (worldX for a north/south view,
+// worldY for east/west).
+export const FLAT_DIM = 64;
+const inscriptionFontScale = 2;
+const renderInscriptionText = (text, readLen) => {
+  const img = new Uint8Array(readLen * FLAT_DIM); // 0 = black background
+  const startY = Math.floor((FLAT_DIM - 7 * inscriptionFontScale) / 2);
+  drawCenteredText(img, readLen, FLAT_DIM, text, startY, inscriptionFontScale, signTextColor, 4, readLen - 4);
+  return img; // T[letterRow][readPos] = img[letterRow * readLen + readPos]
+};
+export const makeInscription = (prefix, text, facing, cells) => {
+  const readLen = cells * FLAT_DIM;
+  const T = renderInscriptionText(text, readLen);
+  const sample = (letterRow, readPos) =>
+    readPos < 0 || readPos >= readLen || letterRow < 0 || letterRow >= FLAT_DIM
+      ? 0
+      : T[letterRow * readLen + readPos];
+  const horiz = facing === "north" || facing === "south";
+  const rectW = horiz ? readLen : FLAT_DIM;
+  const rectH = horiz ? FLAT_DIM : readLen;
+  // World-local (wx,wy) -> text pixel, oriented so the name reads upright with
+  // its top away from the approaching player.
+  const at = (wx, wy) => {
+    if (facing === "north") return sample(rectH - 1 - wy, wx);
+    if (facing === "south") return sample(wy, rectW - 1 - wx);
+    if (facing === "west") return sample(wx, wy);
+    return sample(FLAT_DIM - 1 - wx, rectH - 1 - wy); // east
+  };
+  const flats = [];
+  const names = [];
+  for (let k = 0; k < cells; k += 1) {
+    const cellXoff = horiz ? k * FLAT_DIM : 0;
+    const cellYoff = horiz ? 0 : k * FLAT_DIM;
+    const flat = new Uint8Array(FLAT_DIM * FLAT_DIM);
+    for (let r = 0; r < FLAT_DIM; r += 1)
+      for (let c = 0; c < FLAT_DIM; c += 1)
+        flat[r * FLAT_DIM + c] = at(cellXoff + c, cellYoff + ((FLAT_DIM - r) % FLAT_DIM));
+    const name = `${prefix}${k}`;
+    flats.push(lump(name, Buffer.from(flat)));
+    names.push(name);
+  }
+  return { flats, names };
 };
