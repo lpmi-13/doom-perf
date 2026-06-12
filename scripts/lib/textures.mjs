@@ -74,7 +74,27 @@ const drawRect = (pixels, width, height, x1, y1, x2, y2, color) => {
 
 const textWidthFor = (text, scale) => text.length * 5 * scale + Math.max(0, text.length - 1) * scale;
 
-export const drawCenteredText = (pixels, width, height, text, y, maxScale, color, left = 0, right = width) => {
+// Per-"on"-pixel stamps for drawCenteredText. The default (stampSolid) draws a
+// drop shadow then the solid block -- the original behaviour, so every existing
+// caller stays byte-identical. The door-plate label styles below swap in their
+// own stamps (flat fill / dilated halo / offset emboss) and call drawCenteredText
+// in layered passes to build outlined, glowing, or stamped letterforms.
+const stampSolid = (pixels, width, height, x, y, scale, color) => {
+  drawRect(pixels, width, height, x + 1, y + 1, x + scale + 1, y + scale + 1, 8);
+  drawRect(pixels, width, height, x, y, x + scale, y + scale, color);
+};
+const stampFlat = (pixels, width, height, x, y, scale, color) =>
+  drawRect(pixels, width, height, x, y, x + scale, y + scale, color);
+// Dilate each pixel block by `grow` on every side -> a halo/outline ring when the
+// pass is drawn under the flat fill.
+const stampGrow = (grow) => (pixels, width, height, x, y, scale, color) =>
+  drawRect(pixels, width, height, x - grow, y - grow, x + scale + grow, y + scale + grow, color);
+// Bold block (one px wider/taller) shifted by (dx,dy) -> thick letters and offset
+// emboss shadows.
+const stampBoldOffset = (dx, dy) => (pixels, width, height, x, y, scale, color) =>
+  drawRect(pixels, width, height, x + dx, y + dy, x + scale + 1 + dx, y + scale + 1 + dy, color);
+
+export const drawCenteredText = (pixels, width, height, text, y, maxScale, color, left = 0, right = width, stamp = stampSolid) => {
   let scale = maxScale;
   while (scale > 1 && textWidthFor(text, scale) > right - left - 8) {
     scale -= 1;
@@ -90,27 +110,109 @@ export const drawCenteredText = (pixels, width, height, text, y, maxScale, color
         if (pixel === "1") {
           const x = startX + characterIndex * 6 * scale + pixelIndex * scale;
           const pixelY = y + rowIndex * scale;
-          drawRect(pixels, width, height, x + 1, pixelY + 1, x + scale + 1, pixelY + scale + 1, 8);
-          drawRect(pixels, width, height, x, pixelY, x + scale, pixelY + scale, color);
+          stamp(pixels, width, height, x, pixelY, scale, color);
         }
       });
     });
   });
 };
 
-export const buildLabelPatch = (text, color, panelWidth) => {
+// Hollow rectangular border of the given thickness, drawn inward from (x0,y0)-(x1,y1).
+const drawBorder = (pixels, width, height, x0, y0, x1, y1, thick, color) => {
+  drawRect(pixels, width, height, x0, y0, x1, y0 + thick, color);
+  drawRect(pixels, width, height, x0, y1 - thick, x1, y1, color);
+  drawRect(pixels, width, height, x0, y0, x0 + thick, y1, color);
+  drawRect(pixels, width, height, x1 - thick, y0, x1, y1, color);
+};
+
+// Per-wing door name-plate styles. Each door's hub-facing face is one of these
+// plates (the `top` texture on the hub side of the wing door), so the four read
+// as distinct fixtures from the moment you spawn in the atrium -- not just the
+// same plate recoloured. Each style owns BOTH its material (frame/panel/backing)
+// and its letterform, built by layering drawCenteredText passes with the stamps
+// above. `color` is the wing's signature colour (CPU red / MEMORY green / DISK
+// yellow / NETWORK blue); ctx carries the shared panel geometry.
+const labelStyles = {
+  // Fallback: the original plain dark-panel plate (kept for any unstyled label).
+  plain: ({ pixels, width, height, panelLeft, panelRight, text, color, scale, startY }) => {
+    pixels.fill(5);
+    drawRect(pixels, width, height, panelLeft + 4, 0, panelRight - 4, height, 0);
+    drawRect(pixels, width, height, panelLeft + 4, 0, panelLeft + 8, height, 96);
+    drawRect(pixels, width, height, panelRight - 8, 0, panelRight - 4, height, 96);
+    drawCenteredText(pixels, width, height, text, startY, scale, color);
+  },
+  // CPU -- engraved steel: a bevelled brushed-steel plate with corner rivets and
+  // hard-edged red letters cut in with a dark outline.
+  cpu: ({ pixels, width, height, panelLeft: pl, panelRight: pr, text, color, scale, startY }) => {
+    pixels.fill(5);
+    drawRect(pixels, width, height, pl + 2, 0, pr - 2, height, 96); // steel field
+    drawRect(pixels, width, height, pl + 10, 10, pr - 10, height - 10, 100); // recessed inset
+    drawBorder(pixels, width, height, pl + 2, 0, pr - 2, height, 3, 88); // bright bevel
+    drawRect(pixels, width, height, pr - 5, 0, pr - 2, height, 104); // right shadow
+    drawRect(pixels, width, height, pl + 2, height - 3, pr - 2, height, 104); // bottom shadow
+    [[pl + 12, 12], [pr - 16, 12], [pl + 12, height - 16], [pr - 16, height - 16]].forEach(([x, y]) => {
+      drawRect(pixels, width, height, x, y, x + 5, y + 5, 104);
+      drawRect(pixels, width, height, x + 1, y + 1, x + 3, y + 3, 88);
+    });
+    drawCenteredText(pixels, width, height, text, startY, scale, 8, pl, pr, stampGrow(1)); // dark cut outline
+    drawCenteredText(pixels, width, height, text, startY, scale, color, pl, pr, stampFlat); // red face
+  },
+  // MEMORY -- phosphor CRT: a black screen with scanlines, a thin green bezel and
+  // letters that bloom from a soft dim-green halo to a bright core.
+  memory: ({ pixels, width, height, panelLeft: pl, panelRight: pr, text, color, scale, startY }) => {
+    pixels.fill(5);
+    drawRect(pixels, width, height, pl + 2, 0, pr - 2, height, 127); // dark green casing
+    drawRect(pixels, width, height, pl + 6, 6, pr - 6, height - 6, 0); // black screen
+    for (let y = 8; y < height - 8; y += 4) drawRect(pixels, width, height, pl + 8, y, pr - 8, y + 1, 124); // scanlines
+    drawBorder(pixels, width, height, pl + 2, 0, pr - 2, height, 2, 116); // green bezel
+    drawCenteredText(pixels, width, height, text, startY, scale, 120, pl, pr, stampGrow(2)); // wide soft glow
+    drawCenteredText(pixels, width, height, text, startY, scale, 116, pl, pr, stampGrow(1)); // inner glow
+    drawCenteredText(pixels, width, height, text, startY, scale, color, pl, pr, stampFlat); // bright core
+  },
+  // DISK -- stamped iron: a heavy bevelled iron plate with big corner rivets and
+  // bold yellow letters punched in over a dark-amber emboss shadow.
+  storage: ({ pixels, width, height, panelLeft: pl, panelRight: pr, text, color, scale, startY }) => {
+    pixels.fill(5);
+    drawRect(pixels, width, height, pl + 2, 0, pr - 2, height, 104); // iron field
+    drawRect(pixels, width, height, pl + 12, 12, pr - 12, height - 12, 108); // dark inset
+    drawBorder(pixels, width, height, pl + 2, 0, pr - 2, height, 6, 96); // heavy frame
+    drawBorder(pixels, width, height, pl + 2, 0, pr - 2, height, 2, 88); // bright edge
+    [[pl + 14, 14], [pr - 24, 14], [pl + 14, height - 24], [pr - 24, height - 24]].forEach(([x, y]) => {
+      drawRect(pixels, width, height, x, y, x + 10, y + 10, 96);
+      drawRect(pixels, width, height, x + 2, y + 2, x + 8, y + 8, 108);
+      drawRect(pixels, width, height, x + 3, y + 3, x + 6, y + 6, 88);
+    });
+    drawCenteredText(pixels, width, height, text, startY, scale, 167, pl, pr, stampBoldOffset(2, 2)); // amber emboss
+    drawCenteredText(pixels, width, height, text, startY, scale, color, pl, pr, stampBoldOffset(0, 0)); // bold yellow
+  },
+  // NETWORK -- LED routing gear: a black panel ringed by indicator LEDs and trace
+  // lines, with thin unshadowed blue letters.
+  network: ({ pixels, width, height, panelLeft: pl, panelRight: pr, text, color, scale, startY }) => {
+    pixels.fill(5);
+    drawRect(pixels, width, height, pl + 2, 0, pr - 2, height, 0); // black panel
+    drawBorder(pixels, width, height, pl + 2, 0, pr - 2, height, 2, 200); // blue bezel
+    drawRect(pixels, width, height, pl + 6, 20, pl + 8, height - 20, 204); // left trace
+    drawRect(pixels, width, height, pr - 8, 20, pr - 6, height - 20, 204); // right trace
+    const ledRow = (y) => {
+      for (let x = pl + 14; x < pr - 14; x += 10) {
+        drawRect(pixels, width, height, x, y, x + 5, y + 3, ((x >> 3) & 1) === 0 ? 200 : 206);
+      }
+    };
+    ledRow(10);
+    ledRow(height - 13);
+    drawCenteredText(pixels, width, height, text, startY, scale, color, pl, pr, stampFlat); // thin blue letters
+  },
+};
+
+export const buildLabelPatch = (text, color, panelWidth, style = "plain") => {
   const { width, height } = labelTextureSize;
   const panelLeft = Math.floor((width - panelWidth) / 2);
   const panelRight = panelLeft + panelWidth;
   const pixels = new Uint8Array(width * height);
-  pixels.fill(5);
-  drawRect(pixels, width, height, panelLeft + 4, 0, panelRight - 4, height, 0);
-  drawRect(pixels, width, height, panelLeft + 4, 0, panelLeft + 8, height, 96);
-  drawRect(pixels, width, height, panelRight - 8, 0, panelRight - 4, height, 96);
-
   const scale = text.length > 6 ? 2 : 3;
   const startY = Math.floor((height - 7 * scale) / 2);
-  drawCenteredText(pixels, width, height, text, startY, scale, color);
+  const render = labelStyles[style] ?? labelStyles.plain;
+  render({ pixels, width, height, panelLeft, panelRight, text, color, scale, startY });
   return buildPatch(pixels, width, height);
 };
 
@@ -420,15 +522,15 @@ export const buildDiskGaugePatch = () => {
 // worldY for east/west).
 export const FLAT_DIM = 64;
 const inscriptionFontScale = 2;
-const renderInscriptionText = (text, readLen) => {
+const renderInscriptionText = (text, readLen, color = signTextColor) => {
   const img = new Uint8Array(readLen * FLAT_DIM); // 0 = black background
   const startY = Math.floor((FLAT_DIM - 7 * inscriptionFontScale) / 2);
-  drawCenteredText(img, readLen, FLAT_DIM, text, startY, inscriptionFontScale, signTextColor, 4, readLen - 4);
+  drawCenteredText(img, readLen, FLAT_DIM, text, startY, inscriptionFontScale, color, 4, readLen - 4);
   return img; // T[letterRow][readPos] = img[letterRow * readLen + readPos]
 };
-export const makeInscription = (prefix, text, facing, cells) => {
+export const makeInscription = (prefix, text, facing, cells, color = signTextColor) => {
   const readLen = cells * FLAT_DIM;
-  const T = renderInscriptionText(text, readLen);
+  const T = renderInscriptionText(text, readLen, color);
   const sample = (letterRow, readPos) =>
     readPos < 0 || readPos >= readLen || letterRow < 0 || letterRow >= FLAT_DIM
       ? 0

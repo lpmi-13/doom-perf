@@ -6,6 +6,7 @@ import {
   labelTextureSize,
   terminalTextureSize,
   buildLabelPatch,
+  makeInscription,
   FLAT_DIM,
 } from "./lib/textures.mjs";
 import { createMapBuilder } from "./lib/map-builder.mjs";
@@ -43,6 +44,7 @@ const resourceConfigs = {
     labelTexture: "DPCPU",
     labelPatch: "DPLCPU",
     labelColor: 176,
+    labelStyle: "cpu",
     wall: "COMPTILE",
     accent: "METAL1",
     floor: "FLOOR4_8",
@@ -54,6 +56,7 @@ const resourceConfigs = {
     labelTexture: "DPMEM",
     labelPatch: "DPLMEM",
     labelColor: 112,
+    labelStyle: "memory",
     wall: "TEKWALL4",
     accent: "BROWNGRN",
     floor: "FLOOR5_1",
@@ -65,6 +68,7 @@ const resourceConfigs = {
     labelTexture: "DPDISK",
     labelPatch: "DPLDSK",
     labelColor: 231,
+    labelStyle: "storage",
     wall: "STONE2",
     accent: "BROWNHUG",
     floor: "FLOOR0_3",
@@ -76,6 +80,7 @@ const resourceConfigs = {
     labelTexture: "DPNET",
     labelPatch: "DPLNET",
     labelColor: 200,
+    labelStyle: "network",
     wall: "TEKWALL1",
     accent: "COMPSPAN",
     floor: "FLOOR1_1",
@@ -96,6 +101,16 @@ const outwardSide = {
   south: "bottom",
   west: "left",
 };
+// Inverse of outwardSide: which wing each atrium perimeter wall belongs to, keyed
+// by the edge's geometric side. Lets a one-sided hub wall wear its wing's own wall
+// texture (north wall = CPU's COMPTILE, etc.) so the spawn box reads as four
+// distinct thresholds rather than a uniform STARTAN3 cube.
+const sideResource = {
+  top: "cpu",
+  right: "memory",
+  bottom: "storage",
+  left: "network",
+};
 
 // The geometry builder owns the sectors/things state and the WAD compile
 // pipeline; we destructure its construction API so the layout code below reads
@@ -103,13 +118,51 @@ const outwardSide = {
 // the end (with the map-specific texturing) to emit the binary map lumps.
 const { addThing, addRect, areaRect, addAreaThing, compile } = createMapBuilder();
 
-addRect("atrium", { x1: -hubRadius, y1: -hubRadius, x2: hubRadius, y2: hubRadius }, {
-  kind: "hub",
-  floorFlat: "FLOOR4_8",
-  ceilingFlat: "CEIL3_5",
-  wall: "STARTAN3",
-  light: 224,
+// ===== Atrium (spawn hub) =====
+// Each cardinal wall now wears its wing's identity instead of a uniform STARTAN3
+// box. The perimeter wall takes the wing's own texture (resolved per-edge by
+// sideResource in sideTextures), the hub-facing door plate is styled per wing
+// (labelStyle), and a door-width threshold band in front of each door is
+// inscribed with the wing's word in its signature colour. Geometry-wise the hub
+// is decomposed into a centre cross (centre + four inner arms) + four corner
+// quadrants (these carry the one-sided perimeter walls) + the four inscription
+// bands. Every cell is plain hub floor except the bands; all internal seams are
+// flush (identical floor/ceiling), so only the floor flat and the perimeter wall
+// texture vary across the hub.
+const hubBase = { kind: "hub", floorFlat: "FLOOR4_8", ceilingFlat: "CEIL3_5", wall: "STARTAN3", light: 224 };
+const bandDepth = 64;
+const bandInner = hubRadius - bandDepth; // 320: inner edge of the threshold bands
+const half = doorWidth / 2; // 96: half door width
+addRect("hub-centre", { x1: -half, y1: -half, x2: half, y2: half }, hubBase);
+addRect("hub-inner-n", { x1: -half, y1: half, x2: half, y2: bandInner }, hubBase);
+addRect("hub-inner-s", { x1: -half, y1: -bandInner, x2: half, y2: -half }, hubBase);
+addRect("hub-inner-e", { x1: half, y1: -half, x2: bandInner, y2: half }, hubBase);
+addRect("hub-inner-w", { x1: -bandInner, y1: -half, x2: -half, y2: half }, hubBase);
+addRect("hub-corner-ne", { x1: half, y1: half, x2: hubRadius, y2: hubRadius }, hubBase);
+addRect("hub-corner-nw", { x1: -hubRadius, y1: half, x2: -half, y2: hubRadius }, hubBase);
+addRect("hub-corner-se", { x1: half, y1: -hubRadius, x2: hubRadius, y2: -half }, hubBase);
+addRect("hub-corner-sw", { x1: -hubRadius, y1: -hubRadius, x2: -half, y2: -half }, hubBase);
+// Inscription threshold bands. Built with areaRect(direction) + makeInscription
+// (facing = direction) exactly like the wing foyers, so the per-facing cell
+// mirroring matches (north/east/west read min-u-first; south is reversed). The
+// band's outer edge (v = hubRadius) abuts the wing door's inner edge, so the
+// name sits right at the threshold the player crosses.
+const hubBandCols = doorWidth / 64; // 3 cells of 64 spanning the door width
+const hubBands = directions.map((direction) => {
+  const resource = directionResource[direction];
+  const config = resourceConfigs[resource];
+  const prefix = `DPA${resource[0].toUpperCase()}`; // DPAC / DPAM / DPAS / DPAN
+  const inscription = makeInscription(prefix, config.label, direction, hubBandCols, config.labelColor);
+  inscription.names.forEach((flatName, k) => {
+    const u1 = direction === "south" ? half - 64 * (k + 1) : -half + k * 64;
+    areaRect(direction, `hub-band-${direction}-${k}`, { u1, v1: bandInner, u2: u1 + 64, v2: hubRadius }, {
+      ...hubBase,
+      floorFlat: flatName,
+    });
+  });
+  return inscription;
 });
+const atriumFlats = hubBands.flatMap((inscription) => inscription.flats);
 
 
 // The four self-registering wing descriptors. `wings` order fixes the order in
@@ -151,6 +204,25 @@ const addResourceArea = (direction) => {
 
 directions.forEach(addResourceArea);
 
+// Flanking fixtures: a matched pair just inside the atrium on either side of each
+// doorway, on the corner floor clear of the door passage. Each wing gets a
+// distinct prop, themed to its identity — a glowing techno pillar for CPU's
+// silicon, a green torch for MEMORY's signature, an amber candelabra for the DISK
+// foundry, and a floor lamp echoing the NETWORK wing's own lamps.
+const hubFlankThing = {
+  north: 48, // tall techno pillar (ELEC)
+  east: 45, // tall green torch (TGRN)
+  south: 35, // candelabra (CBRA)
+  west: 2028, // floor lamp (COLU)
+};
+const flankOffset = half + 32; // 128: just outside the door opening
+const flankInset = hubRadius - 48; // 336: a little in front of the wall
+directions.forEach((direction) => {
+  const type = hubFlankThing[direction];
+  addAreaThing(direction, type, -flankOffset, flankInset);
+  addAreaThing(direction, type, flankOffset, flankInset);
+});
+
 
 const isDoorPair = (first, second) =>
   Boolean(first && second && (first.kind === "door" || second.kind === "door"));
@@ -186,10 +258,17 @@ const edgeIsLongFace = (edge, sign) => {
 
 const sideTextures = (sector, other, overrideTexture, edge) => {
   if (!other) {
+    // An atrium perimeter wall wears its wing's wall texture, chosen by which
+    // cardinal side the edge sits on (a corner cell contributes two sides, each
+    // resolved independently). Everything else keeps its own wall.
+    let mid = overrideTexture ?? sector.wall;
+    if (!overrideTexture && sector.kind === "hub" && edge) {
+      mid = resourceConfigs[sideResource[edge.side]].wall;
+    }
     return {
       top: "-",
       bottom: "-",
-      mid: overrideTexture ?? sector.wall,
+      mid,
     };
   }
   if (isDoorPair(sector, other)) {
@@ -369,10 +448,10 @@ const labelConfigs = Object.values(resourceConfigs);
 // texture contributions, in `wings` order. Adding a texture is a single-file
 // edit in the owning wing module — nothing here changes.
 const textureConfigs = [
-  ...labelConfigs.map(({ label, labelTexture, labelPatch, labelColor }) => ({
+  ...labelConfigs.map(({ label, labelTexture, labelPatch, labelColor, labelStyle }) => ({
     texture: labelTexture,
     patch: labelPatch,
-    build: () => buildLabelPatch(label, labelColor, doorWidth),
+    build: () => buildLabelPatch(label, labelColor, doorWidth, labelStyle),
   })),
   ...wings.flatMap((wing) => wing.textures ?? []),
 ];
@@ -447,6 +526,7 @@ const mapLumps = [
   lump("F_START"),
   ...iwadFlats,
   ...inscriptionFlats,
+  ...atriumFlats,
   lump("F_END"),
   lump("E1M1"),
   lump("THINGS", map.things),
