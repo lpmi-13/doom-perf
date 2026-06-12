@@ -133,6 +133,9 @@ type DoomPerfEngine = {
   // Disk request-queue depth (iostat aqu-sz) as permille of a 24-request full
   // channel, driving the media-pit queue channel's flowing request blocks.
   _DoomPerf_SetStorageQueue?: (permille: number) => void;
+  _DoomPerf_SetMemoryUtil?: (permille: number) => void;
+  _DoomPerf_SetMemorySaturation?: (permille: number) => void;
+  _DoomPerf_SetMemoryErrors?: (permille: number) => void;
   _DoomPerf_GetSimMode?: () => number;
   _DoomPerf_GetEffectiveCpuCoreCount?: () => number;
   _DoomPerf_GetEffectiveCpuCore?: (id: number) => number;
@@ -177,6 +180,9 @@ const pushTelemetryToEngine = (engine: DoomPerfEngine | undefined, telemetry: Te
   engine?._DoomPerf_SetStorageAwait?.(Math.round(clampRatio((telemetry.storage.awaitMillis ?? 0) / 250) * 1000));
   engine?._DoomPerf_SetStorageUtil?.(Math.round(clampRatio(telemetry.storage.utilization) * 1000));
   engine?._DoomPerf_SetStorageQueue?.(Math.round(clampRatio((telemetry.storage.queueDepth ?? 0) / 24) * 1000));
+  engine?._DoomPerf_SetMemoryUtil?.(Math.round(clampRatio(telemetry.memory.utilization) * 1000));
+  engine?._DoomPerf_SetMemorySaturation?.(Math.round(clampRatio(telemetry.memory.saturation) * 1000));
+  engine?._DoomPerf_SetMemoryErrors?.(Math.round(clampRatio(telemetry.memory.errors) * 1000));
 };
 
 const scenarioTelemetry = (
@@ -184,50 +190,127 @@ const scenarioTelemetry = (
   liveTelemetry: TelemetrySnapshot | undefined
 ): TelemetrySnapshot | undefined => {
   const mode = engine?._DoomPerf_GetSimMode?.() ?? 0;
-  if (mode < 1 || mode > 4) {
+  if (mode < 1 || mode > 6) {
     return undefined;
   }
 
-  const count = Math.max(1, Math.min(doomPerfCpuCoreCapacity, engine?._DoomPerf_GetEffectiveCpuCoreCount?.() ?? 8));
-  const cores = Array.from({ length: count }, (_, id) => ({
-    id,
-    utilization: clampRatio((engine?._DoomPerf_GetEffectiveCpuCore?.(id) ?? 0) / 1000),
-  }));
-  const utilization = cores.reduce((sum, { utilization: core }) => sum + core, 0) / cores.length;
-  const runQueuePressure = clampRatio((engine?._DoomPerf_GetEffectiveCpuRunQueuePressure?.() ?? 0) / 1000);
-  const loadPressure = clampRatio((engine?._DoomPerf_GetEffectiveCpuLoadPressure?.() ?? 0) / 1000);
-  const cpuPressure = mode === 2 ? Math.max(runQueuePressure, loadPressure) : runQueuePressure;
   const diskMode = mode === 3 || mode === 4;
   const diskSaturated = mode === 4;
+  const memoryMode = mode === 5 || mode === 6;
+  const memorySaturated = mode === 6;
+  const count = Math.max(1, Math.min(doomPerfCpuCoreCapacity, engine?._DoomPerf_GetEffectiveCpuCoreCount?.() ?? 8));
+  const now = Date.now();
+  const cores = Array.from({ length: count }, (_, id) => ({
+    id,
+    utilization: memoryMode
+      ? clampRatio(0.09 + 0.035 * Math.abs(Math.sin(now / 1800 + id)))
+      : clampRatio((engine?._DoomPerf_GetEffectiveCpuCore?.(id) ?? 0) / 1000),
+  }));
+  const utilization = cores.reduce((sum, { utilization: core }) => sum + core, 0) / cores.length;
+  const runQueuePressure = memoryMode ? 0 : clampRatio((engine?._DoomPerf_GetEffectiveCpuRunQueuePressure?.() ?? 0) / 1000);
+  const loadPressure = memoryMode ? 0 : clampRatio((engine?._DoomPerf_GetEffectiveCpuLoadPressure?.() ?? 0) / 1000);
+  const cpuPressure = mode === 2 ? Math.max(runQueuePressure, loadPressure) : runQueuePressure;
   const quietResource = { utilization: 0.08, saturation: 0, errors: 0 };
   const source =
     mode === 1 ? "sim: high CPU utilization"
     : mode === 2 ? "sim: high CPU saturation"
     : mode === 3 ? "sim: high disk utilization"
-    : "sim: high disk saturation";
-  const now = Date.now();
-  // Background system stats so the vmstat memory/swap/io columns aren't blank.
-  // They sit at a low baseline and rise gently with CPU activity (a busier box
-  // touches more memory and does more I/O); a future memory-pressure scenario
-  // would push memUtil up and free/cache/swap would follow automatically.
-  const totalBytes = 8 * 1024 ** 3;
-  const memUtil = clampRatio(0.22 + utilization * 0.12 + cpuPressure * 0.05 + 0.02 * Math.sin(now / 5000));
-  const cacheFrac = clampRatio(0.4 - memUtil * 0.35);
-  const freeFrac = clampRatio(1 - 0.03 - cacheFrac - memUtil);
-  const swapUsedBytes = memUtil > 0.85 ? totalBytes * (memUtil - 0.85) * 1.2 : 0;
-  const simMemory = {
-    utilization: memUtil,
-    saturation: clampRatio((memUtil - 0.9) * 6),
-    errors: 0,
-    totalBytes,
-    freeBytes: totalBytes * freeFrac,
-    buffersBytes: totalBytes * 0.03,
-    cachedBytes: totalBytes * cacheFrac,
-    availableBytes: totalBytes * (freeFrac + cacheFrac * 0.85),
-    swapUsedBytes,
-    swapInPagesPerSecond: 0,
-    swapOutPagesPerSecond: swapUsedBytes > 0 ? 60 + utilization * 200 : 0,
-  };
+    : mode === 4 ? "sim: high disk saturation"
+    : mode === 5 ? "sim: high memory utilization"
+    : "sim: high memory saturation";
+  // Background memory stats so the memory and vmstat terminals are meaningful in
+  // every scenario. Modes 5/6 follow the USE memory lab pattern: mode 5 is a
+  // large resident set with low MemAvailable but quiet swap/PSI; mode 6 adds
+  // reclaim stalls and swap churn, which is the saturation evidence.
+  const gib = 1024 ** 3;
+  const genericTotalBytes = 8 * gib;
+  const genericMemUtil = clampRatio(0.22 + utilization * 0.12 + cpuPressure * 0.05 + 0.02 * Math.sin(now / 5000));
+  const genericCacheFrac = clampRatio(0.4 - genericMemUtil * 0.35);
+  const genericFreeFrac = clampRatio(1 - 0.03 - genericCacheFrac - genericMemUtil);
+  const genericSwapTotalBytes = 2 * gib;
+  const genericSwapUsedBytes = genericMemUtil > 0.85 ? genericTotalBytes * (genericMemUtil - 0.85) * 1.2 : 0;
+  const memoryTotalBytes = 16 * gib;
+  const memoryWave = Math.abs(Math.sin(now / 2600));
+  const memoryAvailableBytes = memorySaturated
+    ? (420 + 180 * memoryWave) * 1024 ** 2
+    : (1500 + 360 * memoryWave) * 1024 ** 2;
+  const memorySwapTotalBytes = 4 * gib;
+  const memorySwapUsedBytes = memorySaturated
+    ? (2450 + 500 * memoryWave) * 1024 ** 2
+    : (96 + 48 * memoryWave) * 1024 ** 2;
+  const memorySwapIn = memorySaturated ? 260 + 220 * memoryWave : 0;
+  const memorySwapOut = memorySaturated ? 520 + 360 * Math.abs(Math.sin(now / 1900)) : 0;
+  const simMemory = memoryMode
+    ? {
+        utilization: clampRatio(1 - memoryAvailableBytes / memoryTotalBytes),
+        saturation: memorySaturated ? clampRatio(0.76 + 0.18 * memoryWave) : 0.04,
+        errors: 0,
+        totalBytes: memoryTotalBytes,
+        freeBytes: memorySaturated ? 190 * 1024 ** 2 : 640 * 1024 ** 2,
+        buffersBytes: memorySaturated ? 96 * 1024 ** 2 : 260 * 1024 ** 2,
+        cachedBytes: memorySaturated ? 520 * 1024 ** 2 : 1500 * 1024 ** 2,
+        availableBytes: memoryAvailableBytes,
+        swapTotalBytes: memorySwapTotalBytes,
+        swapFreeBytes: Math.max(0, memorySwapTotalBytes - memorySwapUsedBytes),
+        swapUsedBytes: memorySwapUsedBytes,
+        swapInPagesPerSecond: memorySwapIn,
+        swapOutPagesPerSecond: memorySwapOut,
+        swapPagesPerSecond: memorySwapIn + memorySwapOut,
+        pressureSomeAvg10: memorySaturated ? 18 + 10 * memoryWave : 0.35,
+        pressureSomeAvg60: memorySaturated ? 15 + 6 * memoryWave : 0.2,
+        pressureSomeAvg300: memorySaturated ? 7 + 3 * memoryWave : 0.05,
+        pressureSomeTotal: memorySaturated ? 1280000 + Math.round(12000 * memoryWave) : 42000,
+        pressureFullAvg10: memorySaturated ? 1.4 + 1.8 * memoryWave : 0,
+        pressureFullAvg60: memorySaturated ? 0.8 + 0.8 * memoryWave : 0,
+        pressureFullAvg300: memorySaturated ? 0.15 + 0.25 * memoryWave : 0,
+        pressureFullTotal: memorySaturated ? 144000 + Math.round(2600 * memoryWave) : 0,
+        oomKills: 0,
+        oomKillsPerSecond: 0,
+        topRss: memorySaturated
+          ? [
+              { pid: 4210, rssBytes: 11264 * 1024 ** 2, command: "mem-pressure-worker" },
+              { pid: 4217, rssBytes: 1870 * 1024 ** 2, command: "allocator-churn" },
+              { pid: 2891, rssBytes: 780 * 1024 ** 2, command: "doomperf" },
+              { pid: 1773, rssBytes: 460 * 1024 ** 2, command: "browser" },
+            ]
+          : [
+              { pid: 4210, rssBytes: 9728 * 1024 ** 2, command: "mem-resident-worker" },
+              { pid: 2891, rssBytes: 820 * 1024 ** 2, command: "doomperf" },
+              { pid: 1773, rssBytes: 440 * 1024 ** 2, command: "browser" },
+              { pid: 914, rssBytes: 180 * 1024 ** 2, command: "journald" },
+            ],
+      }
+    : {
+        utilization: genericMemUtil,
+        saturation: clampRatio((genericMemUtil - 0.9) * 6),
+        errors: 0,
+        totalBytes: genericTotalBytes,
+        freeBytes: genericTotalBytes * genericFreeFrac,
+        buffersBytes: genericTotalBytes * 0.03,
+        cachedBytes: genericTotalBytes * genericCacheFrac,
+        availableBytes: genericTotalBytes * (genericFreeFrac + genericCacheFrac * 0.85),
+        swapTotalBytes: genericSwapTotalBytes,
+        swapFreeBytes: Math.max(0, genericSwapTotalBytes - genericSwapUsedBytes),
+        swapUsedBytes: genericSwapUsedBytes,
+        swapInPagesPerSecond: 0,
+        swapOutPagesPerSecond: genericSwapUsedBytes > 0 ? 60 + utilization * 200 : 0,
+        swapPagesPerSecond: genericSwapUsedBytes > 0 ? 60 + utilization * 200 : 0,
+        pressureSomeAvg10: 0,
+        pressureSomeAvg60: 0,
+        pressureSomeAvg300: 0,
+        pressureSomeTotal: 0,
+        pressureFullAvg10: 0,
+        pressureFullAvg60: 0,
+        pressureFullAvg300: 0,
+        pressureFullTotal: 0,
+        oomKills: 0,
+        oomKillsPerSecond: 0,
+        topRss: [
+          { pid: 2891, rssBytes: 520 * 1024 ** 2, command: "doomperf" },
+          { pid: 1773, rssBytes: 310 * 1024 ** 2, command: "browser" },
+          { pid: 914, rssBytes: 140 * 1024 ** 2, command: "journald" },
+        ],
+      };
   const ioBeat = 1 + Math.abs(Math.sin(now / 1300));
   // Storage: a light I/O background under the CPU sims; the disk sims drive the
   // media to high utilization (mode 3 — pinned busy, but the queue and service
@@ -270,7 +353,12 @@ const scenarioTelemetry = (
     source,
     updatedAt: now,
     host: "doomperf-simulation",
-    health: clampRatio(1 - Math.max(utilization, cpuPressure, diskMode ? simStorage.saturation : 0)),
+    health: clampRatio(1 - Math.max(
+      utilization,
+      cpuPressure,
+      diskMode ? simStorage.saturation : 0,
+      memoryMode ? Math.max(simMemory.utilization, simMemory.saturation) : 0
+    )),
     uptimeSeconds: 3 * 86400 + performance.now() / 1000,
     cpu: {
       utilization,
@@ -279,22 +367,22 @@ const scenarioTelemetry = (
       logicalCpus: count,
       runQueuePressure,
       loadPressure,
-      load1: Math.max(0, (engine?._DoomPerf_GetEffectiveLoad?.(0) ?? 0) / 1000),
-      load5: Math.max(0, (engine?._DoomPerf_GetEffectiveLoad?.(1) ?? 0) / 1000),
-      load15: Math.max(0, (engine?._DoomPerf_GetEffectiveLoad?.(2) ?? 0) / 1000),
+      load1: memoryMode ? count * 0.18 : Math.max(0, (engine?._DoomPerf_GetEffectiveLoad?.(0) ?? 0) / 1000),
+      load5: memoryMode ? count * 0.16 : Math.max(0, (engine?._DoomPerf_GetEffectiveLoad?.(1) ?? 0) / 1000),
+      load15: memoryMode ? count * 0.14 : Math.max(0, (engine?._DoomPerf_GetEffectiveLoad?.(2) ?? 0) / 1000),
       cores,
       // vmstat detail derived from the simulated CPU state (no live source).
-      runQueue: Math.max(count, Math.round(count * (1 + runQueuePressure))),
+      runQueue: memoryMode ? 1 : Math.max(count, Math.round(count * (1 + runQueuePressure))),
       // Read the engine's effective D-state count (the same value that drives the
       // green I/O-wait orb stack) so the vmstat `b` column tracks the orbs exactly.
-      blocked: Math.max(0, engine?._DoomPerf_GetEffectiveCpuBlockedCount?.() ?? 0),
+      blocked: memorySaturated ? 2 : (memoryMode ? 0 : Math.max(0, engine?._DoomPerf_GetEffectiveCpuBlockedCount?.() ?? 0)),
       user: clampRatio(utilization * 0.7),
       system: clampRatio(utilization * 0.3),
       idle: clampRatio(1 - utilization),
       iowait: 0,
       steal: 0,
-      contextSwitchesPerSecond: Math.round(1200 + cpuPressure * 28000 + utilization * 6000),
-      interruptsPerSecond: Math.round(800 + utilization * 7000),
+      contextSwitchesPerSecond: Math.round(1200 + cpuPressure * 28000 + utilization * 6000 + (memorySaturated ? 4200 : 0)),
+      interruptsPerSecond: Math.round(800 + utilization * 7000 + (memorySaturated ? 1800 : 0)),
     },
     // A scenario is a self-contained simulation, so its memory/io are the
     // simulated background (not the host's real stats) -- keeping the whole
@@ -352,7 +440,7 @@ const start = async () => {
         pushTelemetryToEngine(engine, lastLiveTelemetry);
       }
       const mode = engine?._DoomPerf_GetSimMode?.() ?? 0;
-      const inScenario = mode >= 1 && mode <= 4;
+      const inScenario = mode >= 1 && mode <= 6;
       const now = Date.now();
       if (!inScenario) {
         lastScenario = undefined;

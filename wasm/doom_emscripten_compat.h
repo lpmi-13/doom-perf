@@ -44,10 +44,17 @@ extern int doomperf_storage_util;
 // queue channel's flowing request blocks.
 extern int doomperf_storage_queue;
 
+// Memory USE signals in permille. Utilization is page-bank fill; saturation is
+// reclaim/swap pressure; errors is the OOM/fault channel.
+extern int doomperf_memory_util;
+extern int doomperf_memory_saturation;
+extern int doomperf_memory_errors;
+
 // Doom Perf data-source mode, chosen on the level-select menu:
 //   0 = live browser telemetry; 1/2 = simulated high CPU utilization/saturation
 //   (CPU room renderer); 3/4 = simulated high disk utilization/saturation
-//   (iostat terminal + media-pit latency gauges).
+//   (iostat terminal + media-pit latency gauges); 5/6 = simulated high memory
+//   utilization/saturation (free/vmstat/PSI terminal scenarios).
 extern int doomperf_sim_mode;
 
 #endif

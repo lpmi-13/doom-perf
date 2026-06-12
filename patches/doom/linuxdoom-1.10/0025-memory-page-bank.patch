@@ -1,0 +1,164 @@
+diff --git a/p_tick.c b/p_tick.c
+--- a/p_tick.c
++++ b/p_tick.c
+@@ -128,6 +128,152 @@ void DoomPerf_UpdatePlatter (void)
+     }
+ }
+ 
++// Doom Perf: MEMORY page-bank instruments. Tags 500..544 are the 9x5 page
++// cells, 546/547 are swap-in/out channels, 548 is the OOM bay, and 549/550 are
++// PSI some/full pads. Utilization raises and brightens page cells. Saturation
++// lifts/pulses the swap channels and PSI pads. Errors wake only the OOM alcove.
++#define DOOMPERF_MEMORY_PAGE_TAG_BASE	500
++#define DOOMPERF_MEMORY_PAGE_COUNT	45
++#define DOOMPERF_MEMORY_SWAP_IN_TAG	546
++#define DOOMPERF_MEMORY_SWAP_OUT_TAG	547
++#define DOOMPERF_MEMORY_OOM_TAG		548
++#define DOOMPERF_MEMORY_PSI_SOME_TAG	549
++#define DOOMPERF_MEMORY_PSI_FULL_TAG	550
++#define DOOMPERF_MEMORY_PAGE_LOW	(4 * FRACUNIT)
++#define DOOMPERF_MEMORY_PAGE_HIGH	(20 * FRACUNIT)
++#define DOOMPERF_MEMORY_SWAP_LOW	(-20 * FRACUNIT)
++#define DOOMPERF_MEMORY_SWAP_HIGH	(12 * FRACUNIT)
++#define DOOMPERF_MEMORY_PSI_LOW		(20 * FRACUNIT)
++#define DOOMPERF_MEMORY_PSI_HIGH	(52 * FRACUNIT)
++
++static int DoomPerf_EffectiveMemoryUtil (void)
++{
++    if (doomperf_sim_mode == 5)
++	return 900 + (leveltime % 40);
++    if (doomperf_sim_mode == 6)
++	return 970 + (leveltime % 20);
++    return doomperf_memory_util;
++}
++
++static int DoomPerf_EffectiveMemorySaturation (void)
++{
++    if (doomperf_sim_mode == 5)
++	return 40;
++    if (doomperf_sim_mode == 6)
++	return 760 + ((leveltime * 4) % 180);
++    return doomperf_memory_saturation;
++}
++
++static int DoomPerf_EffectiveMemoryErrors (void)
++{
++    return (doomperf_sim_mode == 0) ? doomperf_memory_errors : 0;
++}
++
++static int DoomPerf_Clamp1000 (int value)
++{
++    if (value < 0)
++	return 0;
++    if (value > 1000)
++	return 1000;
++    return value;
++}
++
++static int DoomPerf_TrianglePulse (int speed)
++{
++    int phase;
++    int tri;
++
++    phase = leveltime * speed;
++    tri = (phase & 127) - 64;
++    if (tri < 0)
++	tri = -tri;
++    return tri;		// 0..64
++}
++
++void DoomPerf_UpdateMemoryWing (void)
++{
++    int		util;
++    int		sat;
++    int		err;
++    int		fill_units;
++    int		full_cells;
++    int		partial;
++    int		pulse;
++    int		i;
++    int		idx;
++    int		tag;
++    int		light;
++    fixed_t	height;
++
++    util = DoomPerf_Clamp1000(DoomPerf_EffectiveMemoryUtil());
++    sat = DoomPerf_Clamp1000(DoomPerf_EffectiveMemorySaturation());
++    err = DoomPerf_Clamp1000(DoomPerf_EffectiveMemoryErrors());
++    fill_units = util * DOOMPERF_MEMORY_PAGE_COUNT;
++    full_cells = fill_units / 1000;
++    partial = fill_units % 1000;
++    pulse = DoomPerf_TrianglePulse(2 + sat / 180);
++
++    for (i = 0; i < numsectors; i++)
++    {
++	tag = sectors[i].tag;
++	idx = tag - DOOMPERF_MEMORY_PAGE_TAG_BASE;
++	if (idx >= 0 && idx < DOOMPERF_MEMORY_PAGE_COUNT)
++	{
++	    if (idx < full_cells)
++	    {
++		sectors[i].floorheight = DOOMPERF_MEMORY_PAGE_HIGH;
++		sectors[i].lightlevel = 214;
++	    }
++	    else if (idx == full_cells && partial > 0)
++	    {
++		sectors[i].floorheight = DOOMPERF_MEMORY_PAGE_LOW
++		    + ((DOOMPERF_MEMORY_PAGE_HIGH - DOOMPERF_MEMORY_PAGE_LOW)
++		       * partial) / 1000;
++		sectors[i].lightlevel = (short)(170 + (partial * 38) / 1000);
++	    }
++	    else
++	    {
++		sectors[i].floorheight = DOOMPERF_MEMORY_PAGE_LOW;
++		sectors[i].lightlevel = 154;
++	    }
++	    continue;
++	}
++
++	if (tag == DOOMPERF_MEMORY_SWAP_IN_TAG || tag == DOOMPERF_MEMORY_SWAP_OUT_TAG)
++	{
++	    height = DOOMPERF_MEMORY_SWAP_LOW
++		+ ((DOOMPERF_MEMORY_SWAP_HIGH - DOOMPERF_MEMORY_SWAP_LOW) * sat) / 1000;
++	    light = 166 + (sat * 48) / 1000 + (pulse * sat) / 4000;
++	    sectors[i].floorheight = height;
++	    sectors[i].lightlevel = (short)light;
++	    continue;
++	}
++
++	if (tag == DOOMPERF_MEMORY_PSI_SOME_TAG)
++	{
++	    sectors[i].floorheight = DOOMPERF_MEMORY_PSI_LOW
++		+ ((DOOMPERF_MEMORY_PSI_HIGH - DOOMPERF_MEMORY_PSI_LOW) * sat) / 1000;
++	    sectors[i].lightlevel = (short)(170 + (sat * 50) / 1000);
++	    continue;
++	}
++
++	if (tag == DOOMPERF_MEMORY_PSI_FULL_TAG)
++	{
++	    int severe = sat > 600 ? sat - 600 : 0;
++	    sectors[i].floorheight = DOOMPERF_MEMORY_PSI_LOW
++		+ ((DOOMPERF_MEMORY_PSI_HIGH - DOOMPERF_MEMORY_PSI_LOW) * severe) / 400;
++	    sectors[i].lightlevel = (short)(150 + (severe * 90) / 400);
++	    continue;
++	}
++
++	if (tag == DOOMPERF_MEMORY_OOM_TAG)
++	{
++	    sectors[i].floorheight = err ? 8 * FRACUNIT : -16 * FRACUNIT;
++	    sectors[i].lightlevel = (short)(err ? 190 + pulse : 112);
++	}
++    }
++}
++
+ // Doom Perf: RUN QUEUE "subway". CPU task-orbs (MT_DP_CPUTASK) are runnable
+ // threads. They appear under the QUEUE sign (the player's left / south end of the
+ // trench) and glide NORTH up the lanes toward the constriction gates (sector tags
+@@ -617,6 +763,7 @@ void P_Ticker (void)
+ 
+     DoomPerf_UpdatePillars ();
+     DoomPerf_UpdatePlatter ();
++    DoomPerf_UpdateMemoryWing ();
+     DoomPerf_UpdateRunQueueParticles ();
+ 
+     for (i=0 ; i<MAXPLAYERS ; i++)

@@ -1,7 +1,7 @@
 // Memory wing (east): green page banks, a cache/reserve reservoir, swap
 // reclaim channels, and a dark OOM alcove. This is the first static baseline
 // for Track A in PARALLEL_WINGS_PLAN.md: clear room grammar, signs, a terminal,
-// and reserved page-cell tags without C renderer hooks yet.
+// and page-cell/swap/PSI/OOM tags driven by the memory page-bank engine hook.
 import { addWingEntrance } from "./common.mjs";
 import { reserved, wingName } from "./registry.mjs";
 import {
@@ -57,6 +57,11 @@ const memoryTerminal = {
 };
 
 const memoryWallSigns = {
+  pages: {
+    texture: wingName("memory", "PAGE"),
+    patch: wingName("memory", "PPAG"),
+    text: "PAGES",
+  },
   rss: {
     texture: wingName("memory", "RSS"),
     patch: wingName("memory", "PRSS"),
@@ -202,8 +207,9 @@ const build = (ctx) => {
     light: 208,
   });
 
-  // Broad horizontal page-bank chamber. The 9x5 cellular grid is intentionally
-  // static for now, but each cell claims a stable sector tag for later live fill.
+  // Broad horizontal page-bank chamber. The 9x5 cellular grid is driven by
+  // p_tick.c's memory hook: page cells rise/brighten with utilization while the
+  // side channels and pressure pads pulse under saturation.
   areaRect(direction, "front-walk", { u1: -448, v1: 896, u2: 448, v2: 960 }, walkway);
   areaRect(direction, "left-walk", { u1: -448, v1: 960, u2: -352, v2: 1280 }, dimWalkway);
   areaRect(direction, "left-swap-channel", { u1: -352, v1: 960, u2: -320, v2: 1280 }, {
@@ -249,7 +255,18 @@ const build = (ctx) => {
     }
   }
 
-  areaRect(direction, "rear-walk", { u1: -448, v1: 1280, u2: 448, v2: 1376 }, walkway);
+  areaRect(direction, "rear-walk-west", { u1: -448, v1: 1312, u2: -256, v2: 1376 }, walkway);
+  areaRect(direction, "rear-walk-center", { u1: -256, v1: 1280, u2: 256, v2: 1376 }, walkway);
+  areaRect(direction, "rear-walk-east", { u1: 256, v1: 1280, u2: 448, v2: 1376 }, walkway);
+  areaRect(direction, "page-sign-recess", { u1: -448, v1: 1280, u2: -256, v2: 1312 }, {
+    ...bankWall,
+    kind: "memory-sign",
+    floor: 8,
+    ceiling: 8 + wallSignSize.height,
+    light: 204,
+    labelSide: backWall,
+    labelTexture: memoryWallSigns.pages.texture,
+  });
   areaRect(direction, "terminal-walk", { u1: -128, v1: 1376, u2: 128, v2: memoryRoomBounds.main.v2 - terminalPanelDepth }, walkway);
   areaRect(direction, "terminal", { u1: -128, v1: memoryRoomBounds.main.v2 - terminalPanelDepth, u2: 128, v2: memoryRoomBounds.main.v2 }, {
     ...walkway,

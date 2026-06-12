@@ -29,6 +29,9 @@ int doomperf_load[3] = {0, 0, 0};
 int doomperf_storage_await = 0;
 int doomperf_storage_util = 0;
 int doomperf_storage_queue = 0;
+int doomperf_memory_util = 0;
+int doomperf_memory_saturation = 0;
+int doomperf_memory_errors = 0;
 int doomperf_sim_mode = 0;
 
 EMSCRIPTEN_KEEPALIVE
@@ -127,6 +130,26 @@ EMSCRIPTEN_KEEPALIVE
 void DoomPerf_SetStorageQueue(int permille)
 {
     doomperf_storage_queue = DoomPerf_ClampPermille(permille);
+}
+
+// Memory utilization is 1 - MemAvailable/MemTotal. It drives the memory wing's
+// page bank fill; memory saturation and errors drive the swap/PSI/OOM stations.
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_SetMemoryUtil(int permille)
+{
+    doomperf_memory_util = DoomPerf_ClampPermille(permille);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_SetMemorySaturation(int permille)
+{
+    doomperf_memory_saturation = DoomPerf_ClampPermille(permille);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_SetMemoryErrors(int permille)
+{
+    doomperf_memory_errors = DoomPerf_ClampPermille(permille);
 }
 
 static int DoomPerf_EffectiveCoreCountValue(void)

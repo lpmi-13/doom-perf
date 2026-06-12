@@ -1,0 +1,53 @@
+diff --git a/m_menu.c b/m_menu.c
+--- a/m_menu.c
++++ b/m_menu.c
+@@ -274,6 +274,8 @@ enum
+     mode_simutil,
+     mode_simsat,
+     mode_simdiskutil,
+     mode_simdisksat,
++    mode_simmemutil,
++    mode_simmemsat,
+     mode_end
+ } mode_e;
+@@ -284,5 +286,7 @@ menuitem_t ModeMenu[]=
+     {1,"",M_ChooseMode,'u'},
+     {1,"",M_ChooseMode,'s'},
+     {1,"",M_ChooseMode,'d'},
+-    {1,"",M_ChooseMode,'k'}
++    {1,"",M_ChooseMode,'k'},
++    {1,"",M_ChooseMode,'m'},
++    {1,"",M_ChooseMode,'p'}
+ };
+@@ -293,6 +297,6 @@ menu_t  ModeDef =
+     &MainDef,
+     ModeMenu,
+     M_DrawMode,
+-    60,96,
++    60,80,
+     0
+ };
+@@ -915,9 +919,11 @@ void M_StartGame (int choice)
+ void M_DrawMode(void)
+ {
+-    M_WriteText(60, 72, "SELECT DATA SOURCE");
++    M_WriteText(60, 56, "SELECT DATA SOURCE");
+     M_WriteText(ModeDef.x, ModeDef.y + LINEHEIGHT*mode_live, "LIVE STATS");
+     M_WriteText(ModeDef.x, ModeDef.y + LINEHEIGHT*mode_simutil, "SIM: HIGH CPU UTILIZATION");
+     M_WriteText(ModeDef.x, ModeDef.y + LINEHEIGHT*mode_simsat, "SIM: HIGH CPU SATURATION");
+     M_WriteText(ModeDef.x, ModeDef.y + LINEHEIGHT*mode_simdiskutil, "SIM: HIGH DISK UTILIZATION");
+     M_WriteText(ModeDef.x, ModeDef.y + LINEHEIGHT*mode_simdisksat, "SIM: HIGH DISK SATURATION");
++    M_WriteText(ModeDef.x, ModeDef.y + LINEHEIGHT*mode_simmemutil, "SIM: HIGH MEMORY UTILIZATION");
++    M_WriteText(ModeDef.x, ModeDef.y + LINEHEIGHT*mode_simmemsat, "SIM: HIGH MEMORY SATURATION");
+ }
+@@ -929,8 +935,9 @@ void M_ChooseMode(int choice)
+ {
+     // 0 = live telemetry; 1/2 = simulated high CPU utilization/saturation
+     // (read by the CPU room renderer); 3/4 = simulated high disk utilization/
+-    // saturation (read by the browser's iostat terminal scenario).
++    // saturation; 5/6 = simulated high memory utilization/saturation (read by
++    // the browser's USE terminal scenarios).
+     doomperf_sim_mode = choice;
+     G_DeferedInitNew(hurtme,1,1);
+     M_ClearMenus ();
+ }
