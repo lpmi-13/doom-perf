@@ -1,0 +1,99 @@
+diff --git a/m_menu.c b/m_menu.c
+index 38ec549..70dc9a3 100644
+--- a/m_menu.c
++++ b/m_menu.c
+@@ -278,6 +278,8 @@ enum
+     mode_simdisksat,
+     mode_simmemutil,
+     mode_simmemsat,
++    mode_simnetutil,
++    mode_simnetsat,
+     mode_end
+ } mode_e;
+ 
+@@ -289,7 +291,9 @@ menuitem_t ModeMenu[]=
+     {1,"",M_ChooseMode,'d'},
+     {1,"",M_ChooseMode,'k'},
+     {1,"",M_ChooseMode,'m'},
+-    {1,"",M_ChooseMode,'p'}
++    {1,"",M_ChooseMode,'p'},
++    {1,"",M_ChooseMode,'n'},
++    {1,"",M_ChooseMode,'t'}
+ };
+ 
+ menu_t  ModeDef =
+@@ -916,24 +920,63 @@ void M_NewGame(int choice)
+ //
+ // Doom Perf data-source / "level" selection.
+ //
++// Doom Perf data-source labels, one per sim mode in mode_e order. The list is
++// paged (MODE_PER_PAGE at a time) so the menu font stays large however many
++// wings are present; the page shown follows the skull cursor (itemOn).
++static char* ModeLabels[] =
++{
++    "LIVE STATS",
++    "SIM: HIGH CPU UTILIZATION",
++    "SIM: HIGH CPU SATURATION",
++    "SIM: HIGH DISK UTILIZATION",
++    "SIM: HIGH DISK SATURATION",
++    "SIM: HIGH MEMORY UTILIZATION",
++    "SIM: HIGH MEMORY SATURATION",
++    "SIM: HIGH NETWORK UTILIZATION",
++    "SIM: HIGH NETWORK SATURATION"
++};
++
++#define MODE_TITLE_Y  56
++#define MODE_FIRST_Y  80
++#define MODE_PER_PAGE 5
++
+ void M_DrawMode(void)
+ {
+-    M_WriteText(60, 56, "SELECT DATA SOURCE");
+-    M_WriteText(ModeDef.x, ModeDef.y + LINEHEIGHT*mode_live, "LIVE STATS");
+-    M_WriteText(ModeDef.x, ModeDef.y + LINEHEIGHT*mode_simutil, "SIM: HIGH CPU UTILIZATION");
+-    M_WriteText(ModeDef.x, ModeDef.y + LINEHEIGHT*mode_simsat, "SIM: HIGH CPU SATURATION");
+-    M_WriteText(ModeDef.x, ModeDef.y + LINEHEIGHT*mode_simdiskutil, "SIM: HIGH DISK UTILIZATION");
+-    M_WriteText(ModeDef.x, ModeDef.y + LINEHEIGHT*mode_simdisksat, "SIM: HIGH DISK SATURATION");
+-    M_WriteText(ModeDef.x, ModeDef.y + LINEHEIGHT*mode_simmemutil, "SIM: HIGH MEMORY UTILIZATION");
+-    M_WriteText(ModeDef.x, ModeDef.y + LINEHEIGHT*mode_simmemsat, "SIM: HIGH MEMORY SATURATION");
++    int   page;
++    int   pages;
++    int   start;
++    int   stop;
++    int   i;
++    char  hint[40];
++
++    pages = (mode_end + MODE_PER_PAGE - 1) / MODE_PER_PAGE;
++    page  = itemOn / MODE_PER_PAGE;
++    start = page * MODE_PER_PAGE;
++    stop  = start + MODE_PER_PAGE;
++    if (stop > mode_end)
++        stop = mode_end;
++
++    // Slide ModeDef.y so the shared skull cursor (M_Drawer draws it at
++    // ModeDef.y + itemOn*LINEHEIGHT) lands on the visible slot for itemOn even
++    // though only the current page is painted, starting at MODE_FIRST_Y.
++    ModeDef.y = MODE_FIRST_Y - start * LINEHEIGHT;
++
++    M_WriteText(60, MODE_TITLE_Y, "SELECT DATA SOURCE");
++    for (i = start; i < stop; i++)
++        M_WriteText(ModeDef.x, MODE_FIRST_Y + (i - start) * LINEHEIGHT, ModeLabels[i]);
++
++    if (pages > 1)
++    {
++        sprintf(hint, "PAGE %d/%d - UP/DOWN WRAPS", page + 1, pages);
++        M_WriteText(ModeDef.x, MODE_FIRST_Y + MODE_PER_PAGE * LINEHEIGHT + 4, hint);
++    }
+ }
+ 
+ void M_ChooseMode(int choice)
+ {
+     // 0 = live telemetry; 1/2 = simulated high CPU utilization/saturation
+-    // (read by the CPU room renderer); 3/4 = simulated high disk utilization/
+-    // saturation; 5/6 = simulated high memory utilization/saturation (read by
+-    // the browser's USE terminal scenarios).
++    // (read by the CPU room renderer); 3/4 disk, 5/6 memory, 7/8 network
++    // utilization/saturation (read by the browser's USE terminal scenarios).
+     doomperf_sim_mode = choice;
+     G_DeferedInitNew(hurtme,1,1);
+     M_ClearMenus ();

@@ -41,6 +41,7 @@ const glyphs = {
   U: ["10001", "10001", "10001", "10001", "10001", "10001", "01110"],
   V: ["10001", "10001", "10001", "10001", "10001", "01010", "00100"],
   W: ["10001", "10001", "10001", "10101", "10101", "11011", "10001"],
+  X: ["10001", "10001", "01010", "00100", "01010", "10001", "10001"],
   Y: ["10001", "10001", "01010", "00100", "00100", "00100", "00100"],
   Z: ["11111", "00001", "00010", "00100", "01000", "10000", "11111"],
   "0": ["01110", "10001", "10011", "10101", "11001", "10001", "01110"],
@@ -169,7 +170,9 @@ export const buildTerminalPatch = ({ lines }) => {
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
-  // Only glyphs the font actually has (no B/F/H/J/X).
+  // A fixed letterform pool for the streaming gibberish (kept stable so terminal
+  // screens stay byte-identical); it deliberately omits B/F/H/J/X regardless of
+  // which glyphs the font defines.
   const pool = "ACDEGIKLMNOPQRSTUVWYZ0123456789:/.-%=_".split("");
   const left = 16;
   const charW = 6;

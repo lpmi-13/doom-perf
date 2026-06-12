@@ -190,7 +190,7 @@ const scenarioTelemetry = (
   liveTelemetry: TelemetrySnapshot | undefined
 ): TelemetrySnapshot | undefined => {
   const mode = engine?._DoomPerf_GetSimMode?.() ?? 0;
-  if (mode < 1 || mode > 6) {
+  if (mode < 1 || mode > 8) {
     return undefined;
   }
 
@@ -198,6 +198,8 @@ const scenarioTelemetry = (
   const diskSaturated = mode === 4;
   const memoryMode = mode === 5 || mode === 6;
   const memorySaturated = mode === 6;
+  const networkMode = mode === 7 || mode === 8;
+  const networkSaturated = mode === 8;
   const count = Math.max(1, Math.min(doomPerfCpuCoreCapacity, engine?._DoomPerf_GetEffectiveCpuCoreCount?.() ?? 8));
   const now = Date.now();
   const cores = Array.from({ length: count }, (_, id) => ({
@@ -217,7 +219,9 @@ const scenarioTelemetry = (
     : mode === 3 ? "sim: high disk utilization"
     : mode === 4 ? "sim: high disk saturation"
     : mode === 5 ? "sim: high memory utilization"
-    : "sim: high memory saturation";
+    : mode === 6 ? "sim: high memory saturation"
+    : mode === 7 ? "sim: high network utilization"
+    : "sim: high network saturation";
   // Background memory stats so the memory and vmstat terminals are meaningful in
   // every scenario. Modes 5/6 follow the USE memory lab pattern: mode 5 is a
   // large resident set with low MemAvailable but quiet swap/PSI; mode 6 adds
@@ -348,6 +352,35 @@ const scenarioTelemetry = (
         writeBytesPerSecond: (26 + utilization * 260) * ioBeat * 1024,
       };
 
+  // Network: a quiet background under the other sims; the network sims drive the
+  // link to high utilization (mode 7 — throughput pinned near line rate, but
+  // drops stay near zero) or full saturation (mode 8 — the link is maxed and
+  // packets start dropping while throughput plateaus under contention). The
+  // fields map straight onto the /proc/net/dev terminal's columns (rx/tx kB/s,
+  // drops/s, errs/s) and its util/saturation/errors bars.
+  const linkBeat = 0.85 + 0.3 * Math.abs(Math.sin(now / 1000));
+  const simNetwork = networkMode
+    ? {
+        utilization: networkSaturated
+          ? clampRatio(0.965 + 0.03 * Math.sin(now / 2100))
+          : clampRatio(0.9 + 0.06 * Math.sin(now / 2100)),
+        // Saturation (not raw utilization) is the health signal: a maxed link is
+        // fine until packets are dropped, which only mode 8 does.
+        saturation: networkSaturated
+          ? clampRatio(0.6 + 0.38 * Math.abs(Math.sin(now / 2200)))
+          : clampRatio(0.04 + 0.04 * Math.abs(Math.sin(now / 1800))),
+        errors: 0,
+        // ~1 GbE link (≈125 MB/s each way); the saturated link carries a little
+        // less than the merely-busy one as contention caps goodput.
+        rxBytesPerSecond: (networkSaturated ? 116 : 108) * mib * linkBeat,
+        txBytesPerSecond: (networkSaturated ? 92 : 84) * mib * linkBeat,
+        // drops/s blow out only under saturation; NIC errors are a separate
+        // signal kept at zero here.
+        dropsPerSecond: networkSaturated ? 900 + 600 * Math.abs(Math.sin(now / 1500)) : 0,
+        errorsPerSecond: 0,
+      }
+    : (liveTelemetry?.network ?? quietResource);
+
   return {
     status: "live",
     source,
@@ -357,7 +390,8 @@ const scenarioTelemetry = (
       utilization,
       cpuPressure,
       diskMode ? simStorage.saturation : 0,
-      memoryMode ? Math.max(simMemory.utilization, simMemory.saturation) : 0
+      memoryMode ? Math.max(simMemory.utilization, simMemory.saturation) : 0,
+      networkMode ? Math.max(simNetwork.utilization, simNetwork.saturation) : 0
     )),
     uptimeSeconds: 3 * 86400 + performance.now() / 1000,
     cpu: {
@@ -389,7 +423,7 @@ const scenarioTelemetry = (
     // picture coherent with the simulated CPU.
     memory: simMemory,
     storage: simStorage,
-    network: liveTelemetry?.network ?? quietResource,
+    network: simNetwork,
   };
 };
 
@@ -440,7 +474,7 @@ const start = async () => {
         pushTelemetryToEngine(engine, lastLiveTelemetry);
       }
       const mode = engine?._DoomPerf_GetSimMode?.() ?? 0;
-      const inScenario = mode >= 1 && mode <= 6;
+      const inScenario = mode >= 1 && mode <= 8;
       const now = Date.now();
       if (!inScenario) {
         lastScenario = undefined;

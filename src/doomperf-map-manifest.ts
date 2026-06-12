@@ -102,6 +102,17 @@ export const mapManifest = {
           "by": -1776
         }
       ]
+    },
+    {
+      "sign": "network",
+      "segments": [
+        {
+          "ax": -1760,
+          "ay": -128,
+          "bx": -1760,
+          "by": 128
+        }
+      ]
     }
   ],
   "doors": [
