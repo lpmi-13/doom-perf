@@ -22,11 +22,59 @@
         object-fit: contain;
         background: #000;
       }
+      /* Loading veil shown until the WASM engine renders its first frame. It is
+         in the static HTML (not built by JS) so it paints the instant the page
+         opens — before the bundle and the ~1.2 MB engine download/compile — so
+         a slow VM shows a spinner instead of a black screen. index.ts adds
+         .is-hidden once the engine is interactive, then removes the node. */
+      #loading {
+        position: fixed;
+        inset: 0;
+        z-index: 1000;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 18px;
+        background: #000;
+        color: #b6ffcb;
+        font: 14px/1.4 "DejaVu Sans Mono", "Courier New", monospace;
+        letter-spacing: 3px;
+        text-transform: uppercase;
+        transition: opacity 0.4s ease;
+      }
+      #loading.is-hidden {
+        opacity: 0;
+        pointer-events: none;
+      }
+      .loading__spinner {
+        width: 46px;
+        height: 46px;
+        border: 4px solid rgba(40, 255, 120, 0.18);
+        border-top-color: #51e07a;
+        border-radius: 50%;
+        animation: doomSpin 0.9s linear infinite;
+        box-shadow: 0 0 18px rgba(40, 255, 120, 0.25);
+      }
+      .loading__text {
+        margin: 0;
+        opacity: 0.85;
+      }
+      @keyframes doomSpin {
+        to { transform: rotate(360deg); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .loading__spinner { animation-duration: 2.4s; }
+      }
     </style>
   </head>
   <body>
     <canvas id="canvas"></canvas>
+    <div id="loading" role="status" aria-live="polite">
+      <div class="loading__spinner" aria-hidden="true"></div>
+      <p class="loading__text">Loading lab…</p>
+    </div>
     <audio id="audio" preload="auto"></audio>
-    <script type="module" src="/dist/index.js?v=379154946bce"></script>
+    <script type="module" src="/dist/index.js?v=0565bf789cc0"></script>
   </body>
 </html>

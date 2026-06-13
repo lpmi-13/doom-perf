@@ -74,6 +74,10 @@ const doorOpenThreshold = mapManifest.doorOpenThreshold;
 
 const canvas = document.getElementById("canvas") as HTMLCanvasElement | null;
 const audio = document.getElementById("audio") as HTMLAudioElement | null;
+// The loading veil from game/index.html. Shown until the engine renders its
+// first frame; until then the on-screen touch controls stay hidden so a phone
+// never offers buttons that do nothing.
+const loadingOverlay = document.getElementById("loading");
 
 if (!canvas) {
   throw new Error("Missing #canvas canvas element.");
@@ -82,6 +86,40 @@ if (!canvas) {
 if (!audio) {
   throw new Error("Missing #audio element.");
 }
+
+// Flipped true once the WASM engine has produced its first frame; gates both
+// the loading veil and the touch controls (see updatePrompt / finishLoading).
+let engineReady = false;
+
+// Resolve once the engine has drawn its first frame. The engine bumps the
+// canvas backing store off its 300x150 default to Doom's native resolution
+// (>=320x200) as soon as SDL video is up and drawing, so a size change is our
+// "first frame" signal. A timeout fallback guarantees the veil is never stuck
+// up if that signal is ever missed.
+const waitForFirstFrame = (timeoutMs = 12000): Promise<void> =>
+  new Promise((resolve) => {
+    // A wall-clock fallback in case rAF is paused (e.g. a backgrounded tab) so
+    // the veil never sticks; resolve() is idempotent if the rAF loop wins.
+    window.setTimeout(resolve, timeoutMs);
+    const tick = () => {
+      if (canvas.width > 300 || canvas.height > 150) {
+        resolve();
+      } else {
+        requestAnimationFrame(tick);
+      }
+    };
+    requestAnimationFrame(tick);
+  });
+
+// Reveal the game: mark it interactive (so the controls may appear) and fade
+// out the veil, removing the node after the fade so it can't intercept taps.
+const finishLoading = () => {
+  engineReady = true;
+  if (loadingOverlay) {
+    loadingOverlay.classList.add("is-hidden");
+    window.setTimeout(() => loadingOverlay.remove(), 450);
+  }
+};
 
 // Let the engine set the canvas backing resolution — CSS stretches it to fill viewport
 audio.preload = "auto";
@@ -788,6 +826,17 @@ const start = async () => {
 
     const prompt = createInteractPrompt(() => interact(true));
     const updatePrompt = () => {
+      // Until the engine has rendered, there is nothing to drive — keep every
+      // control hidden so a phone doesn't show menu buttons over the loading
+      // veil before the player can do anything.
+      if (!engineReady) {
+        if (isTouchDevice) {
+          movementPad.hide();
+          menuControls.hide();
+        }
+        prompt.hide();
+        return;
+      }
       // The touch controls ride the same poll. In a live level the movement pad
       // shows; on the title/menu screens the menu controls show instead; while a
       // terminal overlay is open, neither does. pad.hide() also releases any
@@ -856,6 +905,12 @@ const start = async () => {
       onStatus: (message) => console.log(message),
     });
 
+    // bootstrapEngine returns once callMain has handed control back (the
+    // Asyncify game loop is scheduled); the first frame lands a tick later.
+    // Hold the veil until that frame paints, then reveal the game.
+    await waitForFirstFrame();
+    finishLoading();
+
     // Bring the main menu up automatically so neither desktop nor mobile needs
     // an initial click to dismiss the title screen. We synthesize one ESC — the
     // key Doom's title screen uses to open the menu — shortly after the engine
@@ -883,6 +938,16 @@ const start = async () => {
   }
   console.warn("Engine bundle not found, falling back to stub renderer.");
   await D_DoomMain(wadUrl, canvas);
+  finishLoading();
 };
 
-void start();
+void start().catch((error) => {
+  console.error(error);
+  // Surface the failure in the veil rather than leaving the spinner up forever.
+  if (loadingOverlay) {
+    loadingOverlay.classList.remove("is-hidden");
+    loadingOverlay.querySelector(".loading__spinner")?.remove();
+    const text = loadingOverlay.querySelector(".loading__text");
+    if (text) text.textContent = "Failed to load — reload to retry";
+  }
+});
