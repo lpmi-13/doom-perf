@@ -26,7 +26,7 @@ playground:
               curl -fsS http://127.0.0.1:8080/healthz
               systemctl status doomperf-telemetry nginx
       drives:
-        - source: oci://ghcr.io/lpmi-13/doom-perf-rootfs:v6
+        - source: oci://ghcr.io/lpmi-13/doom-perf-rootfs:v7
           mount: /
           size: 20GiB
       network:
