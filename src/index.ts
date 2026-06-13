@@ -6,6 +6,7 @@ import { createInteractPrompt } from "./interact";
 import { createMovementPad } from "./ui/movementPad";
 import { createMenuControls } from "./ui/menuControls";
 import { mapManifest } from "./doomperf-map-manifest";
+import { playAssetSound, preloadAssetSound } from "./asset_sounds";
 
 // Cache-bust versions injected at build time by scripts/build-web.mjs (content
 // hashes of the WAD / engine). Under `--watch` they arrive as the "dev" sentinel,
@@ -30,6 +31,9 @@ const useRange = mapManifest.useRange;
 // just in front of its centre — opens that terminal. (A terminal has a single
 // segment, its screen face.)
 type TriggerSegment = { ax: number; ay: number; bx: number; by: number };
+// The player's world pose, sampled from the engine for facing/range checks
+// (easter eggs, terminals, doors).
+type PlayerPose = { active: boolean; x: number; y: number; angleDeg: number };
 const copySegments = (segments: readonly TriggerSegment[]): TriggerSegment[] =>
   segments.map(({ ax, ay, bx, by }) => ({ ax, ay, bx, by }));
 const terminalSigns: { sign: TerminalSign; segments: TriggerSegment[] }[] =
@@ -38,6 +42,10 @@ const terminalSigns: { sign: TerminalSign; segments: TriggerSegment[] }[] =
     segments: copySegments(terminal.segments),
   }));
 const terminalRange = useRange;
+const easterEggs = mapManifest.easterEggs.map((egg) => ({
+  id: egg.id,
+  segments: copySegments(egg.segments),
+}));
 
 // The four hub doors, one per cardinal exit. These derive from
 // build-doomperf-map.mjs: each door sits at hubRadius (384) along its direction
@@ -116,6 +124,11 @@ console.log(`Loading WAD from ${wadUrl}.`);
 const engineAssetVersion = assetVersion(__ENGINE_VERSION__);
 const engineScriptUrl = `/engine/doom.js?v=${engineAssetVersion}`;
 const engineWasmUrl = `/engine/doom.wasm?v=${engineAssetVersion}`;
+const interactionSound = {
+  name: "interaction-sting",
+  url: "/assets/sounds/interaction-sting.ogg",
+  volume: 11,
+} as const;
 
 type DoomPerfEngine = {
   _DoomPerf_SetCpuCoreCount?: (count: number) => void;
@@ -133,6 +146,10 @@ type DoomPerfEngine = {
   // Disk request-queue depth (iostat aqu-sz) as permille of a 24-request full
   // channel, driving the media-pit queue channel's flowing request blocks.
   _DoomPerf_SetStorageQueue?: (permille: number) => void;
+  // Pulse the media-pit metrics dashboard's IOPS graph (disk server-rack easter
+  // egg). The engine decays the spike over a few seconds and scrolls it across
+  // the IOPS section.
+  _DoomPerf_TriggerStorageIopsSpike?: () => void;
   _DoomPerf_SetMemoryUtil?: (permille: number) => void;
   _DoomPerf_SetMemorySaturation?: (permille: number) => void;
   _DoomPerf_SetMemoryErrors?: (permille: number) => void;
@@ -431,6 +448,7 @@ const start = async () => {
   const engineResponse = await fetch(engineScriptUrl, { method: "HEAD" });
   if (engineResponse.ok) {
     attachAudioUnlock();
+    preloadAssetSound(interactionSound);
     const terminal = createTerminalOverlay();
     const movementPad = createMovementPad();
     const menuControls = createMenuControls();
@@ -440,12 +458,51 @@ const start = async () => {
     // before SDL's own canvas listeners) so the movement pad is the only steering
     // input. The pad and interact button have their own element as the event
     // target, so their taps pass through untouched.
+    // The server-rack easter egg has no on-screen prompt (by design). On mobile
+    // it is fired instead by tapping the rack where it appears in the view. The
+    // tap handler is assigned once the easter-egg helpers below exist; the canvas
+    // swallow (which already sees every canvas touch) calls it.
+    let onCanvasTap: (fractionX: number) => void = () => {};
     if (isTouchDevice) {
+      // A tap is a brief, near-stationary touch; a drag is a look/steer gesture
+      // and is ignored. Track the touch start so touchend can tell them apart.
+      let touchStartX = 0;
+      let touchStartY = 0;
+      let touchStartAt = 0;
+      let touchIsTap = false;
+      const tapMaxMovePx = 16;
+      const tapMaxMs = 400;
       const swallowCanvasInput = (event: Event) => {
-        if (event.target === canvas) {
-          event.preventDefault();
-          event.stopImmediatePropagation();
+        if (event.target !== canvas) return;
+        if (event.type === "touchstart") {
+          // changedTouches (not touches[0]): the finger that started THIS touch,
+          // so a finger already held on the movement pad isn't mistaken for it.
+          const touch = (event as TouchEvent).changedTouches[0];
+          if (touch) {
+            touchStartX = touch.clientX;
+            touchStartY = touch.clientY;
+            touchStartAt = Date.now();
+            touchIsTap = true;
+          }
+        } else if (event.type === "touchmove") {
+          const touch = (event as TouchEvent).changedTouches[0];
+          if (
+            touch &&
+            (Math.abs(touch.clientX - touchStartX) > tapMaxMovePx ||
+              Math.abs(touch.clientY - touchStartY) > tapMaxMovePx)
+          ) {
+            touchIsTap = false;
+          }
+        } else if (event.type === "touchend") {
+          const touch = (event as TouchEvent).changedTouches[0];
+          if (touchIsTap && touch && Date.now() - touchStartAt <= tapMaxMs) {
+            const rect = canvas.getBoundingClientRect();
+            if (rect.width > 0) onCanvasTap((touch.clientX - rect.left) / rect.width);
+          }
+          touchIsTap = false;
         }
+        event.preventDefault();
+        event.stopImmediatePropagation();
       };
       const canvasInputEvents = [
         "touchstart", "touchmove", "touchend", "touchcancel",
@@ -494,6 +551,16 @@ const start = async () => {
     });
 
     const terminalRefresh = window.setInterval(refreshEffectiveTelemetry, 250);
+
+    const currentPlayerPose = (): PlayerPose => {
+      const engine = getEngine();
+      return {
+        active: !!engine?._DoomPerf_PlayerActive?.(),
+        x: engine?._DoomPerf_PlayerX?.() ?? 0,
+        y: engine?._DoomPerf_PlayerY?.() ?? 0,
+        angleDeg: engine?._DoomPerf_PlayerAngle?.() ?? 0,
+      };
+    };
 
     // Closest point on a trigger segment to the player. Working against the
     // whole segment (the object's full face/width) rather than its midpoint is
@@ -548,11 +615,11 @@ const start = async () => {
       | { kind: "terminal"; sign: TerminalSign }
       | { kind: "door"; probeX: number; probeY: number }
       | null => {
-      const engine = getEngine();
-      if (!engine?._DoomPerf_PlayerActive?.()) return null;
-      const px = engine._DoomPerf_PlayerX?.() ?? 0;
-      const py = engine._DoomPerf_PlayerY?.() ?? 0;
-      const angle = ((engine._DoomPerf_PlayerAngle?.() ?? 0) * Math.PI) / 180;
+      const pose = currentPlayerPose();
+      if (!pose.active) return null;
+      const px = pose.x;
+      const py = pose.y;
+      const angle = (pose.angleDeg * Math.PI) / 180;
       const facingX = Math.cos(angle);
       const facingY = Math.sin(angle);
       const nearTerminal = terminalSigns.find((terminal) =>
@@ -566,6 +633,95 @@ const start = async () => {
       );
       if (door) return { kind: "door", probeX: door.probeX, probeY: door.probeY };
       return null;
+    };
+
+    const currentEasterEgg = (): { id: string } | null => {
+      const pose = currentPlayerPose();
+      if (!pose.active) return null;
+      const px = pose.x;
+      const py = pose.y;
+      const angle = (pose.angleDeg * Math.PI) / 180;
+      const facingX = Math.cos(angle);
+      const facingY = Math.sin(angle);
+      const egg = easterEggs.find((candidate) =>
+        candidate.segments.some((seg) =>
+          inRangeAndFacing(px, py, facingX, facingY, seg, useRange)
+        )
+      );
+      return egg ? { id: egg.id } : null;
+    };
+
+    let lastEasterEggAt = 0;
+    const easterEggCooldownMs = 7000;
+    // Onset (ms) of each audible yell in the 7s interaction sting. The dashboard
+    // fires one IOPS spike at each so the two spikes land on the two yells.
+    const interactionSpikeOffsetsMs = [1900, 4900];
+    // Play the sting and drive the dashboard's two IOPS spikes, once per cooldown.
+    // Shared by the desktop space-bar path and the mobile tap-on-rack path.
+    const fireEasterEgg = () => {
+      const now = Date.now();
+      if (now - lastEasterEggAt < easterEggCooldownMs) return;
+      lastEasterEggAt = now;
+      playAssetSound(interactionSound);
+      for (const offset of interactionSpikeOffsetsMs) {
+        window.setTimeout(
+          () => getEngine()?._DoomPerf_TriggerStorageIopsSpike?.(),
+          offset
+        );
+      }
+    };
+
+    // Mobile: with no prompt button, the server-rack easter egg fires when a
+    // canvas tap lands on the rack's on-screen projection (within range). Doom's
+    // horizontal FOV is 90deg, so a world point projects to normalized device
+    // X = lateral/depth, |X| < 1 on screen; the canvas spans X in [-1, 1].
+    const easterEggTapRange = 256;
+    const easterEggTapPadNdc = 0.12;
+    const projectNdcX = (wx: number, wy: number, pose: PlayerPose): number | null => {
+      const angle = (pose.angleDeg * Math.PI) / 180;
+      const facingX = Math.cos(angle);
+      const facingY = Math.sin(angle);
+      const rightX = Math.sin(angle);
+      const rightY = -Math.cos(angle);
+      const dx = wx - pose.x;
+      const dy = wy - pose.y;
+      const depth = dx * facingX + dy * facingY;
+      if (depth <= 1) return null;
+      return (dx * rightX + dy * rightY) / depth;
+    };
+    const easterEggTapHits = (
+      egg: { segments: TriggerSegment[] },
+      pose: PlayerPose,
+      fractionX: number
+    ): boolean => {
+      let nearest = Infinity;
+      let lo = Infinity;
+      let hi = -Infinity;
+      for (const seg of egg.segments) {
+        const closest = closestPointOnSegment(pose.x, pose.y, seg);
+        nearest = Math.min(nearest, Math.hypot(closest.x - pose.x, closest.y - pose.y));
+        for (const [wx, wy] of [[seg.ax, seg.ay], [seg.bx, seg.by]] as const) {
+          const ndc = projectNdcX(wx, wy, pose);
+          if (ndc !== null) {
+            lo = Math.min(lo, ndc);
+            hi = Math.max(hi, ndc);
+          }
+        }
+      }
+      if (nearest > easterEggTapRange) return false; // too far to be tapping it
+      if (lo === Infinity) return false; // entirely behind the camera
+      if (hi < -1 || lo > 1) return false; // off screen
+      const tapNdc = fractionX * 2 - 1;
+      return tapNdc >= lo - easterEggTapPadNdc && tapNdc <= hi + easterEggTapPadNdc;
+    };
+
+    onCanvasTap = (fractionX: number) => {
+      if (terminal.isOpen()) return;
+      const pose = currentPlayerPose();
+      if (!pose.active) return;
+      if (easterEggs.some((egg) => easterEggTapHits(egg, pose, fractionX))) {
+        fireEasterEgg();
+      }
     };
 
     // True when the door at the given probe point has already lifted open. Used
@@ -617,7 +773,12 @@ const start = async () => {
         return;
       }
       const target = currentTarget();
-      if (!target) return;
+      if (!target) {
+        if (!fromButton && currentEasterEgg()) {
+          fireEasterEgg();
+        }
+        return;
+      }
       if (target.kind === "terminal") {
         openTerminal(target.sign);
       } else if (fromButton) {

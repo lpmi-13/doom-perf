@@ -18,6 +18,15 @@ export const signTextureSize = {
   height: 40,
 };
 export const controlPanelTextureSize = { width: 256, height: 32 };
+export const serverRackTextureSize = { width: 96, height: 64 };
+// 128 wide so the panel maps 1:1 onto a 128-unit wall face: Doom masks wall
+// texture columns to the largest power of two <= width (r_data.c), so a 160-wide
+// texture would only address 128 columns and wrap the rest back across the face
+// (the "repeated partial dashboard" regression). The engine dashboard hook
+// (patch 0027) draws its live graphs into this same coordinate space, so the
+// chart geometry below is the shared contract between the static fallback art
+// and R_DoomPerfDiskDashboardPixel.
+export const storageDisplayTextureSize = { width: 128, height: 128 };
 export const signTextColor = 112;
 
 const glyphs = {
@@ -470,6 +479,120 @@ export const buildControlPanelPatch = () => {
   R(0, 13, W, 1, 8); R(0, 14, W, 1, 0); R(0, 15, W, 1, 8);
   R(0, 27, W, 1, 8);
   for (let yy = 28; yy < H; yy += 2) { R(0, yy, W, 1, 0); R(0, yy + 1, W, 1, 8); }
+  return buildPatch(px, W, H);
+};
+
+export const buildServerRackPatch = () => {
+  const { width: W, height: H } = serverRackTextureSize;
+  const px = new Uint8Array(W * H);
+  px.fill(96);
+  const R = (x, y, w, h, c) => drawRect(px, W, H, x, y, x + w, y + h, c);
+
+  // Outer rack rails and warm beige chassis, matching the drive array reference.
+  R(0, 0, W, H, 96);
+  R(4, 0, W - 8, H, 104);
+  R(6, 2, W - 12, H - 4, 108);
+  R(0, 0, 4, H, 88);
+  R(W - 4, 0, 4, H, 88);
+  R(1, 10, 2, 2, 231);
+  R(W - 3, 28, 2, 2, 112);
+  R(W - 3, 48, 2, 2, 112);
+
+  // Perforated top controller shelf with blue status lamps.
+  R(8, 4, W - 16, 14, 100);
+  for (let y = 7; y < 16; y += 4) {
+    for (let x = 12; x < W - 12; x += 5) {
+      R(x, y, 2, 2, 0);
+    }
+  }
+  [16, 40, 66].forEach((x) => {
+    R(x, 5, 4, 4, 200);
+    R(x + 1, 4, 2, 2, 206);
+  });
+
+  // Stacked disk sleds: bright faceplates, dark handle cutouts, and LEDs.
+  const firstBayY = 22;
+  const bayH = 7;
+  const gap = 2;
+  for (let row = 0; row < 4; row += 1) {
+    const y = firstBayY + row * (bayH + gap);
+    const shade = row % 2 === 0 ? 108 : 104;
+    for (let col = 0; col < 3; col += 1) {
+      const x = 8 + col * 27;
+      R(x, y, 23, bayH, shade);
+      R(x + 1, y + 1, 21, 1, 112);
+      R(x + 1, y + bayH - 1, 21, 1, 88);
+      R(x + 14, y + 2, 7, bayH - 4, 0);
+      R(x + 16, y + 1, 6, bayH - 2, 0);
+      R(x + 4, y + 3, 5, 2, 96);
+      if ((row + col) % 2 === 0) {
+        R(x - 2, y + 3, 2, 2, 112);
+      }
+    }
+  }
+
+  // Rack seams and bottom shadow so the block reads as hardware, not a flat wall.
+  for (let y = firstBayY - 3; y < H - 6; y += bayH + gap) {
+    R(6, y, W - 12, 1, 88);
+  }
+  R(5, H - 8, W - 10, 4, 0);
+  R(10, H - 5, W - 20, 2, 88);
+  return buildPatch(px, W, H);
+};
+
+export const buildStorageDisplayPatch = () => {
+  const { width: W, height: H } = storageDisplayTextureSize;
+  const px = new Uint8Array(W * H);
+  px.fill(4);
+  const R = (x, y, w, h, c) => drawRect(px, W, H, x, y, x + w, y + h, c);
+
+  // Shared chart geometry. These exact constants are mirrored by the engine's
+  // R_DoomPerfDiskDashboardPixel (patch 0027), which repaints the plot rectangle
+  // with live, scrolling samples; everything outside the plot rectangle (titles,
+  // section frames, the panel border) is left to this static art and shows
+  // through unchanged. Keep the two in lockstep. 15 samples, 4px pitch, 3px bars.
+  const SECTION_H = 38;
+  const CHART_X = 50;
+  const CHART_W = 72;
+  const CHART_H = 22;
+  const SAMPLE_COUNT = 15;
+  const SAMPLE_PITCH = 4;
+  const BAR_W = 3;
+
+  const drawGraph = (chartY, values) => {
+    R(CHART_X, chartY, CHART_W, CHART_H, 4);
+    for (let y = chartY + 6; y < chartY + CHART_H; y += 6) R(CHART_X, y, CHART_W, 1, 96);
+    for (let x = CHART_X + 12; x < CHART_X + CHART_W; x += 12) R(x, chartY, 1, CHART_H, 96);
+    R(CHART_X, chartY, 1, CHART_H, 0);
+    R(CHART_X, chartY + CHART_H - 1, CHART_W, 1, 0);
+
+    const bottom = chartY + CHART_H - 2;
+    values.slice(0, SAMPLE_COUNT).forEach((value, index) => {
+      const x = CHART_X + 4 + index * SAMPLE_PITCH;
+      const fill = Math.max(2, Math.round(value * (CHART_H - 5)));
+      const top = bottom - fill;
+      R(x, top, BAR_W, fill, index % 2 === 0 ? 200 : 204);
+      R(x, top, BAR_W, 1, 206);
+    });
+  };
+
+  // One static white dashboard face. The engine repaints the live graph plots
+  // through the dashboard wall-column hook; this WAD texture is complete and
+  // readable on its own (titles, frames, baseline bars) so a missing/disabled
+  // hook degrades to a static dashboard rather than a black block.
+  R(0, 0, W, H, 0);
+  R(2, 2, W - 4, H - 4, 4);
+
+  const drawSection = (top, title, values) => {
+    R(5, top, W - 10, SECTION_H, 4);
+    R(5, top + SECTION_H, W - 10, 1, 0);
+    drawCenteredText(px, W, H, title, top + 4, 1, 0, 5, 49, stampFlat);
+    drawGraph(top + 12, values);
+  };
+
+  drawSection(5, "LATENCY", [0.18, 0.2, 0.16, 0.22, 0.19, 0.23, 0.17, 0.2, 0.21, 0.18, 0.24, 0.2, 0.19, 0.22, 0.2]);
+  drawSection(45, "IOPS", [0.2, 0.23, 0.19, 0.25, 0.21, 0.27, 0.22, 0.24, 0.2, 0.26, 0.22, 0.29, 0.24, 0.26, 0.23]);
+  drawSection(85, "READ/S", [0.17, 0.19, 0.18, 0.22, 0.2, 0.24, 0.21, 0.23, 0.19, 0.25, 0.22, 0.24, 0.2, 0.23, 0.21]);
   return buildPatch(px, W, H);
 };
 

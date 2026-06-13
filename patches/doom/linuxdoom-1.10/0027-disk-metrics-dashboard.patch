@@ -1,0 +1,301 @@
+diff --git a/p_tick.c b/p_tick.c
+index c19fb29..bff9eea 100644
+--- a/p_tick.c
++++ b/p_tick.c
+@@ -128,6 +128,104 @@ void DoomPerf_UpdatePlatter (void)
+     }
+ }
+ 
++// Doom Perf: the media-pit METRICS DASHBOARD (storage wing). A wall panel of
++// three scrolling graphs -- LATENCY (disk await), IOPS (queue depth), READ/S
++// (utilization) -- repainted by R_DoomPerfDiskDashboardPixel from this sample
++// ring. We advance the ring a few tics apart so the scroll reads at a calm pace,
++// and decay the easter-egg IOPS spike every tic. Samples are permille (0..1000).
++#define DOOMPERF_DASH_SECTIONS		3
++#define DOOMPERF_DASH_ADVANCE_TICS	24	// ~0.69s/sample: a slow, calm drift left
++// DOOMPERF_DASH_SPIKE_TICS lives in doom_emscripten_compat.h (shared with the
++// browser's DoomPerf_TriggerStorageIopsSpike setter).
++
++int	doomperf_disk_dashboard[DOOMPERF_DASH_SECTIONS][DOOMPERF_DASH_SAMPLES];
++
++static int DoomPerf_DashClamp (int v)
++{
++    if (v < 0)
++	return 0;
++    if (v > 1000)
++	return 1000;
++    return v;
++}
++
++void DoomPerf_UpdateDiskDashboard (void)
++{
++    static int	seeded = 0;
++    int		await;
++    int		queue;
++    int		util;
++    int		wob;
++    int		latency;
++    int		iops;
++    int		read;
++    int		s;
++    int		i;
++
++    // Seed with a gentle baseline so the panel reads as a live dashboard from the
++    // first frame rather than an empty plot that fills in over the first seconds.
++    if (!seeded)
++    {
++	for (s = 0; s < DOOMPERF_DASH_SECTIONS; s++)
++	    for (i = 0; i < DOOMPERF_DASH_SAMPLES; i++)
++		doomperf_disk_dashboard[s][i] = 170 + ((i * 7 + s * 23) % 60);
++	seeded = 1;
++    }
++
++    if (doomperf_storage_iops_spike > 0)
++	doomperf_storage_iops_spike--;
++
++    if (leveltime % DOOMPERF_DASH_ADVANCE_TICS != 0)
++	return;
++
++    // Sim-aware effective signals, mirroring the platter/gauge/queue helpers: the
++    // disk sims synthesize their own values; live and the CPU/memory sims use the
++    // browser-pushed telemetry.
++    if (doomperf_sim_mode == 3)
++    {
++	await = 60;
++	queue = 80;
++	util = 910;
++    }
++    else if (doomperf_sim_mode == 4)
++    {
++	await = 720;
++	queue = 640;
++	util = 975;
++    }
++    else
++    {
++	await = doomperf_storage_await;
++	queue = doomperf_storage_queue;
++	util = doomperf_storage_util;
++    }
++
++    // A small wobble keeps an idle signal breathing instead of flatlining.
++    wob = (leveltime / DOOMPERF_DASH_ADVANCE_TICS) & 3;
++
++    latency = 150 + (await * 3) / 4 + wob * 12;
++    iops    = 150 + (queue * 3) / 5 + util / 8 + wob * 14;
++    read    = 140 + (util * 3) / 5 + wob * 12;
++
++    // Easter egg: while a spike is live, slam the freshest IOPS samples to the
++    // top of the chart (a tall, near-flat cap that only eases off as the spike
++    // ends), so each yell paints one unmistakable spike that then drifts left.
++    if (doomperf_storage_iops_spike > 0)
++	iops += 500 + (450 * doomperf_storage_iops_spike) / DOOMPERF_DASH_SPIKE_TICS;
++
++    latency = DoomPerf_DashClamp(latency);
++    iops = DoomPerf_DashClamp(iops);
++    read = DoomPerf_DashClamp(read);
++
++    // Scroll left; append the newest sample at the right edge.
++    for (s = 0; s < DOOMPERF_DASH_SECTIONS; s++)
++	for (i = 0; i < DOOMPERF_DASH_SAMPLES - 1; i++)
++	    doomperf_disk_dashboard[s][i] = doomperf_disk_dashboard[s][i + 1];
++    doomperf_disk_dashboard[0][DOOMPERF_DASH_SAMPLES - 1] = latency;
++    doomperf_disk_dashboard[1][DOOMPERF_DASH_SAMPLES - 1] = iops;
++    doomperf_disk_dashboard[2][DOOMPERF_DASH_SAMPLES - 1] = read;
++}
++
+ // Doom Perf: MEMORY page-bank instruments. Tags 500..544 are the 9x5 page
+ // cells, 546/547 are swap-in/out channels, 548 is the OOM bay, and 549/550 are
+ // PSI some/full pads. Utilization raises and brightens page cells. Saturation
+@@ -763,6 +861,7 @@ void P_Ticker (void)
+ 
+     DoomPerf_UpdatePillars ();
+     DoomPerf_UpdatePlatter ();
++    DoomPerf_UpdateDiskDashboard ();
+     DoomPerf_UpdateMemoryWing ();
+     DoomPerf_UpdateRunQueueParticles ();
+ 
+diff --git a/r_draw.c b/r_draw.c
+index 56ce5d3..9c0759a 100644
+--- a/r_draw.c
++++ b/r_draw.c
+@@ -105,6 +105,7 @@ static byte R_DoomPerfCpuStreakPixel (int ty);
+ static byte R_DoomPerfCpuGaugePixel (int gauge, int ty);
+ static byte R_DoomPerfDiskGaugePixel (int gauge, int ty);
+ static byte R_DoomPerfDiskQueuePixel (fixed_t xfrac, fixed_t yfrac, byte background);
++static byte R_DoomPerfDiskDashboardPixel (int tx, int ty, byte background);
+ 
+ //
+ // A column is a vertical slice/span from a wall texture that,
+@@ -148,7 +149,12 @@ void R_DrawColumn (void)
+     // This is as fast as it gets.
+     do 
+     {
+-	if (doomperf_cpu_column_display >= 20)
++	if (doomperf_cpu_column_display == 30)
++	    *dest = dc_colormap[R_DoomPerfDiskDashboardPixel(
++				    doomperf_cpu_column_texture_x,
++				    (frac>>FRACBITS)&127,
++				    dc_source[(frac>>FRACBITS)&127])];
++	else if (doomperf_cpu_column_display >= 20)
+ 	    *dest = dc_colormap[R_DoomPerfDiskGaugePixel(doomperf_cpu_column_display - 20,
+ 							 (frac>>FRACBITS)&127)];
+ 	else if (doomperf_cpu_column_display >= 17)
+@@ -931,6 +937,92 @@ static byte R_DoomPerfDiskQueuePixel
+     return DOOMPERF_DISK_GOLD;
+ }
+ 
++// Storage media-pit metrics dashboard (storage wing). The panel's room-facing
++// lower texture is the static DPDDASH art (titles, section frames, grid, axes,
++// baseline bars); this hook repaints only the three plot rectangles with the
++// live scrolling sample ring that p_tick.c advances, and returns the source
++// texel (background) everywhere else so the static art shows through unchanged.
++// tx/ty index the 128x128 texture; the chart geometry mirrors
++// buildStorageDisplayPatch() in scripts/lib/textures.mjs -- keep them in step.
++#define DOOMPERF_DASH_CHART_X	50
++#define DOOMPERF_DASH_CHART_W	72
++#define DOOMPERF_DASH_CHART_H	22
++#define DOOMPERF_DASH_PITCH	4
++#define DOOMPERF_DASH_BAR_W	3
++// Palette indices shared with the static art.
++#define DOOMPERF_DASH_WHITE	4
++#define DOOMPERF_DASH_GRID	96
++#define DOOMPERF_DASH_AXIS	0
++#define DOOMPERF_DASH_BAR_A	200
++#define DOOMPERF_DASH_BAR_B	204
++#define DOOMPERF_DASH_BAR_CAP	206
++
++extern int doomperf_disk_dashboard[3][DOOMPERF_DASH_SAMPLES];
++
++static byte R_DoomPerfDiskDashboardPixel (int tx, int ty, byte background)
++{
++    int		section;
++    int		cx;
++    int		cy;
++    int		index;
++    int		x0;
++    int		value;
++    int		fill;
++    int		bartop;
++
++    tx &= 127;
++
++    // Each plot rectangle is chartY..chartY+22 tall; the three sections sit 40
++    // texels apart (chartY 17 / 57 / 97). Rows outside them are static art.
++    if (ty >= 17 && ty < 39)		section = 0;	// LATENCY
++    else if (ty >= 57 && ty < 79)	section = 1;	// IOPS
++    else if (ty >= 97 && ty < 119)	section = 2;	// READ/S
++    else
++	return background;
++
++    if (tx < DOOMPERF_DASH_CHART_X
++	|| tx >= DOOMPERF_DASH_CHART_X + DOOMPERF_DASH_CHART_W)
++	return background;				// title gutter / right margin
++
++    cx = tx - DOOMPERF_DASH_CHART_X;			// 0 .. 71
++    cy = ty - (17 + section * 40);			// 0 .. 21 within the plot
++
++    // Bars (topmost): 15 samples filled from the baseline up by value.
++    if (cx >= 4)
++    {
++	index = (cx - 4) / DOOMPERF_DASH_PITCH;
++	x0 = 4 + index * DOOMPERF_DASH_PITCH;
++	if (index < DOOMPERF_DASH_SAMPLES && cx < x0 + DOOMPERF_DASH_BAR_W)
++	{
++	    value = doomperf_disk_dashboard[section][index];
++	    if (value < 0)
++		value = 0;
++	    if (value > 1000)
++		value = 1000;
++	    fill = (value * (DOOMPERF_DASH_CHART_H - 5)) / 1000;
++	    if (fill < 2)
++		fill = 2;
++	    bartop = (DOOMPERF_DASH_CHART_H - 2) - fill;
++	    if (cy >= bartop && cy < DOOMPERF_DASH_CHART_H - 2)
++		return (cy == bartop)
++		    ? DOOMPERF_DASH_BAR_CAP
++		    : ((index & 1) ? DOOMPERF_DASH_BAR_B : DOOMPERF_DASH_BAR_A);
++	}
++    }
++
++    // Axes: left edge column and the baseline row.
++    if (cx == 0 || cy == DOOMPERF_DASH_CHART_H - 1)
++	return DOOMPERF_DASH_AXIS;
++
++    // Grid: horizontal every 6 rows, vertical every 12 columns.
++    if (cy > 0 && (cy % 6) == 0)
++	return DOOMPERF_DASH_GRID;
++    if (cx >= 12 && (cx % 12) == 0)
++	return DOOMPERF_DASH_GRID;
++
++    return DOOMPERF_DASH_WHITE;
++}
++
+ static byte
+ R_DoomPerfCpuFloorPixel
+ ( fixed_t		xfrac,
+diff --git a/r_segs.c b/r_segs.c
+index 110197d..0e0d6ca 100644
+--- a/r_segs.c
++++ b/r_segs.c
+@@ -46,7 +46,11 @@ rcsid[] = "$Id: r_segs.c,v 1.3 1997/01/29 20:10:19 b1 Exp $";
+ extern int doomperf_cpu_column_display;
+ extern int doomperf_cpu_column_texture_x;
+ 
+-static void R_DoomPerfBeginColumn (int texturecolumn, int is_single_sided)
++// surface identifies which tier of the seg this column belongs to:
++//   0 = top (two-sided upper), 1 = mid (one-sided wall), 2 = bottom (two-sided
++// lower). Wall instruments gate on it so a tag tied to one tier of a two-sided
++// line can't bleed onto the others.
++static void R_DoomPerfBeginColumn (int texturecolumn, int surface)
+ {
+     int		tag;
+ 
+@@ -56,11 +60,17 @@ static void R_DoomPerfBeginColumn (int texturecolumn, int is_single_sided)
+     else if (tag >= 121 && tag <= 123)
+ 	// LOAD room gauges: encode display as 17/18/19 (gauge 0/1/2 = 1m/5m/15m).
+ 	doomperf_cpu_column_display = tag - 104;
+-    else if (is_single_sided && tag >= 660 && tag <= 662)
++    else if (surface == 1 && tag >= 660 && tag <= 662)
+ 	// Storage media-pit latency gauges: the niche back/side walls are
+-	// one-sided, so gate on that to keep the tag off the two-sided opening
+-	// seal above each niche. Encode display as 20/21/22 (gauge 0/1/2).
++	// one-sided, so gate on the mid surface to keep the tag off the
++	// two-sided opening seal above each niche. Display 20/21/22 (gauge 0/1/2).
+ 	doomperf_cpu_column_display = tag - 640;
++    else if (surface == 2 && tag == 663)
++	// Storage media-pit metrics dashboard: the panel is a closed display
++	// sector, so its room-facing face is the lower texture of a two-sided
++	// line. Gate on the bottom surface so the tag drives the dashboard only
++	// there, not the seal above it or the one-sided side/back walls.
++	doomperf_cpu_column_display = 30;
+     else
+ 	doomperf_cpu_column_display = 0;
+     doomperf_cpu_column_texture_x = texturecolumn;
+@@ -311,7 +321,7 @@ void R_RenderSegLoop (void)
+ 	    dc_yh = yh;
+ 	    dc_texturemid = rw_midtexturemid;
+ 	    dc_source = R_GetColumn(midtexture,texturecolumn);
+-	    R_DoomPerfBeginColumn(texturecolumn, 1);
++	    R_DoomPerfBeginColumn(texturecolumn, 1); /* mid (one-sided) */
+ 	    colfunc ();
+ 	    doomperf_cpu_column_display = 0;
+ 	    ceilingclip[rw_x] = viewheight;
+@@ -335,7 +345,7 @@ void R_RenderSegLoop (void)
+ 		    dc_yh = mid;
+ 		    dc_texturemid = rw_toptexturemid;
+ 		    dc_source = R_GetColumn(toptexture,texturecolumn);
+-		    R_DoomPerfBeginColumn(texturecolumn, 0);
++		    R_DoomPerfBeginColumn(texturecolumn, 0); /* top */
+ 		    colfunc ();
+ 		    doomperf_cpu_column_display = 0;
+ 		    ceilingclip[rw_x] = mid;
+@@ -367,7 +377,7 @@ void R_RenderSegLoop (void)
+ 		    dc_texturemid = rw_bottomtexturemid;
+ 		    dc_source = R_GetColumn(bottomtexture,
+ 					    texturecolumn);
+-		    R_DoomPerfBeginColumn(texturecolumn, 0);
++		    R_DoomPerfBeginColumn(texturecolumn, 2); /* bottom */
+ 		    colfunc ();
+ 		    doomperf_cpu_column_display = 0;
+ 		    floorclip[rw_x] = mid;

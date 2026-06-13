@@ -99,7 +99,7 @@ export const createMapBuilder = () => {
   //   sideTextures(sector, other, override, edge)  -> { top, bottom, mid }
   //   textureOffsetFor(edge, sector, other, override) -> x offset
   //   lineFlagsFor(front, back)                    -> { flags, special }
-  //   lineTagFor(front, back, overrideTexture)     -> sector tag
+  //   lineTagFor(front, back, overrideTexture)     -> line tag
   const compile = (decorate) => {
     const xCuts = [...new Set(sectors.flatMap(({ x1, x2 }) => [x1, x2]))].sort((a, b) => a - b);
     const yCuts = [...new Set(sectors.flatMap(({ y1, y2 }) => [y1, y2]))].sort((a, b) => a - b);

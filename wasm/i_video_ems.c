@@ -29,6 +29,7 @@ int doomperf_load[3] = {0, 0, 0};
 int doomperf_storage_await = 0;
 int doomperf_storage_util = 0;
 int doomperf_storage_queue = 0;
+int doomperf_storage_iops_spike = 0;
 int doomperf_memory_util = 0;
 int doomperf_memory_saturation = 0;
 int doomperf_memory_errors = 0;
@@ -130,6 +131,16 @@ EMSCRIPTEN_KEEPALIVE
 void DoomPerf_SetStorageQueue(int permille)
 {
     doomperf_storage_queue = DoomPerf_ClampPermille(permille);
+}
+
+// Pulse the media-pit metrics dashboard's IOPS graph. The browser calls this
+// once per audible yell in the easter-egg sting (so a single trigger makes one
+// spike); the value is a tic countdown that p_tick.c decays, scrolling a visible
+// spike across the IOPS section.
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_TriggerStorageIopsSpike(void)
+{
+    doomperf_storage_iops_spike = DOOMPERF_DASH_SPIKE_TICS;
 }
 
 // Memory utilization is 1 - MemAvailable/MemTotal. It drives the memory wing's

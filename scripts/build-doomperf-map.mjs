@@ -207,11 +207,11 @@ directions.forEach(addResourceArea);
 // Flanking fixtures: a matched pair just inside the atrium on either side of each
 // doorway, on the corner floor clear of the door passage. Each wing gets a
 // distinct prop, themed to its identity — a glowing techno pillar for CPU's
-// silicon, a green torch for MEMORY's signature, an amber candelabra for the DISK
-// foundry, and a floor lamp echoing the NETWORK wing's own lamps.
+// silicon, warning torches for MEMORY's pressure/OOM path, an amber candelabra
+// for the DISK foundry, and a floor lamp echoing the NETWORK wing's own lamps.
 const hubFlankThing = {
   north: 48, // tall techno pillar (ELEC)
-  east: 45, // tall green torch (TGRN)
+  east: 46, // tall torch (allowed by the patched engine's prop filter)
   south: 35, // candelabra (CBRA)
   west: 2028, // floor lamp (COLU)
 };
@@ -256,6 +256,19 @@ const edgeIsLongFace = (edge, sign) => {
   return horizontal === wideX;
 };
 
+const oppositeSide = {
+  top: "bottom",
+  right: "left",
+  bottom: "top",
+  left: "right",
+};
+
+const equipmentKinds = new Set(["core-column", "load-gauge", "server-rack", "metric-display"]);
+const equipmentTextureForSide = (equipment, side) =>
+  equipment.textureSide && side !== equipment.textureSide
+    ? (equipment.sideWall ?? equipment.wall)
+    : equipment.wall;
+
 const sideTextures = (sector, other, overrideTexture, edge) => {
   if (!other) {
     // An atrium perimeter wall wears its wing's wall texture, chosen by which
@@ -292,8 +305,8 @@ const sideTextures = (sector, other, overrideTexture, edge) => {
   if (floorStep) {
     if (other.kind === "sign") bottom = edge && edgeIsLongFace(edge, other) ? other.labelTexture : other.wall;
     else if (sector.kind === "sign") bottom = edge && edgeIsLongFace(edge, sector) ? sector.labelTexture : sector.wall;
-    else if (other.kind === "core-column" || other.kind === "load-gauge") bottom = other.wall;
-    else if (sector.kind === "core-column" || sector.kind === "load-gauge") bottom = sector.wall;
+    else if (equipmentKinds.has(other.kind)) bottom = equipmentTextureForSide(other, edge ? oppositeSide[edge.side] : undefined);
+    else if (equipmentKinds.has(sector.kind)) bottom = equipmentTextureForSide(sector, edge?.side);
     // The step up into a wall-terminal recess (the wall just below the screen)
     // gets a keyboard/control panel rather than a plain step riser.
     else if (other.labelSide === "top" && other.labelTexture) bottom = controlPanelTexture;
@@ -354,6 +367,14 @@ const textureOffsetFor = (edge, sector, other, overrideTexture) => {
   if (other && other.kind === "sign") return edgeIsLongFace(edge, other) ? overrideTextureOffsetFor(edge, other) : 0;
   // Terminal control-panel riser: flow the tiling panel across its cut segments.
   if (other && other.labelSide === "top" && other.labelTexture && sector.floor < other.floor) return flowOffsetFor(edge, sector);
+  if (
+    sector.kind === "server-rack" ||
+    sector.kind === "metric-display" ||
+    other?.kind === "server-rack" ||
+    other?.kind === "metric-display"
+  ) {
+    return flowOffsetFor(edge, sector.kind === "server-rack" || sector.kind === "metric-display" ? sector : other);
+  }
   if (overrideTexture) return overrideTextureOffsetFor(edge, sector);
   return 0;
 };
@@ -605,6 +626,9 @@ const mapManifest = {
   // of its screen face.
   terminals: wings.flatMap((wing) =>
     wing.terminals ? wing.terminals({ terminalSegment, terminalHalfWidth }) : []
+  ),
+  easterEggs: wings.flatMap((wing) =>
+    wing.easterEggs ? wing.easterEggs({ terminalSegment, terminalHalfWidth }) : []
   ),
   // Four hub doors, one per cardinal exit. Each has two trigger segments (the
   // inner line at hubRadius and the outer line at doorOuterRadius), so the

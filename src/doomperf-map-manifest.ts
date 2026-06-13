@@ -115,6 +115,25 @@ export const mapManifest = {
       ]
     }
   ],
+  "easterEggs": [
+    {
+      "id": "disk-server-rack",
+      "segments": [
+        {
+          "ax": 288,
+          "ay": -1424,
+          "bx": 288,
+          "by": -1520
+        },
+        {
+          "ax": 384,
+          "ay": -1520,
+          "bx": 288,
+          "by": -1520
+        }
+      ]
+    }
+  ],
   "doors": [
     {
       "segments": [

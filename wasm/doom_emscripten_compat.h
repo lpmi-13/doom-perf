@@ -44,6 +44,22 @@ extern int doomperf_storage_util;
 // queue channel's flowing request blocks.
 extern int doomperf_storage_queue;
 
+// Media-pit metrics dashboard easter-egg spike, in tics remaining. The browser
+// pulses it (DoomPerf_TriggerStorageIopsSpike) when the player USEs the hidden
+// disk server rack; p_tick.c decays it each tic and lifts the dashboard's IOPS
+// graph while it is non-zero.
+extern int doomperf_storage_iops_spike;
+
+// Width (samples) of the metrics-dashboard graph ring. Shared so p_tick.c (which
+// owns/advances the ring) and r_draw.c (which plots it) agree on the row stride.
+#define DOOMPERF_DASH_SAMPLES 15
+
+// Duration (tics) of one IOPS easter-egg spike. Shared so the browser's setter
+// (i_video_ems.c) and the decay in p_tick.c agree. ~2s at 35 tics/s: long enough
+// to slam a couple of the (now slow) graph samples to the top, short enough that
+// the two yells in the 7s sting read as two separate spikes.
+#define DOOMPERF_DASH_SPIKE_TICS 70
+
 // Memory USE signals in permille. Utilization is page-bank fill; saturation is
 // reclaim/swap pressure; errors is the OOM/fault channel.
 extern int doomperf_memory_util;

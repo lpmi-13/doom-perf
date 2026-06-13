@@ -25,9 +25,13 @@ import {
   terminalTextureSize,
   wallSignSize,
   diskGaugeSize,
+  serverRackTextureSize,
+  storageDisplayTextureSize,
   buildTerminalPatch,
   buildWallSignPatch,
   buildDiskGaugePatch,
+  buildServerRackPatch,
+  buildStorageDisplayPatch,
   makeInscription,
 } from "../textures.mjs";
 
@@ -44,6 +48,8 @@ const signs = {
   latency: { texture: tex("LAT"), patch: tex("PLT"), text: "LATENCY" },
 };
 const gauge = { texture: tex("GAUG"), patch: tex("PGAU") };
+const rack = { texture: tex("RACK"), patch: tex("PRCK") };
+const display = { texture: tex("DASH"), patch: tex("PDSH") };
 
 // Floor-name inscriptions. The reading player always faces "south" here (they
 // walk away from the hub, into -y), so both names use the south orientation;
@@ -85,6 +91,24 @@ const V_STAIR = 1408; // foot of the descent stairs / platter front edge
 const V_PLAT_END = V_STAIR + 5 * PLAT_CELL; // 1728
 const V_PIT_BACK = 1760;
 const V_TERM_WALL = 1776; // the iostat screen face (far one-sided wall)
+const WALL_PANEL_DEPTH = 96;
+const DISPLAY_PANEL_DEPTH = 16;
+const SERVER_PANEL_HEIGHT = 64;
+const DISPLAY_PANEL_HEIGHT = 128;
+const serverRack = {
+  u1: -PITHW - WALL_PANEL_DEPTH,
+  v1: 1424,
+  u2: -PITHW,
+  v2: 1520,
+};
+// 128 deep along v so the room-facing face is exactly one 128-wide dashboard
+// texture (no column wrap; see storageDisplayTextureSize).
+const metricDisplay = {
+  u1: -PITHW - DISPLAY_PANEL_DEPTH,
+  v1: 1536,
+  u2: -PITHW,
+  v2: 1664,
+};
 
 const build = (ctx) => {
   const { areaRect, addAreaThing, direction, resource, base, accent } = ctx;
@@ -225,10 +249,38 @@ const build = (ctx) => {
       labelTexture: screen.texture,
     });
 
-    // West pit wall: a tall sky slit (the foundry venting to daylight) above the
-    // PLATTER sign. Both are niches recessed beyond the pit wall (u < -PITHW);
-    // they open onto the pit through the west side strip's outer edge.
-    areaRect(direction, "pit-sky-w", { u1: -304, v1: 1410, u2: -PITHW, v2: 1445 }, {
+    // West wall: a compact rack plus a single tall dashboard panel. The easter-
+    // egg trigger stays tied to the server face and has no popup interaction.
+    areaRect(direction, "pit-server-rack", serverRack, {
+      ...pit,
+      kind: "server-rack",
+      floor: F_PIT + SERVER_PANEL_HEIGHT,
+      ceiling: F_PIT + SERVER_PANEL_HEIGHT,
+      floorFlat: "FLOOR0_3",
+      wall: rack.texture,
+      light: 184,
+    });
+    areaRect(direction, "pit-metric-display", metricDisplay, {
+      ...pit,
+      kind: "metric-display",
+      floor: F_PIT + DISPLAY_PANEL_HEIGHT,
+      ceiling: F_PIT + DISPLAY_PANEL_HEIGHT,
+      floorFlat: "FLOOR0_3",
+      wall: display.texture,
+      sideWall: accent.wall,
+      textureSide: "left",
+      // Live dashboard line tag: the engine's R_DoomPerfDiskDashboardPixel
+      // (patch 0027) repaints this panel's room-facing lower texture with the
+      // three scrolling graphs. It gates on the bottom-texture surface so the
+      // tag lands only on the dashboard face, not the seal above it or the
+      // one-sided side/back walls. 663 (gauges hold 660-662).
+      lineTag: ids.lineTags[0] + 3, // 663
+      light: 192,
+    });
+
+    // West wall: a sky slit near the rear pit, kept clear of the equipment bay.
+    // It recesses beyond the wall (u < -PITHW) and opens onto the pit back.
+    areaRect(direction, "pit-sky-w", { u1: -304, v1: 1730, u2: -PITHW, v2: 1758 }, {
       kind: "outside",
       resource,
       floor: 72,
@@ -238,16 +290,6 @@ const build = (ctx) => {
       wall: "STONE3",
       light: 255,
     });
-    areaRect(direction, "pit-platter-sign", { u1: -304, v1: 1450, u2: -PITHW, v2: 1674 }, {
-      ...pit,
-      kind: "pit-sign",
-      floor: SIGN_FLOOR,
-      ceiling: SIGN_CEIL,
-      light: 200,
-      labelSide: "left",
-      labelTexture: signs.platter.texture,
-    });
-
     // East pit wall: the LATENCY sign, then three amber service-latency gauges
     // (await time). Each gauge niche reserves a line tag (660+) so a later hook
     // can drive its fill height. Niches recess beyond the east pit wall.
@@ -306,12 +348,32 @@ const textures = [
     height: diskGaugeSize.height,
     build: buildDiskGaugePatch,
   },
+  {
+    texture: rack.texture,
+    patch: rack.patch,
+    width: serverRackTextureSize.width,
+    height: serverRackTextureSize.height,
+    build: buildServerRackPatch,
+  },
+  {
+    texture: display.texture,
+    patch: display.patch,
+    width: storageDisplayTextureSize.width,
+    height: storageDisplayTextureSize.height,
+    build: buildStorageDisplayPatch,
+  },
 ];
 
 // Floor-name inscription flats, generated once (the geometry above references
 // them by name). "IO VAULT" at the entrance, "QUEUE" before the service channel.
 const flats = [...ioInscription.flats, ...queueInscription.flats];
 
+const toWorld = ([u, v]) => [-u, -v];
+const segment = (a, b) => {
+  const [ax, ay] = toWorld(a);
+  const [bx, by] = toWorld(b);
+  return { ax, ay, bx, by };
+};
 // The iostat read-point. Storage is the SOUTH wing, so the map builder rotates
 // local (u,v) -> world (-u,-v); the central terminalSegment helper assumes the
 // identity (north) rotation, so we emit the screen face in WORLD coords directly.
@@ -319,10 +381,21 @@ const flats = [...ioInscription.flats, ...queueInscription.flats];
 // u=0 and one screen wide, so the browser's USE-distance check (player world
 // position) lines up with the actual screen.
 const terminals = ({ terminalHalfWidth }) => {
-  const toWorld = ([u, v]) => [-u, -v];
   const [ax, ay] = toWorld([-terminalHalfWidth, V_TERM_WALL]);
   const [bx, by] = toWorld([terminalHalfWidth, V_TERM_WALL]);
   return [{ sign: "storage", segments: [{ ax, ay, bx, by }] }];
+};
+
+const easterEggs = () => {
+  return [
+    {
+      id: "disk-server-rack",
+      segments: [
+        segment([serverRack.u2, serverRack.v1], [serverRack.u2, serverRack.v2]),
+        segment([serverRack.u1, serverRack.v2], [serverRack.u2, serverRack.v2]),
+      ],
+    },
+  ];
 };
 
 export const storageWing = {
@@ -333,4 +406,5 @@ export const storageWing = {
   flats,
   sprites: [],
   terminals,
+  easterEggs,
 };
