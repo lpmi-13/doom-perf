@@ -483,8 +483,17 @@ const scenarioTelemetry = (
 };
 
 const start = async () => {
-  const engineResponse = await fetch(engineScriptUrl, { method: "HEAD" });
-  if (engineResponse.ok) {
+  // Probe for the engine bundle by importing it directly rather than with a
+  // blocking HEAD round trip. A missing bundle (dev without a built engine)
+  // throws here and we fall back to the pure-TS stub renderer; the import is
+  // module-cached, so bootstrapEngine reuses it below without a second fetch.
+  let engineAvailable = true;
+  try {
+    await import(engineScriptUrl);
+  } catch {
+    engineAvailable = false;
+  }
+  if (engineAvailable) {
     attachAudioUnlock();
     preloadAssetSound(interactionSound);
     const terminal = createTerminalOverlay();
@@ -893,13 +902,15 @@ const start = async () => {
       { once: true }
     );
 
-    const wasmResponse = await fetch(engineWasmUrl, { method: "HEAD" });
     await bootstrapEngine({
       wadUrl,
       canvas,
       audio,
       engineScriptUrl,
-      wasmUrl: wasmResponse.ok ? engineWasmUrl : undefined,
+      // The versioned WASM is built and stamped alongside doom.js, so it is
+      // always present when the engine is; pass it directly (no HEAD probe) to
+      // preserve the cache-busted URL.
+      wasmUrl: engineWasmUrl,
       extraWads: [doomPerfMapWad],
       args: ["doom", "-file", doomPerfMapWad.name],
       onStatus: (message) => console.log(message),

@@ -1,0 +1,18 @@
+diff --git a/r_segs.c b/r_segs.c
+index 0e0d6ca..d955716 100644
+--- a/r_segs.c
++++ b/r_segs.c
+@@ -57,8 +57,11 @@ static void R_DoomPerfBeginColumn (int texturecolumn, int surface)
+     tag = curline->linedef->tag;
+     if (tag >= 101 && tag <= 116)
+ 	doomperf_cpu_column_display = tag - 100;
+-    else if (tag >= 121 && tag <= 123)
+-	// LOAD room gauges: encode display as 17/18/19 (gauge 0/1/2 = 1m/5m/15m).
++    else if (surface == 2 && tag >= 121 && tag <= 123)
++	// LOAD room gauges: the gauge fill is the lower texture of the two-sided
++	// pillar line, so gate on the bottom surface. Without this gate the same
++	// fill is also painted onto the upper-wall seal above each pillar, reading
++	// as a duplicate band. Display 17/18/19 (gauge 0/1/2 = 1m/5m/15m).
+ 	doomperf_cpu_column_display = tag - 104;
+     else if (surface == 1 && tag >= 660 && tag <= 662)
+ 	// Storage media-pit latency gauges: the niche back/side walls are

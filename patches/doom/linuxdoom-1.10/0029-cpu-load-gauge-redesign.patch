@@ -1,0 +1,82 @@
+diff --git a/r_draw.c b/r_draw.c
+index 9c0759a..6b650c4 100644
+--- a/r_draw.c
++++ b/r_draw.c
+@@ -159,7 +159,7 @@ void R_DrawColumn (void)
+ 							 (frac>>FRACBITS)&127)];
+ 	else if (doomperf_cpu_column_display >= 17)
+ 	    *dest = dc_colormap[R_DoomPerfCpuGaugePixel(doomperf_cpu_column_display - 17,
+-							(frac>>FRACBITS)&127)];
++							(frac>>FRACBITS)&255)];
+ 	else if (doomperf_cpu_column_display)
+ 	    *dest = dc_colormap[R_DoomPerfCpuStreakPixel((frac>>FRACBITS)&127)];
+ 	else
+@@ -679,6 +679,36 @@ static byte R_DoomPerfCpuStreakPixel (int ty)
+ // count, so the "load == cores" line sits at the middle (ty 64). Filled pixels
+ // below that line are green (headroom), above it red (overcommit); the line and
+ // the left/right edges are framed bright.
++// Doom Perf: sim-aware load average in milli-units (load * 1000) for gauge
++// 0/1/2 = 1m/5m/15m. Mirrors DoomPerf_EffectiveLoadValue in the browser adapter
++// (which feeds the uptime terminal popup) so the gauges and the popup agree: in
++// live mode this is the raw load pushed from the browser, but under a sim the
++// canned scenario drives it. Without this the gauges read the idle live value
++// even while a saturation sim is running.
++static int R_DoomPerfLoadMilli (int gauge)
++{
++    switch (doomperf_sim_mode)
++    {
++      case 1:
++	if (gauge == 0) return 7600 + ((leveltime * 5) % 400);
++	if (gauge == 1) return 7000 + ((leveltime * 3) % 350);
++	return 6200 + ((leveltime * 2) % 300);
++      case 2:
++	if (gauge == 0) return 14800 + ((leveltime * 5) % 800);
++	if (gauge == 1) return 13800 + ((leveltime * 3) % 700);
++	return 12600 + ((leveltime * 2) % 600);
++      default:
++	return (gauge >= 0 && gauge <= 2) ? doomperf_load[gauge] : 0;
++    }
++}
++
++// Vertical load-average gauge for the three pillars in the LOAD room. gauge
++// 0/1/2 = 1m/5m/15m. The pillar's full 256-tall face fills from the floor
++// (ty 255) proportional to the load average; full scale is 2x the logical CPU
++// count, so the "load == cores" saturation line sits at the middle (ty 128,
++// world height 128 -- the top of the old half-height panel). Filled pixels below
++// that line are green (headroom), above it red (overcommit); the saturation line
++// itself is always drawn bright as the gauge's key landmark.
+ static byte R_DoomPerfCpuGaugePixel (int gauge, int ty)
+ {
+     int			load;
+@@ -686,7 +716,6 @@ static byte R_DoomPerfCpuGaugePixel (int gauge, int ty)
+     int			max_milli;
+     int			fill_ty;
+     int			threshold_ty;
+-    int			tx;
+ 
+     if (gauge < 0 || gauge > 2)
+ 	return DOOMPERF_CPU_CORE_DARK;
+@@ -695,18 +724,15 @@ static byte R_DoomPerfCpuGaugePixel (int gauge, int ty)
+     if (cores < 1)
+ 	cores = 1;
+     max_milli = cores * 2 * 1000;
+-    load = doomperf_load[gauge];
++    load = R_DoomPerfLoadMilli(gauge);
+     if (load > max_milli)
+ 	load = max_milli;
+ 
+-    tx = doomperf_cpu_column_texture_x & 127;
+-    if (tx < 3 || tx > 124)
+-	return DOOMPERF_CPU_CORE_FRAME;
+-
+-    fill_ty = 127 - (load * 127) / max_milli;
+-    threshold_ty = 127 - (cores * 1000 * 127) / max_milli;
++    fill_ty = 255 - (load * 255) / max_milli;
++    threshold_ty = 255 - (cores * 1000 * 255) / max_milli;
+ 
+-    if (ty == threshold_ty)
++    // 2px bright saturation line (load == cores), always visible as the landmark.
++    if (ty == threshold_ty || ty == threshold_ty + 1)
+ 	return DOOMPERF_CPU_CORE_FRAME;
+     if (ty < fill_ty)
+ 	return DOOMPERF_CPU_CORE_DARK;

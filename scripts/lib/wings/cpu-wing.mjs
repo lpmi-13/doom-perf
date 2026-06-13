@@ -107,6 +107,17 @@ const cpuWallSigns = [
 const coreInscriptionNames = Array.from({ length: 4 }, (_, k) => `DPFCOR${k}`);
 const rqInscriptionNames = Array.from({ length: 3 }, (_, k) => `DPFRQ${k}`);
 const loadInscriptionNames = Array.from({ length: 3 }, (_, k) => `DPFLD${k}`);
+// Per-gauge floor nameplates inscribed in the walkway just west of each LOAD
+// pillar, so the player can tell which column is which timescale on approach.
+// Each is one 64x64 east-facing inscription cell (floor flats must sit on the
+// 64-grid), laid contiguously and snapped to the cell that best fronts its gauge
+// (5m lands dead-centre; the outer two are pulled ~32u inward by the grid). The
+// flat pixel data is generated in `flats` below.
+const loadGaugeNameplates = [
+  { v1: 1024, inscription: makeInscription("DPLB15", "15M", "east", 1) }, // load-gauge-15m
+  { v1: 1088, inscription: makeInscription("DPLB05", "5M", "east", 1) },  // load-gauge-5m
+  { v1: 1152, inscription: makeInscription("DPLB01", "1M", "east", 1) },  // load-gauge-1m
+];
 
 const build = (ctx) => {
   const {
@@ -374,25 +385,27 @@ const build = (ctx) => {
     });
     // ===== RIGHT room: LOAD — three vertical load-average gauges + sky window.
     // The player enters walking east, so left->right reads north->south (high->
-    // low v): 1m, 5m, 15m. Each gauge is a 128-tall pillar whose lower wall is
-    // filled from the bottom by patch 0017 (lineTags 121/122/123). Band edges
-    // reuse existing global v-cuts so the carving adds no cuts across the core
-    // chamber (only the u=512/640 cuts, which stay east of it).
+    // low v): 1m, 5m, 15m. Each gauge is a full-height (256-tall, floor->ceiling)
+    // pillar whose floor-facing lower wall fills from the bottom by patches 0017/
+    // 0029 (lineTags 121/122/123). Full scale is 2x cores; the load==cores
+    // saturation line lands at the mid-height (world 128). Band edges reuse
+    // existing global v-cuts so the carving adds no cuts across the core chamber
+    // (only the u=512/640 cuts, which stay east of it).
     const loadWalk = {
       ...base,
       kind: "load-room",
       wall: "METAL1",
       floorFlat: "FLOOR4_8",
       ceilingFlat: "CEIL5_1",
-      ceiling: 224,
+      ceiling: 256,
       light: 176,
     };
     const loadGauge = {
       ...base,
       kind: "load-gauge",
       wall: cpuCoreWallTexture,
-      floor: 128,
-      ceiling: 128,
+      floor: 256,
+      ceiling: 256,
       floorFlat: "FLOOR0_1",
       ceilingFlat: "CEIL5_1",
       light: 176,
@@ -401,7 +414,18 @@ const build = (ctx) => {
     const loadGU1 = 570, loadGU2 = 698;            // gauge column (128 wide), centred
     const loadTermU1 = 506, loadTermU2 = 762;      // terminal (256 wide), centred
     const loadGaugeV2 = 1240;                       // south gauge band top
-    areaRect(direction, "load-walk-w", { u1: cpuRoomBounds.load.u1, v1: cpuRoomBounds.load.v1, u2: loadGU1, v2: loadGaugeV2 }, loadWalk);
+    // West walkway in front of the gauges, split so the per-gauge floor
+    // nameplates (a 64-deep u-strip at u448..512) can be inscribed without
+    // overlapping sectors. West/east strips flank the nameplate strip; the
+    // nameplate strip itself is plain walk except for the three label cells.
+    const loadLabelU1 = 448, loadLabelU2 = 512;
+    areaRect(direction, "load-walk-w-west", { u1: cpuRoomBounds.load.u1, v1: cpuRoomBounds.load.v1, u2: loadLabelU1, v2: loadGaugeV2 }, loadWalk);
+    areaRect(direction, "load-walk-w-strip-n", { u1: loadLabelU1, v1: cpuRoomBounds.load.v1, u2: loadLabelU2, v2: loadGaugeNameplates[0].v1 }, loadWalk);
+    loadGaugeNameplates.forEach(({ v1, inscription }, k) => {
+      areaRect(direction, `load-nameplate-${k}`, { u1: loadLabelU1, v1, u2: loadLabelU2, v2: v1 + 64 }, { ...loadWalk, floorFlat: inscription.names[0] });
+    });
+    areaRect(direction, "load-walk-w-strip-s", { u1: loadLabelU1, v1: loadGaugeNameplates[loadGaugeNameplates.length - 1].v1 + 64, u2: loadLabelU2, v2: loadGaugeV2 }, loadWalk);
+    areaRect(direction, "load-walk-w-east", { u1: loadLabelU2, v1: cpuRoomBounds.load.v1, u2: loadGU1, v2: loadGaugeV2 }, loadWalk);
     areaRect(direction, "load-margin-s", { u1: loadGU1, v1: cpuRoomBounds.load.v1, u2: loadGU2, v2: 1000 }, loadWalk);
     areaRect(direction, "load-gauge-15m", { u1: loadGU1, v1: 1000, u2: loadGU2, v2: 1048 }, { ...loadGauge, lineTag: 123 });
     areaRect(direction, "load-gap-1", { u1: loadGU1, v1: 1048, u2: loadGU2, v2: 1096 }, loadWalk);
@@ -492,6 +516,7 @@ const flats = [
   ...makeInscription("DPFCOR", "CPU CORES", "north", 4).flats,
   ...makeInscription("DPFRQ", "RUN QUEUE", "west", 3).flats,
   ...makeInscription("DPFLD", "LOAD", "east", 3).flats,
+  ...loadGaugeNameplates.flatMap(({ inscription }) => inscription.flats),
 ];
 
 // Sprite replacements: each PWAD-replaces an unused IWAD item sprite by name.
