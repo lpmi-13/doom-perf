@@ -6,7 +6,6 @@ import {
   labelTextureSize,
   terminalTextureSize,
   buildLabelPatch,
-  makeInscription,
   FLAT_DIM,
 } from "./lib/textures.mjs";
 import { createMapBuilder } from "./lib/map-builder.mjs";
@@ -121,48 +120,22 @@ const { addThing, addRect, areaRect, addAreaThing, compile } = createMapBuilder(
 // ===== Atrium (spawn hub) =====
 // Each cardinal wall now wears its wing's identity instead of a uniform STARTAN3
 // box. The perimeter wall takes the wing's own texture (resolved per-edge by
-// sideResource in sideTextures), the hub-facing door plate is styled per wing
-// (labelStyle), and a door-width threshold band in front of each door is
-// inscribed with the wing's word in its signature colour. Geometry-wise the hub
-// is decomposed into a centre cross (centre + four inner arms) + four corner
-// quadrants (these carry the one-sided perimeter walls) + the four inscription
-// bands. Every cell is plain hub floor except the bands; all internal seams are
-// flush (identical floor/ceiling), so only the floor flat and the perimeter wall
-// texture vary across the hub.
+// sideResource in sideTextures), and the hub-facing door plate is styled per
+// wing (labelStyle). Geometry-wise the hub is decomposed into a centre cross
+// (centre + four arms) + four corner quadrants; all cells use the plain hub
+// floor and all internal seams are flush (identical floor/ceiling), so only the
+// perimeter wall texture varies across the hub.
 const hubBase = { kind: "hub", floorFlat: "FLOOR4_8", ceilingFlat: "CEIL3_5", wall: "STARTAN3", light: 224 };
-const bandDepth = 64;
-const bandInner = hubRadius - bandDepth; // 320: inner edge of the threshold bands
 const half = doorWidth / 2; // 96: half door width
 addRect("hub-centre", { x1: -half, y1: -half, x2: half, y2: half }, hubBase);
-addRect("hub-inner-n", { x1: -half, y1: half, x2: half, y2: bandInner }, hubBase);
-addRect("hub-inner-s", { x1: -half, y1: -bandInner, x2: half, y2: -half }, hubBase);
-addRect("hub-inner-e", { x1: half, y1: -half, x2: bandInner, y2: half }, hubBase);
-addRect("hub-inner-w", { x1: -bandInner, y1: -half, x2: -half, y2: half }, hubBase);
+addRect("hub-inner-n", { x1: -half, y1: half, x2: half, y2: hubRadius }, hubBase);
+addRect("hub-inner-s", { x1: -half, y1: -hubRadius, x2: half, y2: -half }, hubBase);
+addRect("hub-inner-e", { x1: half, y1: -half, x2: hubRadius, y2: half }, hubBase);
+addRect("hub-inner-w", { x1: -hubRadius, y1: -half, x2: -half, y2: half }, hubBase);
 addRect("hub-corner-ne", { x1: half, y1: half, x2: hubRadius, y2: hubRadius }, hubBase);
 addRect("hub-corner-nw", { x1: -hubRadius, y1: half, x2: -half, y2: hubRadius }, hubBase);
 addRect("hub-corner-se", { x1: half, y1: -hubRadius, x2: hubRadius, y2: -half }, hubBase);
 addRect("hub-corner-sw", { x1: -hubRadius, y1: -hubRadius, x2: -half, y2: -half }, hubBase);
-// Inscription threshold bands. Built with areaRect(direction) + makeInscription
-// (facing = direction) exactly like the wing foyers, so the per-facing cell
-// mirroring matches (north/east/west read min-u-first; south is reversed). The
-// band's outer edge (v = hubRadius) abuts the wing door's inner edge, so the
-// name sits right at the threshold the player crosses.
-const hubBandCols = doorWidth / 64; // 3 cells of 64 spanning the door width
-const hubBands = directions.map((direction) => {
-  const resource = directionResource[direction];
-  const config = resourceConfigs[resource];
-  const prefix = `DPA${resource[0].toUpperCase()}`; // DPAC / DPAM / DPAS / DPAN
-  const inscription = makeInscription(prefix, config.label, direction, hubBandCols, config.labelColor);
-  inscription.names.forEach((flatName, k) => {
-    const u1 = direction === "south" ? half - 64 * (k + 1) : -half + k * 64;
-    areaRect(direction, `hub-band-${direction}-${k}`, { u1, v1: bandInner, u2: u1 + 64, v2: hubRadius }, {
-      ...hubBase,
-      floorFlat: flatName,
-    });
-  });
-  return inscription;
-});
-const atriumFlats = hubBands.flatMap((inscription) => inscription.flats);
 
 
 // The four self-registering wing descriptors. `wings` order fixes the order in
@@ -547,7 +520,6 @@ const mapLumps = [
   lump("F_START"),
   ...iwadFlats,
   ...inscriptionFlats,
-  ...atriumFlats,
   lump("F_END"),
   lump("E1M1"),
   lump("THINGS", map.things),

@@ -377,8 +377,6 @@ const build = (ctx) => {
 
   addAreaThing(direction, 46, -432, 928);
   addAreaThing(direction, 46, 432, 928);
-  addAreaThing(direction, 46, -496, 1296);
-  addAreaThing(direction, 46, 496, 1296);
 };
 
 const textures = [

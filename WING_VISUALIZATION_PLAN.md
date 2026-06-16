@@ -142,40 +142,24 @@ Visual intuition:
   uses memory for cache.
 - `MemAvailable` should drive the danger state, not raw `MemFree`.
 
-### Memory saturation: pressure pads, reclaim pumps, and friction zones
+### Memory saturation: reclaim pumps, swap channels, and friction zones
 
 Memory saturation should feel like the machine is spending time reclaiming pages
-or stalled on memory availability. Two complementary instruments are recommended.
+or losing useful work to memory scarcity. The baseline design should use
+`/proc/meminfo` and `/proc/vmstat`, because those counters are broadly available
+in small VMs, containers, and Firecracker-style environments. Two complementary
+instruments are recommended.
 
-#### Option A: PSI pressure pads
-
-**Visual:** two pressure strips labeled `PSI SOME` and `PSI FULL`.
-
-- `some` pressure raises an amber pad and pulses the room lights.
-- `full` pressure raises a red pad, causes stronger shaking, and can unlock the
-  friction lesson area.
-
-Useful source:
-
-```bash
-cat /proc/pressure/memory
-```
-
-Teaching values:
-
-```text
-some avg10 = time at least one task was stalled on memory
-full avg10 = time all non-idle tasks were stalled on memory
-```
-
-#### Option B: reclaim/swapping machine
+#### Option A: reclaim/swapping machine
 
 **Visual:** side channels that pump pages into and out of swap/reclaim lanes.
 
-- `pswpin` / `pswpout` can animate left/right swap channels.
-- `pgscan` / `pgsteal` can animate reclaim claws or page sweepers.
-- High scan with poor steal can look like a frantic sweeper that finds little to
+- `pswpin` / `pswpout` animate left/right swap channels.
+- `pgscan` / `pgsteal` animate reclaim claws or page sweepers.
+- High scan with poor steal looks like a frantic sweeper that finds little to
   reclaim.
+- Direct reclaim and allocation-stall counters, when present, can drive stronger
+  vibration because they represent foreground work getting caught in reclaim.
 
 Useful source:
 
@@ -189,6 +173,32 @@ Teaching values:
 ```text
 swap activity = delta(pswpin + pswpout)
 reclaim activity = delta(pgscan_* + pgsteal_*)
+direct reclaim = delta(pgscan_direct + allocstall_*) when exposed
+```
+
+#### Option B: availability gates and major-fault sparks
+
+**Visual:** a set of gates between the page-bank greenhouse and the reclaim
+machine.
+
+- Low `MemAvailable / MemTotal` closes the gates and darkens the reserve pool.
+- Major faults create brief sparks at the gates.
+- The room should not panic on low `MemFree` alone; the dangerous state is low
+  available memory combined with reclaim, swap, major faults, or direct reclaim.
+
+Useful source:
+
+```bash
+cat /proc/meminfo
+cat /proc/vmstat
+```
+
+Teaching values:
+
+```text
+available ratio = MemAvailable / MemTotal
+major fault activity = delta(pgmajfault)
+scarcity warning = low available ratio + sustained reclaim/swap/fault activity
 ```
 
 ### Memory errors: OOM-kill monster encounter
@@ -225,39 +235,45 @@ memory exhaustion, not normal high utilization.
 ### Best use of a 25% movement-speed friction area
 
 A friction zone is most intuitive when it represents **saturation**, because the
-player personally feels waiting/stall time. Recommended memory mapping:
+player personally feels slowdown from reclaim or swapping. Recommended memory
+mapping:
 
 - **Resource:** memory
 - **Signal:** saturation
-- **Metric:** memory PSI `full avg10` or `some avg10`
-- **Behavior:** when pressure is high, a “reclaim tar pit” slows the player to
-  25% speed inside the marked zone.
+- **Metric:** a memory saturation score from `MemAvailable`, reclaim deltas,
+  swap deltas, major faults, and direct reclaim counters when exposed.
+- **Behavior:** when the score remains high for several samples, a "reclaim tar
+  pit" slows the player to 25% speed inside the marked zone. Use hysteresis so it
+  clears only after the score has stayed low for a short window.
 
 Why this works:
 
-- PSI literally measures time tasks are stalled due to resource pressure.
-- A slow movement zone makes “stall time” bodily obvious.
+- The score uses counters that are available in the target VM environments.
+- A slow movement zone makes reclaim/swap overhead bodily obvious.
 - It avoids confusing high memory utilization with badness; a full page cache is
-  often healthy, but memory stalls are not.
+  often healthy, but reclaim churn, swap activity, and major faults are not.
 
-Alternative mappings if memory PSI is unavailable:
+Suggested score inputs:
 
-1. **Storage saturation:** slow “I/O mud” driven by disk `await` or queue depth.
-   This is also intuitive because blocked I/O often makes applications feel slow.
-2. **CPU saturation:** a crowded scheduler hallway driven by run queue pressure.
-   This is less ideal because CPU saturation is already represented by queued
-   task orbs in the CPU wing.
-3. **Network saturation:** a choke tunnel driven by interface backlog/drops. This
-   is visually good, but player movement slowdown can be confused with network
-   throughput rather than wait time.
+```text
+memory saturation score =
+  low MemAvailable ratio
+  + sustained delta(pswpin + pswpout)
+  + sustained delta(pgscan_* + pgsteal_*)
+  + sustained delta(pgmajfault)
+  + direct reclaim / allocstall deltas when exposed
+```
 
-### PSI availability and fallback impact
+Normalize deltas per second and smooth over a short rolling window so one noisy
+sample causes a flash or spark, not a full movement penalty.
 
-`/proc/pressure/{cpu,io,memory}` should be treated as an optional high-fidelity
-saturation source, not a hard requirement. Some Firecracker or minimal VM images
-may run kernels that omit PSI, disable it at boot, or do not expose the files in
-the environment where the telemetry collector runs. If PSI is missing, the plan
-should degrade gracefully rather than removing the memory pressure lesson.
+### Portable source policy
+
+Do not make optional kernel pressure telemetry part of the required collector
+contract. Some Firecracker or minimal VM images omit it, disable it at boot, or
+do not expose it where the telemetry collector runs. The baseline plan should
+run on the counters below and should keep the memory pressure lesson available
+without special kernel support.
 
 Impact on the visuals:
 
@@ -265,28 +281,30 @@ Impact on the visuals:
   `/proc/meminfo` values such as `MemAvailable`, `Cached`, and `SReclaimable`.
 - The **OOM monster** display is unaffected because it is driven by
   `/proc/vmstat` `oom_kill` deltas and process RSS snapshots.
-- The **PSI pads** become either disabled/gray with a terminal note saying
-  `PSI unavailable`, or they switch to an approximate fallback mode.
+- The **pressure pads** should be reclaim/swap pads, not kernel pressure pads.
+  Their labels should point at `VMSTAT RECLAIM`, `VMSTAT SWAP`, and
+  `MEMAVAILABLE`.
 - The **25% friction zone** remains valid as a saturation lesson, but its
-  trigger becomes a source-prioritized policy instead of a PSI-only rule.
+  trigger is the portable saturation score above.
 
 Recommended memory saturation source priority:
 
-1. **Best:** `/proc/pressure/memory` `some` / `full` `avg10`, when present.
-2. **Fallback A:** `/proc/vmstat` reclaim and swap deltas, especially
+1. **Primary:** `/proc/vmstat` reclaim and swap deltas, especially
    `pswpin`, `pswpout`, `pgscan_*`, and `pgsteal_*`. Use this to animate reclaim
    pumps and swap channels, and enable the friction zone only for sustained high
    activity.
-3. **Fallback B:** `/proc/meminfo` availability thresholds, especially low
-   `MemAvailable / MemTotal`, combined with major fault or swap activity if
-   exposed. This is less precise because low available memory alone is not the
-   same as stall pressure.
-4. **Fallback C:** simulation mode. Keep the teaching interaction available even
-   when the live VM cannot expose a safe pressure signal.
+2. **Primary assist:** `/proc/meminfo` availability thresholds, especially low
+   `MemAvailable / MemTotal`, combined with major fault, swap, reclaim, or direct
+   reclaim activity if exposed.
+3. **Optional enrichments:** `vmstat 1`, process RSS snapshots, and cgroup memory
+   counters when the lab already has a cgroup-specific view.
+4. **Simulation mode:** keep the teaching interaction available even when the
+   live VM cannot expose a safe saturation signal.
 
 The UI should make the source explicit. A terminal line like
-`SAT SOURCE: PSI`, `SAT SOURCE: VMSTAT RECLAIM`, or `SAT SOURCE: SIM` prevents
-learners from assuming all environments expose the same Linux counters.
+`SAT SOURCE: VMSTAT RECLAIM`, `SAT SOURCE: MEMINFO+VMSTAT`, or
+`SAT SOURCE: SIM` prevents learners from assuming all environments expose the
+same Linux counters.
 
 ## Storage Wing: Foundry, Queue, Latency, and Fault Alarms
 
@@ -451,7 +469,7 @@ multiple loud charts for the same concept.
 
 Saturation is the hardest USE signal for learners. It should be felt as queues,
 pressure, bottlenecks, vibration, or movement slowdown. The proposed 25% movement
-zone is best used for PSI memory pressure or I/O wait/latency.
+zone is best used for memory reclaim/swap pressure or I/O wait/latency.
 
 ### 3. Make errors event-driven
 
@@ -465,14 +483,14 @@ Every instrument should have a nearby terminal or wall label that ties the Doom
 metaphor back to Linux:
 
 - CPU: `mpstat`, `vmstat`, `/proc/stat`, `/proc/loadavg`
-- Memory: `free -m`, `/proc/meminfo`, `/proc/pressure/memory`, `/proc/vmstat`
+- Memory: `free -m`, `/proc/meminfo`, `/proc/vmstat`
 - Storage: `iostat -xz`, `/proc/diskstats`
 - Network: `/proc/net/dev`, `ip -s link`, `tc -s qdisc`
 
 ### 5. Teach good interpretations, not common myths
 
-- Memory: low `MemFree` is not necessarily bad; low `MemAvailable` and PSI stalls
-  are more meaningful.
+- Memory: low `MemFree` is not necessarily bad; low `MemAvailable` combined with
+  reclaim, swap, major faults, or direct reclaim is more meaningful.
 - CPU: load average is useful but less immediate than run queue pressure.
 - Storage: high throughput is not inherently bad; high latency/queueing is what
   users feel.
@@ -486,8 +504,9 @@ metaphor back to Linux:
    primary instruments.
 2. **Build the memory OOM scene.** Add process objects, RSS size/color grammar,
    and the OOM monster one-shot event from `oom_kill` deltas.
-3. **Add the memory friction/pressure lesson.** Drive a 25% speed zone from memory
-   PSI saturation, with fallback simulation if PSI is missing.
+3. **Add the memory friction/pressure lesson.** Drive a 25% speed zone from the
+   portable memory saturation score, with simulation fallback if live counters
+   are missing.
 4. **Animate storage queue and latency.** Make request crates and latency gauges
    the dominant storage saturation lesson.
 5. **Animate network packet flow and drops.** Flow density teaches utilization;
