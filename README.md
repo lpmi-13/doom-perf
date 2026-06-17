@@ -1,54 +1,83 @@
 # Doom Perf
 
-Doom Perf is a fork of the original `doom-typescript` browser port. The base
-project brought the open-source Doom engine into the browser with TypeScript,
-WebAssembly, Web Audio, and Tone.js. This fork keeps that run/build shape, then
-amends the game into a USE-methodology performance diagnostics lab.
+Doom Perf is a fork of the original
+[doom-typescript](https://github.com/pascalvanderheiden/doom-typescript)
+browser port. The base project brought the open-source Doom engine into the
+browser with TypeScript, WebAssembly, Web Audio, and Tone.js. This fork keeps
+that run/build shape, then amends the game into a USE-methodology performance
+diagnostics lab.
 
 The current goal is not to make a normal Doom game. It is to turn Doom into an
 explorable systems observability space where CPU, memory, storage, and network
 utilization, saturation, and errors become Doom rooms, props, gauges, and HUD
 signals.
 
-![Doom running in the browser](doom-with-music.png)
+![Title screen](images/loading-screen.png)
+
+![CPU door](images/cpu-door.png)
+
+![CPU cores](images/cpu-cores.png)
+
+![in-game terminal screen](images/in-game-terminal.png)
+
+![decorative elements](images/server-elements.png)
 
 ## Current Status
 
-The project currently runs as a browser-hosted Doom experience using the same
-esbuild and `public/` hosting flow as the fork source. The default runtime path
-loads the patched Doom WASM engine, the redistributable Freedoom Phase 1
+The project currently runs as a browser-hosted Doom diagnostics lab using the
+same esbuild and `public/` hosting flow as the fork source. The default runtime
+path loads the patched Doom WASM engine, the redistributable Freedoom Phase 1
 `freedoom1.wad` IWAD, and the generated Doom Perf map PWAD.
 
 What currently works:
 
-- Browser Doom host served from `public/index.html`.
+- Browser launcher at `public/index.html` and the full-screen game host at
+  `public/game/index.html`.
 - TypeScript bundle built from `src/index.ts` into `public/dist/index.js`.
 - Patched Doom WASM engine artifacts committed at `public/engine/doom.js` and
   `public/engine/doom.wasm`.
 - Generated Doom Perf map PWAD at `public/maps/doomperf-lab.wad`.
+- Central atrium with four themed resource wings: CPU, memory, disk, and
+  network.
 - Go telemetry SSE service at `http://127.0.0.1:9999/telemetry`.
-- Telemetry client in the browser that pushes live CPU values into the WASM
-  engine through exported `DoomPerf_*` functions.
+- Telemetry client in the browser that normalizes live/simulated resource data
+  and pushes live CPU, memory, and storage values into the WASM engine through
+  exported `DoomPerf_*` functions.
 - Doom menu flow narrowed to Doom Perf's data-source selection.
-- Three current data-source scenarios from the splash/menu flow:
+- Nine current data-source choices from the splash/menu flow:
   - `LIVE STATS`
   - `SIM: HIGH CPU UTILIZATION`
   - `SIM: HIGH CPU SATURATION`
-- CPU room instruments for per-core utilization, run queue pressure, and load
-  average pressure.
-- Interactive terminal overlay near CPU wall terminals for core, run queue, and load
-  readouts.
+  - `SIM: HIGH DISK UTILIZATION`
+  - `SIM: HIGH DISK SATURATION`
+  - `SIM: HIGH MEMORY UTILIZATION`
+  - `SIM: HIGH MEMORY SATURATION`
+  - `SIM: HIGH NETWORK UTILIZATION`
+  - `SIM: HIGH NETWORK SATURATION`
+- CPU wing instruments for per-core utilization, run queue pressure, blocked
+  I/O-wait tasks, and load average pressure.
+- Memory wing instruments for page-bank utilization, swap/PSI saturation, and
+  OOM error state.
+- Storage wing instruments for disk utilization, queue depth, service latency,
+  and a scrolling metrics dashboard.
+- Network wing map structure for RX/TX lanes, NIC bays, choke, drops, errors,
+  and a `/proc/net/dev` terminal.
+- Interactive terminal overlays for CPU (`mpstat`, `vmstat`, `uptime`), memory
+  (`free`, top RSS, swap, PSI, OOM), storage (`iostat -x`), and network
+  (`/proc/net/dev`) readouts.
+- Touch-device support for menu navigation, movement, and the USE/interact
+  prompt.
+- Disk server-rack easter egg that plays an interaction sting and spikes the
+  storage metrics dashboard.
 
 What is still left:
 
-- Complete memory, storage, and network scenarios beyond the current CPU-focused
-  work.
-- Add telemetry-driven memory, storage, and network room instruments in the
-  patched WASM renderer.
-- Expand interactive terminal overlays beyond CPU displays.
-- Refine the CPU wing visual language per `VISUAL_REVAMP.md`, especially
-  separating metric-bearing instruments from decorative Doom atmosphere.
-- Add per-room music or audio cues.
+- Add live engine-driven visual instruments for the network wing. Network
+  telemetry and terminals exist today, but the RX/TX lanes, choke, drop basin,
+  and error drain are still static map geometry.
+- Continue refining resource-wing visual language, especially making
+  metric-bearing instruments distinct from decorative Doom atmosphere.
+- Add more per-room music or audio cues beyond the current interaction sting.
 - Clean up strict TypeScript checking in the copied browser sources. The
   supported project build is currently `npm run build`, which uses esbuild.
 
@@ -106,6 +135,10 @@ http://localhost:8000/?telemetry=off
 
 Combat and weapon switching are intentionally disabled by engine patches. Doom
 Perf is currently an observational lab, not a combat game.
+
+On touch devices, the browser host adds menu buttons on the title/menu screens,
+a movement pad in-game, and an on-screen USE/interact prompt near doors and
+terminal screens.
 
 ## Data Sources
 
@@ -258,6 +291,18 @@ truth for changes to the Doom C engine:
 | `0015-cpu-pillar-sink.patch` | Raise or sink CPU pillars based on available logical CPUs. |
 | `0016-cpu-core-pads.patch` | Add per-core colored pads under CPU pillars. |
 | `0017-cpu-load-gauges.patch` | Add load average gauges for 1m, 5m, and 15m pressure. |
+| `0018-run-queue-particles.patch` | Add animated runnable-task and blocked I/O-wait orbs in the CPU run-queue room. |
+| `0019-remove-use-grunt.patch` | Suppress the original USE wall-bump grunt around terminal screens. |
+| `0020-disk-sim-modes.patch` | Add disk utilization and saturation simulation menu modes. |
+| `0021-disk-latency-gauges.patch` | Add storage service-latency wall gauges driven by `await`. |
+| `0022-disk-platter-pulse.patch` | Pulse storage platter rings from disk utilization. |
+| `0023-disk-queue-channel.patch` | Add storage queue-depth floor blocks driven by `aqu-sz`. |
+| `0024-memory-sim-modes.patch` | Add memory utilization and saturation simulation menu modes. |
+| `0025-memory-page-bank.patch` | Animate memory page cells, swap channels, PSI pads, and the OOM alcove. |
+| `0026-network-sim-modes.patch` | Add paged data-source menu support and network simulation modes. |
+| `0027-disk-metrics-dashboard.patch` | Add the storage metrics dashboard with scrolling latency, IOPS, and read graphs. |
+| `0028-cpu-load-gauge-single-band.patch` | Restrict CPU load gauge rendering to the intended wall surface. |
+| `0029-cpu-load-gauge-redesign.patch` | Redesign CPU load gauges as full-height, sim-aware utilization/saturation bars. |
 
 Rebuild the engine from a clean Doom source checkout:
 
@@ -277,9 +322,18 @@ public/maps/doomperf-lab.wad
 ```
 
 The map currently provides a central atrium and labeled CPU, memory, storage,
-and network wings. CPU is the implemented telemetry-driven wing. The other
-resource wings are present as map structure and labels, but their full
-telemetry-driven instruments are still planned.
+and network wings.
+
+- CPU is fully instrumented with a core chamber, run-queue subway, blocked-task
+  pen, and load-average gauge room.
+- Memory is instrumented with a page bank, cache reservoir, swap channels, PSI
+  pads, an OOM alcove, and five terminal read points.
+- Storage is instrumented with read/write bays, a service queue channel, a
+  pulsing platter, latency gauges, a scrolling metrics dashboard, and an
+  `iostat` terminal.
+- Network has its full static wing layout and terminal: RX/TX lanes, NIC bays,
+  choke, drop basin, error drain, and `/proc/net/dev` readout. Live renderer
+  hooks for those network surfaces are the main remaining resource-wing gap.
 
 Regenerate the map with:
 
@@ -296,16 +350,24 @@ npm run build:map
 | `npm run dev:telemetry` | Run the Go telemetry service and esbuild web host together. |
 | `npm run build:map` | Regenerate `public/maps/doomperf-lab.wad`. |
 | `npm run build:engine` | Rebuild `public/engine/doom.js` and `public/engine/doom.wasm`. |
+| `npm run test:go` | Run Go telemetry service tests. |
+| `npm run typecheck` | Run TypeScript checking. This is stricter than the supported esbuild bundle path. |
+| `npm run check` | Run typecheck, Go tests, and the browser bundle build. |
 
 ## Repository Map
 
 | Path | Role |
 | --- | --- |
 | `src/index.ts` | Browser entry point: WASM engine, telemetry, and UI wiring. |
-| `src/telemetry.ts` | Telemetry normalization and terminal overlay rendering. |
+| `src/telemetry.ts` | Public telemetry exports for the browser entry point. |
+| `src/telemetry/` | Telemetry source resolution, SSE client, normalization, and shared types. |
+| `src/ui/terminalOverlay.ts` | Linux-command-style terminal overlay renderers for the resource wings. |
+| `src/ui/movementPad.ts` | Touch movement controls. |
+| `src/ui/menuControls.ts` | Touch menu controls. |
 | `src/engine_bootstrap.ts` | WASM engine bootstrap and data file mounting. |
 | `cmd/telemetry/main.go` | Linux SSE telemetry service. |
 | `scripts/build-doomperf-map.mjs` | Project PWAD generator. |
+| `scripts/lib/wings/` | Self-contained CPU, memory, storage, and network wing builders. |
 | `scripts/build-doom-wasm.sh` | Patch and compile pipeline for the Doom C engine. |
 | `wasm/` | Emscripten adapters and Doom Perf bridge globals. |
 | `patches/doom/linuxdoom-1.10/` | Ordered engine patches. |
