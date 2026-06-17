@@ -24,6 +24,8 @@ signals.
 
 ## Current Status
 
+You can run this live in an [iximiuz Labs playground](https://labs.iximiuz.com/playgrounds/doom-perf-c0bd32e1)!
+
 The project currently runs as a browser-hosted Doom diagnostics lab using the
 same esbuild and `public/` hosting flow as the fork source. The default runtime
 path loads the patched Doom WASM engine, the redistributable Freedoom Phase 1
