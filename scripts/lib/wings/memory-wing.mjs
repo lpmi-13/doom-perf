@@ -9,9 +9,10 @@ import {
   wallSignSize,
   buildTerminalPatch,
   buildWallSignPatch,
-  makeInscription,
+  drawCenteredText,
+  signTextColor,
 } from "../textures.mjs";
-import { lump } from "../wad-bytes.mjs";
+import { lump, buildPatch } from "../wad-bytes.mjs";
 
 const localSideToWorld = (direction, side) => {
   const turns = {
@@ -56,79 +57,184 @@ const memoryTerminal = {
   patch: wingName("memory", "PTRM"),
 };
 
+// Library signage. Signs carry the USE *signal* in reading-room language; the
+// Linux *proof* lives on the wing terminals (free -m / vmstat / PSI / ps). The
+// bitmap font has no B/F/H/J glyphs, so the words avoid them.
 const memoryWallSigns = {
   pages: {
     texture: wingName("memory", "PAGE"),
     patch: wingName("memory", "PPAG"),
-    text: "PAGES",
+    text: "STACKS",
   },
   rss: {
     texture: wingName("memory", "RSS"),
     patch: wingName("memory", "PRSS"),
-    text: "TOP RSS",
+    text: "TOMES",
   },
   swap: {
     texture: wingName("memory", "SWAP"),
     patch: wingName("memory", "PSWP"),
-    text: "SWAP",
+    text: "ANNEX",
   },
   pressure: {
     texture: wingName("memory", "PSI"),
     patch: wingName("memory", "PPSI"),
-    text: "PSI",
+    text: "WAITING",
   },
   oom: {
     texture: wingName("memory", "OOM"),
     patch: wingName("memory", "POOM"),
-    text: "OOM",
+    text: "DISCARD",
   },
 };
 
-const memoryInscription = makeInscription(wingName("memory", "FM"), "MEMORY", "east", 2);
+// Names the whole central element at the highest level of abstraction: the
+// shelf is all of physical RAM. makeInscription's "east" orientation renders
+// mirrored when the cells are laid laterally across this threshold (the east
+// wing maps local u -> world -y), so instead we paint the desired upright
+// on-screen image and invert Doom's floor sampling, flat[((-y)&63)*64 + (x&63)],
+// to bake each cell. Cells sit at v[832,896] (world x in [832,896)); cell p is
+// placed at u1=-96+p*64 and covers world y in [labelCells*32-64-p*64, ...).
+const labelCells = 3;
+const buildMemoryLabel = (prefix, text) => {
+  const screenW = labelCells * 64;
+  const screenH = 64;
+  const screen = new Uint8Array(screenW * screenH);
+  const scale = 2;
+  // row 0 = far (the inscription top points away from the entering player).
+  drawCenteredText(screen, screenW, screenH, text, Math.floor((screenH - 7 * scale) / 2), scale, signTextColor, 4, screenW - 4);
+  const names = [];
+  const flats = [];
+  for (let p = 0; p < labelCells; p += 1) {
+    const cell = new Uint8Array(64 * 64);
+    const yLo = labelCells * 32 - 64 - p * 64; // world-y start of cell p
+    for (let x = 832; x < 896; x += 1) {
+      for (let y = yLo; y < yLo + 64; y += 1) {
+        const screenRow = 895 - x; // far -> near
+        const screenCol = labelCells * 32 - 1 - y; // +y (left) -> -y (right)
+        if (screenRow < 0 || screenRow >= screenH || screenCol < 0 || screenCol >= screenW) continue;
+        cell[((-y) & 63) * 64 + (x & 63)] = screen[screenRow * screenW + screenCol];
+      }
+    }
+    const name = `${prefix}${p}`;
+    flats.push(lump(name, Buffer.from(cell)));
+    names.push(name);
+  }
+  return { names, flats };
+};
+const memoryInscription = buildMemoryLabel(wingName("memory", "FM"), "TOTAL MEMORY");
 const pageFlatNames = {
   used: wingName("memory", "USED"),
   cache: wingName("memory", "CACH"),
   free: wingName("memory", "FREE"),
 };
 
-const buildPageFlat = ({ name, background, border, primary, secondary }) => {
-  const size = 64;
-  const pixels = new Uint8Array(size * size).fill(background);
-  const put = (x, y, color) => {
-    if (x >= 0 && x < size && y >= 0 && y < size) {
+// Library shelf flats: the TOP face of each page slot. An occupied slot is a
+// book cover seen from above (solid cover, dark board edge, spine band, light
+// title plaque); an empty slot is a dark parquet recess. The engine (p_tick.c)
+// swaps a cell's floorpic among these three by name as the live `free -m`
+// composition changes, so cover colour = memory composition: working-set books
+// (DPMUSED) are green, reclaimable page-cache books (DPMCACH) are cyan, and a
+// freed slot (DPMFREE) is an empty recess.
+const flatRect = (pixels, size, x1, y1, x2, y2, color) => {
+  for (let y = Math.max(0, y1); y < Math.min(size, y2); y += 1) {
+    for (let x = Math.max(0, x1); x < Math.min(size, x2); x += 1) {
       pixels[y * size + x] = color;
     }
-  };
-  const rect = (x1, y1, x2, y2, color) => {
-    for (let y = y1; y < y2; y += 1) {
-      for (let x = x1; x < x2; x += 1) {
-        put(x, y, color);
-      }
-    }
-  };
+  }
+};
 
-  rect(0, 0, size, 2, border);
-  rect(0, size - 2, size, size, border);
-  rect(0, 0, 2, size, border);
-  rect(size - 2, 0, size, size, border);
-  rect(6, 6, size - 6, size - 6, primary);
-  rect(10, 10, size - 10, size - 10, background);
-  for (let y = 14; y < size - 12; y += 10) {
-    rect(14, y, size - 14, y + 2, secondary);
+const buildBookFlat = ({ name, cover, light, dark }) => {
+  const size = 64;
+  const pixels = new Uint8Array(size * size).fill(cover);
+  const rect = (x1, y1, x2, y2, color) => flatRect(pixels, size, x1, y1, x2, y2, color);
+  // Board edge around the cover, with a top highlight and bottom shadow so the
+  // cover reads as a raised volume rather than a flat tile.
+  rect(0, 0, size, 3, dark);
+  rect(0, size - 3, size, size, dark);
+  rect(0, 0, 3, size, dark);
+  rect(size - 3, 0, size, size, dark);
+  rect(3, 3, size - 3, 6, light);
+  rect(3, size - 6, size - 3, size - 3, dark);
+  // Spine band down the left with a bright rule.
+  rect(6, 8, 16, size - 8, dark);
+  rect(10, 8, 12, size - 8, light);
+  // Title plaque with a few engraved lines.
+  rect(24, 20, size - 10, 44, light);
+  rect(27, 26, size - 16, 28, dark);
+  rect(27, 32, size - 20, 34, dark);
+  rect(27, 38, size - 14, 40, dark);
+  return lump(name, Buffer.from(pixels));
+};
+
+const buildSlotFlat = (name) => {
+  const size = 64;
+  const pixels = new Uint8Array(size * size).fill(8); // dark shelf bottom
+  const rect = (x1, y1, x2, y2, color) => flatRect(pixels, size, x1, y1, x2, y2, color);
+  // Lit top/left rim, dark bottom/right rim, and a recessed inner well so an
+  // empty slot reads as a gap on the shelf, not another (dark) book.
+  rect(0, 0, size, 2, 96);
+  rect(0, 0, 2, size, 96);
+  rect(0, size - 2, size, size, 0);
+  rect(size - 2, 0, size, size, 0);
+  rect(6, 6, size - 6, size - 6, 0);
+  for (let y = 12; y < size - 8; y += 12) {
+    rect(8, y, size - 8, y + 1, 96);
   }
-  for (let x = 14; x < size - 14; x += 16) {
-    rect(x, 14, x + 2, size - 14, secondary);
-  }
-  rect(4, 4, 8, 8, secondary);
-  rect(size - 8, size - 8, size - 4, size - 4, secondary);
   return lump(name, Buffer.from(pixels));
 };
 
 const pageFlats = [
-  buildPageFlat({ name: pageFlatNames.used, background: 8, border: 96, primary: 112, secondary: 118 }),
-  buildPageFlat({ name: pageFlatNames.cache, background: 8, border: 96, primary: 114, secondary: 200 }),
-  buildPageFlat({ name: pageFlatNames.free, background: 0, border: 96, primary: 5, secondary: 112 }),
+  buildBookFlat({ name: pageFlatNames.used, cover: 114, light: 112, dark: 8 }), // working set (green)
+  buildBookFlat({ name: pageFlatNames.cache, cover: 202, light: 200, dark: 8 }), // page cache (cyan)
+  buildSlotFlat(pageFlatNames.free), // freed/empty slot
 ];
+
+// Bookshelf wall texture for the reading hall. Decor stays neutral per the lab's
+// palette discipline (bright green/cyan is reserved for the metric books), so the
+// spines use muted warm/grey tones. 64x128 tiles along the hall walls; the three
+// shelves carry books of varied widths/heights so it does not read as a grid.
+const bookshelfTexture = {
+  texture: wingName("memory", "SHLF"),
+  patch: wingName("memory", "PSHLF"),
+  width: 64,
+  height: 128,
+};
+
+const buildBookshelfPatch = () => {
+  const W = bookshelfTexture.width;
+  const H = bookshelfTexture.height;
+  const px = new Uint8Array(W * H).fill(8); // dark cabinet interior
+  const rect = (x, y, w, h, c) => {
+    for (let yy = Math.max(0, y); yy < Math.min(H, y + h); yy += 1) {
+      for (let xx = Math.max(0, x); xx < Math.min(W, x + w); xx += 1) {
+        px[yy * W + xx] = c;
+      }
+    }
+  };
+  rect(0, 0, 2, H, 96); // cabinet uprights
+  rect(W - 2, 0, 2, H, 96);
+  const spineColors = [176, 231, 96, 47, 5, 231, 176, 96];
+  [6, 46, 86].forEach((sy, shelf) => {
+    const boardY = sy + 32;
+    let x = 4;
+    let i = 0;
+    while (x < W - 5) {
+      const bw = 5 + ((i * 3 + shelf) % 4); // 5..8 px spines
+      const bh = 22 + ((i * 5 + shelf * 3) % 9); // varied heights
+      const c = spineColors[(i + shelf) % spineColors.length];
+      rect(x, boardY - bh, bw, bh, c);
+      rect(x, boardY - bh, 1, bh, 0); // left shadow
+      rect(x + bw - 1, boardY - bh, 1, bh, 0); // right shadow
+      rect(x + 1, boardY - bh + 2, bw - 2, 1, 8); // title band
+      x += bw + 1;
+      i += 1;
+    }
+    rect(2, boardY, W - 4, 4, 96); // shelf board
+    rect(2, boardY + 4, W - 4, 1, 0); // shadow under board
+  });
+  return buildPatch(px, W, H);
+};
 
 const tagBase = reserved.memory.sectorTags[0];
 const pageCellTag = (index) => tagBase + index;
@@ -160,14 +266,14 @@ const build = (ctx) => {
 
   const memoryBase = {
     ...base,
-    wall: "TEKWALL4",
+    wall: bookshelfTexture.texture,
     floorFlat: "FLOOR0_1",
     ceilingFlat: "CEIL5_1",
     ceiling: 192,
   };
   const bankWall = {
     ...accent,
-    wall: "BROWNGRN",
+    wall: bookshelfTexture.texture,
     floorFlat: "FLOOR5_2",
     ceilingFlat: "CEIL5_1",
     ceiling: 192,
@@ -181,14 +287,16 @@ const build = (ctx) => {
     ceiling: 200,
   };
 
-  // Entry foyer, with a two-cell MEMORY floor inscription at the threshold.
-  areaRect(direction, "foyer-left", { u1: memoryRoomBounds.foyer.u1, v1: 704, u2: -64, v2: 896 }, {
+  // Entry foyer, with a three-cell "TOTAL MEMORY" floor inscription at the
+  // threshold (u[-96,96]).
+  areaRect(direction, "foyer-left", { u1: memoryRoomBounds.foyer.u1, v1: 704, u2: -96, v2: 896 }, {
     ...memoryBase,
     kind: "foyer",
     light: 208,
   });
   memoryInscription.names.forEach((flatName, k) => {
-    const u1 = -64 + k * 64;
+    // Forward placement: buildMemoryLabel bakes cell k for world y in this slot.
+    const u1 = -96 + k * 64;
     areaRect(direction, `memory-inscription-${k}`, { u1, v1: 832, u2: u1 + 64, v2: 896 }, {
       ...memoryBase,
       kind: "foyer",
@@ -196,12 +304,12 @@ const build = (ctx) => {
       light: 216,
     });
   });
-  areaRect(direction, "foyer-right", { u1: 64, v1: 704, u2: memoryRoomBounds.foyer.u2, v2: 896 }, {
+  areaRect(direction, "foyer-right", { u1: 96, v1: 704, u2: memoryRoomBounds.foyer.u2, v2: 896 }, {
     ...memoryBase,
     kind: "foyer",
     light: 208,
   });
-  areaRect(direction, "foyer-front", { u1: -64, v1: 704, u2: 64, v2: 832 }, {
+  areaRect(direction, "foyer-front", { u1: -96, v1: 704, u2: 96, v2: 832 }, {
     ...memoryBase,
     kind: "foyer",
     light: 208,
@@ -210,7 +318,20 @@ const build = (ctx) => {
   // Broad horizontal page-bank chamber. The 9x5 cellular grid is driven by
   // p_tick.c's memory hook: page cells rise/brighten with utilization while the
   // side channels and pressure pads pulse under saturation.
-  areaRect(direction, "front-walk", { u1: -448, v1: 896, u2: 448, v2: 960 }, walkway);
+  // Front approach + coliseum descent. The page grid is sunk into a pit (the
+  // engine drives the cells to negative floor heights for a top-down view); a
+  // single tier at -24 rings the grid so the player can step down (and back up:
+  // every grade is <= the 24-unit step limit). The side corridors stay at floor
+  // level, with the descent in the centre, in front of the grid.
+  const pitTier = -24;
+  areaRect(direction, "front-walk-left", { u1: -448, v1: 896, u2: -288, v2: 960 }, walkway);
+  areaRect(direction, "front-walk-right", { u1: 288, v1: 896, u2: 448, v2: 960 }, walkway);
+  areaRect(direction, "front-walk-center", { u1: -288, v1: 896, u2: 288, v2: 932 }, walkway);
+  areaRect(direction, "front-step", { u1: -288, v1: 932, u2: 288, v2: 960 }, {
+    ...walkway,
+    kind: "memory-pit-step",
+    floor: pitTier,
+  });
   areaRect(direction, "left-walk", { u1: -448, v1: 960, u2: -352, v2: 1280 }, dimWalkway);
   areaRect(direction, "left-swap-channel", { u1: -352, v1: 960, u2: -320, v2: 1280 }, {
     ...bankWall,
@@ -220,8 +341,16 @@ const build = (ctx) => {
     light: 180,
     tag: memoryTags.swapIn,
   });
-  areaRect(direction, "left-inner-walk", { u1: -320, v1: 960, u2: -288, v2: 1280 }, walkway);
-  areaRect(direction, "right-inner-walk", { u1: 288, v1: 960, u2: 320, v2: 1280 }, walkway);
+  areaRect(direction, "left-inner-walk", { u1: -320, v1: 960, u2: -288, v2: 1280 }, {
+    ...walkway,
+    kind: "memory-pit-step",
+    floor: pitTier,
+  });
+  areaRect(direction, "right-inner-walk", { u1: 288, v1: 960, u2: 320, v2: 1280 }, {
+    ...walkway,
+    kind: "memory-pit-step",
+    floor: pitTier,
+  });
   areaRect(direction, "right-swap-channel", { u1: 320, v1: 960, u2: 352, v2: 1280 }, {
     ...bankWall,
     kind: "memory-swap-channel",
@@ -247,7 +376,9 @@ const build = (ctx) => {
       const v1 = gridV1 + row * cellSize;
       areaRect(direction, `page-cell-${row}-${col}`, { u1, v1, u2: u1 + cellSize, v2: v1 + cellSize }, {
         ...bankCell,
-        floor: used ? 12 : 4,
+        // Sunk below floor level (the engine drives these to negative heights at
+        // runtime); the initial values match so the pit reads correctly pre-tick.
+        floor: used ? -16 : (cacheTint ? -32 : -48),
         floorFlat: used ? pageFlatNames.used : (cacheTint ? pageFlatNames.cache : pageFlatNames.free),
         light: used ? 204 : (cacheTint ? 188 : 164),
         tag: pageCellTag(index),
@@ -375,8 +506,9 @@ const build = (ctx) => {
     labelTexture: memoryWallSigns.oom.texture,
   });
 
-  addAreaThing(direction, 46, -432, 928);
-  addAreaThing(direction, 46, 432, 928);
+  // Reading-room lamps (floor lamp, thing 2028) flanking the foyer threshold.
+  addAreaThing(direction, 2028, -432, 928);
+  addAreaThing(direction, 2028, 432, 928);
 };
 
 const textures = [
@@ -386,6 +518,13 @@ const textures = [
     width: terminalTextureSize.width,
     height: terminalTextureSize.height,
     build: () => buildTerminalPatch(memoryTerminal),
+  },
+  {
+    texture: bookshelfTexture.texture,
+    patch: bookshelfTexture.patch,
+    width: bookshelfTexture.width,
+    height: bookshelfTexture.height,
+    build: buildBookshelfPatch,
   },
   ...Object.values(memoryWallSigns).map((sign) => ({
     texture: sign.texture,

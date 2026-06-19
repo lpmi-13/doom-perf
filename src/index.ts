@@ -191,6 +191,7 @@ type DoomPerfEngine = {
   _DoomPerf_SetMemoryUtil?: (permille: number) => void;
   _DoomPerf_SetMemorySaturation?: (permille: number) => void;
   _DoomPerf_SetMemoryErrors?: (permille: number) => void;
+  _DoomPerf_SetMemoryCacheFraction?: (permille: number) => void;
   _DoomPerf_GetSimMode?: () => number;
   _DoomPerf_GetEffectiveCpuCoreCount?: () => number;
   _DoomPerf_GetEffectiveCpuCore?: (id: number) => number;
@@ -238,6 +239,15 @@ const pushTelemetryToEngine = (engine: DoomPerfEngine | undefined, telemetry: Te
   engine?._DoomPerf_SetMemoryUtil?.(Math.round(clampRatio(telemetry.memory.utilization) * 1000));
   engine?._DoomPerf_SetMemorySaturation?.(Math.round(clampRatio(telemetry.memory.saturation) * 1000));
   engine?._DoomPerf_SetMemoryErrors?.(Math.round(clampRatio(telemetry.memory.errors) * 1000));
+  // Reclaimable page cache (Buffers+Cached) as a fraction of MemTotal, straight
+  // from `free -m`/meminfo. Splits the library shelf's books into working-set
+  // (green) vs page cache (cyan); 0 when total is unknown so the shelf is all
+  // working set rather than guessing.
+  const { totalBytes, cachedBytes, buffersBytes } = telemetry.memory;
+  const cacheFraction = totalBytes && totalBytes > 0
+    ? ((cachedBytes ?? 0) + (buffersBytes ?? 0)) / totalBytes
+    : 0;
+  engine?._DoomPerf_SetMemoryCacheFraction?.(Math.round(clampRatio(cacheFraction) * 1000));
 };
 
 const scenarioTelemetry = (

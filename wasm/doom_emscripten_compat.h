@@ -66,6 +66,12 @@ extern int doomperf_memory_util;
 extern int doomperf_memory_saturation;
 extern int doomperf_memory_errors;
 
+// Reclaimable page cache (Buffers+Cached) as a permille of MemTotal. Splits the
+// library wing's shelf books into working-set (green) vs page-cache (cyan); the
+// cache band shrinks toward the working set as memory tightens. Sourced from
+// `free -m` / /proc/meminfo, so it is a true Utilization-composition signal.
+extern int doomperf_memory_cache;
+
 // Doom Perf data-source mode, chosen on the level-select menu:
 //   0 = live browser telemetry; 1/2 = simulated high CPU utilization/saturation
 //   (CPU room renderer); 3/4 = simulated high disk utilization/saturation

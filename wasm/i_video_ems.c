@@ -33,6 +33,7 @@ int doomperf_storage_iops_spike = 0;
 int doomperf_memory_util = 0;
 int doomperf_memory_saturation = 0;
 int doomperf_memory_errors = 0;
+int doomperf_memory_cache = 0;
 int doomperf_sim_mode = 0;
 
 EMSCRIPTEN_KEEPALIVE
@@ -161,6 +162,15 @@ EMSCRIPTEN_KEEPALIVE
 void DoomPerf_SetMemoryErrors(int permille)
 {
     doomperf_memory_errors = DoomPerf_ClampPermille(permille);
+}
+
+// Reclaimable page cache (Buffers+Cached) as a permille of MemTotal. Read by the
+// library wing's shelf in p_tick.c to color books working-set (green) vs page
+// cache (cyan); see doomperf_memory_cache in doom_emscripten_compat.h.
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_SetMemoryCacheFraction(int permille)
+{
+    doomperf_memory_cache = DoomPerf_ClampPermille(permille);
 }
 
 static int DoomPerf_EffectiveCoreCountValue(void)
