@@ -1,5 +1,4 @@
-- we need to reimagine the way that the uptime load room is visualizing things.
 - have the music be different in each room.
-- check if the load visualization is working...I want it to be a more obvious horizontal gauge, and I don't think it's working correctly. Also to be determined, is it ever possible have have a higher load average than number of logical cores? If not, this has implications for how we visualize it. If it is possible, then we want a "this is okay line", with everything under it in gree, and everything over it in red. If it's not, then we want it to be a gradient from pure green at the bottom, to pure red at the top.
 - after music is set up for each room, see about getting distinct soundscapes per issues (U/S/E)...maybe skip errors, not sure how to reliably trigger.
-- see if we can get something more interesting for each of the doors in the main atrium
+- would there be any benefit to compressing the number of patches? Is it conceptually similar to database migrations?
+- if we can make the walls in the library more differentiated than just 3 tones, that would be cool. Richer textures would be great.
