@@ -1,23 +1,36 @@
-// Storage wing (south): an enclosed amber I/O vault rebuilt as four separate
-// mechanistic disk instruments from DISK_WING_PLAN.md. The wing descends three
-// levels along its central axis (PARALLEL_WINGS_PLAN.md, Track B):
+// Storage wing (south): a steampunk I/O tower. Rebuilt from the old descending
+// engine-pit hall into a SQUARE-SPIRAL STAIRCASE that ascends one loop around a
+// central column; the column's top is the spinning-disk PLATTER (the utilization
+// instrument), revealed at the summit under open sky. The wing's other three
+// instruments live in hallways branching off the climb:
 //
-//   L1  request balcony  — where read/write requests arrive; READ and WRITE
-//                          side bays flank it, and "IO VAULT" is inscribed into
-//                          the threshold floor.
-//   L2  service deck     — a loading hopper whose live QUEUE trough is the queue
-//                          depth saturation signal.
-//   L3  engine pit       — the central utilization engine/flywheel, left-wall
-//                          pneumatic throughput tubes, right-wall AWAIT delay
-//                          gauges, and the iostat terminal on the far wall.
+//   ascent      a square ring of 10 stepped sectors rising 24 units each, CCW
+//               around the central column, from the entry foot to the summit.
+//   PLATTER     the column top: a 5x5 concentric ring grid (utilization tags
+//               620/621/622) that pulses/"spins" with disk %util, open to F_SKY1.
+//   AWAIT hall  off an early east step: a bank of service-latency gauges
+//               (one-sided MID walls, line tags 660/661/662).
+//   THROUGHPUT  off the far step (occluded from the entrance by the column, so it
+//     hall      never presents a long smeary sightline): pneumatic read/write
+//               tube panels + IO RATE plaque + the iostat dashboard (line tag
+//               663) + the iostat terminal screen at the dead end.
+//   QUEUE hall  off a high west step: the recessed queue-depth trough (floor
+//               display, light sentinel 134, sector tag 610).
 //
-// This is the storage wing's independent editing seam. build() lays out only
-// the geometry (reading the shared builder API + palette from ctx); the screen,
-// sign, and gauge art are contributed via `textures`, the floor inscriptions via
-// `flats`, and the iostat read-point via `terminals`. Everything is map-only:
-// live instruments keep using the storage tag/light contracts: queue light 134,
-// utilization tags 620..622, await line tags 660..662, and dashboard line tag 663.
-// See [[map-builder-architecture]] and [[telemetry-terminal-seam]].
+// Why a spiral: the old straight hall presented a distant low-contrast far wall
+// at a glancing angle, which the 320x200 software renderer (no mipmapping)
+// undersamples into smear. A spiral around a column has no long receding
+// sightline -- every view dead-ends on a near wall within ~160-320 units. See
+// [[disk-spiral-smear-fix]], [[map-builder-architecture]],
+// [[telemetry-terminal-seam]], [[wing-terminal-segment-rotation]].
+//
+// Live-instrument contracts preserved verbatim: platter tags 620/621/622 (scanned
+// by DoomPerf_UpdatePlatter); await gauges = one-sided MID walls with line tags
+// 660/661/662 + wall:gauge (NO labelSide -- a labelSide override would zero the
+// tag, see lineTagFor); dashboard = line tag 663 on a two-sided LOWER texture;
+// queue floor display = light 134 + sector tag 610 (its world bounds are hardcoded
+// in patch 0023, updated to this wing's new trough box). The iostat terminal
+// read-point is emitted by terminals() in WORLD coords.
 import { addWingEntrance } from "./common.mjs";
 import { reserved, wingName } from "./registry.mjs";
 import {
@@ -37,6 +50,19 @@ import { buildPatch } from "../wad-bytes.mjs";
 
 const ids = reserved.storage;
 const tex = (suffix) => wingName("storage", suffix);
+
+// labelSide / textureSide are stored in WORLD-frame sides; the wing thinks in
+// local (u,v) sides and converts. (South is a 180-degree rotation: local "top"
+// (+v, the deep/far side) -> world "bottom", local "right" (+u) -> world "left".)
+const localSideToWorld = (direction, side) => {
+  const turns = { north: 0, east: 1, south: 2, west: 3 }[direction];
+  const sides = ["top", "right", "bottom", "left"];
+  const index = sides.indexOf(side);
+  if (turns === undefined || index === -1) {
+    throw new Error(`Cannot rotate side ${side} for direction ${direction}`);
+  }
+  return sides[(index + turns) % sides.length];
+};
 
 // Custom WAD art, all under the reserved "DPD" prefix so it can't collide with
 // the other wings' names.
@@ -85,292 +111,237 @@ const buildTubePatch = ({ capsule, glint }) => {
   return buildPatch(px, W, H);
 };
 
-// Floor-name inscriptions. The reading player always faces "south" here (they
-// walk away from the hub, into -y), so both names use the south orientation;
-// makeInscription bakes the per-cell mirroring, and southCell() lays the cells
-// out in the matching (reversed) order — the south mirror of the CPU wing's
-// left-to-right placement. names[] are referenced by the geometry below; the
-// flat pixel data is generated once in `flats`.
+// "IO VAULT" inscribed into the entry threshold floor. The reading player faces
+// "south" (walks away from the hub into -y), so the south orientation is correct.
 const ioInscription = makeInscription("DPDIO", "IO VAULT", "south", 4);
-const queueInscription = makeInscription("DPDQ", "QUEUE", "south", 3);
 const southCell = (cells, k) => cells * 32 - 64 * (k + 1);
 
-// Half-widths (local u): the balcony/deck core, the read/write bays' outer edge,
-// the engine pit, and the utilization flywheel.
-const HW = 320;
-const BAY = 576;
-const PITHW = 288;
-const ENGINEHW = 160;
-const ENGINE_CELL = 64; // 5 cells -> 320, == 2 * ENGINEHW
+// ===== Tower grid (local u,v) =====
+// A 4x4 grid of 160-unit cells; the central 2x2 (u[-160,160] x v[864,1184]) is
+// the platter column, the 10 perimeter cells are the spiral steps. The body
+// begins at v=704 (addWingEntrance's throat ends there).
+const CW = 160; // column half-extent (the platter is 320x320)
+const RING = 160; // ring step / hall width
+const V0 = 704; // entry foot (hub-ward)
+const VC1 = V0 + RING; // 864  column near edge
+const VC2 = VC1 + 2 * CW; // 1184 column far edge
+const V3 = VC2 + RING; // 1344 far outer edge
 
-// Floors and ceilings. The axis steps down balcony -> deck -> pit; the terminal
-// recess sits a lectern-step above the pit floor (so its riser reads as a
-// control panel) and is exactly one screen-texture tall.
-const F_BALCONY = 24;
-const F_DECK = 0;
-const F_PIT = -56;
-const F_TERM = -24;
-const C_HALL = 200;
-const C_PIT = 224;
-const C_BAY = F_BALCONY + wallSignSize.height; // back wall == one sign tall
-const C_TERM = F_TERM + terminalTextureSize.height;
-const SIGN_FLOOR = F_PIT;
-const SIGN_CEIL = F_PIT + wallSignSize.height; // pit-wall niches: one sign tall
+const RISE = 24; // Doom max auto-climb: one step per ring cell
+const F_BASE = 0;
+const C_TOWER = 304; // solid shaft ceiling over the climb
+const C_SKY = 384; // platter sky ceiling (open shaft above the disk)
+const PLATTER_FLOOR = 8 * RISE; // 192, flush with the west summit landing (walk-on)
+const DRUM_FLOOR = PLATTER_FLOOR + 128; // 320: solid spindle-drum cap; 128-tall streak wall
+// 96x96 spindle drum, centred on the platter (local u=0, v=1024 -> world 0,-1024,
+// matching DOOMPERF_PLATTER_CX/CY in patch 0035).
+const drumBox = { u1: -48, v1: 976, u2: 48, v2: 1072 };
 
-// Depth boundaries (local v), hub-ward to far wall.
-const V_ENTRY = 704; // foyer begins where addWingEntrance's entry throat ends
-const V_BALCONY = 1024;
-const V_DECK = 1344;
-const V_STAIR = 1408; // foot of the descent stairs / engine front edge
-const V_ENGINE_END = V_STAIR + 5 * ENGINE_CELL; // 1728
-const V_PIT_BACK = 1760;
-const V_TERM_WALL = 1776; // the iostat screen face (far one-sided wall)
-const DISPLAY_PANEL_DEPTH = 16;
+// Throughput hall: panels mount on a floor==ceiling slot whose room-facing LOWER
+// texture carries the art (128 tall, matching the tube/dashboard textures).
+const TP_FLOOR = 5 * RISE; // 120, == far-landing step
+const TP_CEIL = 280;
+const TP_PANEL_Z = TP_FLOOR + 128; // 248: top of the 128-tall display band
+const TP_BACK = V3 + 288; // 1632  terminal recess front
+const TP_TERM_WALL = TP_BACK + 16; // 1648  screen face (one-sided dead end)
 const SERVER_PANEL_HEIGHT = 64;
-const DISPLAY_PANEL_HEIGHT = 128;
-const serverRack = {
-  u1: -PITHW,
-  v1: V_PIT_BACK,
-  u2: -192,
-  v2: V_TERM_WALL,
-};
-const tubePanels = {
-  rate: { u1: -PITHW - DISPLAY_PANEL_DEPTH, v1: 1344, u2: -PITHW, v2: 1408 },
-  read: { u1: -PITHW - DISPLAY_PANEL_DEPTH, v1: 1408, u2: -PITHW, v2: 1496 },
-  write: { u1: -PITHW - DISPLAY_PANEL_DEPTH, v1: 1504, u2: -PITHW, v2: 1592 },
-};
-// 128 deep along v so the room-facing face is exactly one 128-wide dashboard
-// texture (no column wrap; see storageDisplayTextureSize). This lives below the
-// throughput tubes as a secondary live readout/rating plate.
-const metricDisplay = {
-  u1: -PITHW - DISPLAY_PANEL_DEPTH,
-  v1: 1600,
-  u2: -PITHW,
-  v2: V_ENGINE_END,
-};
+
+// Queue hall trough (south wing -> world (-u,-v)): local box below maps to world
+// x[336,496], y[-1152,-1088]; patch 0023's R_DoomPerfDiskQueuePixel is updated to
+// these bounds. Kept axis-aligned along u so the fill axis stays world-x.
+const QUEUE_FLOOR = 7 * RISE; // 168, == step-w2
+const queueTrough = { u1: -496, v1: 1088, u2: -336, v2: 1152 };
+
+// Local half-width of the terminal screen (256-wide screen, centred on u=0).
+const terminalHalfWidthLocal = terminalTextureSize.width / 2;
 
 const build = (ctx) => {
   const { areaRect, addAreaThing, direction, resource, base, accent } = ctx;
 
   addWingEntrance(ctx);
 
-  // Shared sector styles. The halls use the storage base wall (STONE2); the pit
-  // is the engine room, so it takes the accent wall (BROWNHUG) and its own ceiling.
-  const balcony = { ...base, kind: "balcony", floor: F_BALCONY, ceiling: C_HALL, light: 176 };
-  const deck = { ...base, kind: "deck", floor: F_DECK, ceiling: C_HALL, light: 168 };
-  const pit = { ...accent, kind: "pit", floor: F_PIT, ceiling: C_PIT, ceilingFlat: "CEIL5_1", light: 152 };
+  const backWall = localSideToWorld(direction, "top"); // far/deep wall (local +v)
+  const eWall = localSideToWorld(direction, "right"); // local +u end wall
 
-  // ===== L1: request balcony =====
-    // The foyer crests onto the balcony, split so "IO VAULT" inscribes flush into
-    // the threshold floor as the player enters (they walk over it).
-    areaRect(direction, "balcony-front", { u1: -HW, v1: V_ENTRY, u2: HW, v2: 832 }, balcony);
-    areaRect(direction, "balcony-insc-w", { u1: -HW, v1: 832, u2: -128, v2: 896 }, balcony);
-    areaRect(direction, "balcony-insc-e", { u1: 128, v1: 832, u2: HW, v2: 896 }, balcony);
-    ioInscription.names.forEach((flatName, k) => {
-      const u1 = southCell(4, k);
-      areaRect(direction, `balcony-io-${k}`, { u1, v1: 832, u2: u1 + 64, v2: 896 }, { ...balcony, floorFlat: flatName });
-    });
-    areaRect(direction, "balcony-back", { u1: -HW, v1: 896, u2: HW, v2: V_BALCONY }, balcony);
+  // Shared styles. Steps use the bold base wall (BROWN96); the platter + halls are
+  // the engine-room accent (BROWN1).
+  const stepStyle = { ...base, kind: "pit-stair", floorFlat: "FLOOR0_3", ceilingFlat: "CEIL3_2", ceiling: C_TOWER };
+  const platterStyle = { ...accent, ceiling: C_SKY, ceilingFlat: "F_SKY1" };
+  const hallStyle = { ...accent, floorFlat: "FLOOR4_8", ceilingFlat: "CEIL5_1" };
 
-    // READ / WRITE bays: symmetric alcoves off the balcony, named on their back
-    // walls (one-sided -> the sign is the mid texture). Distinguished for now by
-    // light + floor flat; richer read=cool / write=warm palettes are a later pass.
-    areaRect(direction, "read-bay", { u1: -BAY, v1: 768, u2: -HW, v2: 1000 }, {
-      ...accent,
-      kind: "bay",
-      floor: F_BALCONY,
-      ceiling: C_BAY,
-      floorFlat: "FLOOR4_8",
-      light: 192,
-      labelSide: "left",
-      labelTexture: signs.read.texture,
-      tag: 640,
+  // ===== Spiral steps (CCW: entry -> east -> far -> west -> summit) =====
+  // [id, u1, v1, u2, v2, stepIndex]; floor = stepIndex * RISE.
+  const steps = [
+    ["entry", -CW, V0, CW, 800, 0], // bottom centre, ahead of the IO VAULT band
+    ["step-e0", CW, V0, CW + RING, VC1, 1],
+    ["step-e1", CW, VC1, CW + RING, VC1 + 160, 2], // await hall mouth (+u)
+    ["step-e2", CW, VC1 + 160, CW + RING, VC2, 3],
+    ["step-ne", CW, VC2, CW + RING, V3, 4],
+    ["far-landing", -CW, VC2, CW, V3, 5], // throughput hall mouth (+v)
+    ["step-nw", -CW - RING, VC2, -CW, V3, 6],
+    ["step-w2", -CW - RING, VC1 + 160, -CW, VC2, 7], // queue hall mouth (-u)
+    // One wide summit landing (replaces the old w1+w0 corner): flush at 192 with
+    // the platter's west edge so you walk straight onto the disk, no narrow step.
+    ["west-landing", -CW - RING, V0, -CW, VC1 + 160, 8],
+  ];
+  steps.forEach(([id, u1, v1, u2, v2, k]) => {
+    areaRect(direction, id, { u1, v1, u2, v2 }, {
+      ...stepStyle,
+      floor: F_BASE + k * RISE,
+      light: 168 + k * 4, // subtle brighten toward the sky-lit summit (skips 160)
     });
-    areaRect(direction, "write-bay", { u1: HW, v1: 768, u2: BAY, v2: 1000 }, {
-      ...accent,
-      kind: "bay",
-      floor: F_BALCONY,
-      ceiling: C_BAY,
+  });
+
+  // "IO VAULT" inscribed flush into the entry threshold band (u[-128,128],
+  // v[800,864]); the foot sector ahead of it and the flanking strips keep the
+  // band tiling without overlap.
+  areaRect(direction, "entry-band-w", { u1: -CW, v1: 800, u2: -128, v2: VC1 }, { ...stepStyle, floor: F_BASE, light: 168 });
+  areaRect(direction, "entry-band-e", { u1: 128, v1: 800, u2: CW, v2: VC1 }, { ...stepStyle, floor: F_BASE, light: 168 });
+  ioInscription.names.forEach((flatName, k) => {
+    const u1 = southCell(4, k);
+    areaRect(direction, `entry-io-${k}`, { u1, v1: 800, u2: u1 + 64, v2: VC1 }, {
+      ...stepStyle,
+      floor: F_BASE,
+      light: 168,
+      floorFlat: flatName,
+    });
+  });
+
+  // ===== The PLATTER: a flat painted disk floor at the summit, open to F_SKY1.
+  // Light sentinel 130 makes R_DrawPlanes hand the floor to R_DoomPerfDiskPlatterPixel
+  // (patch 0035), which paints concentric utilization tracks + a rotating throughput
+  // read-head. Flush at 192 with the west landing so you walk straight on. Carved
+  // into bands around the central spindle drum. (Replaces the old 5x5 ring grid;
+  // tags 620/621/622 and the light-pulse hook are retired.)
+  const platterFloor = {
+    ...platterStyle,
+    kind: "platter",
+    floor: PLATTER_FLOOR,
+    floorFlat: "FLOOR0_3",
+    light: ids.lights[0], // 130: platter floor-display sentinel
+  };
+  areaRect(direction, "platter-s", { u1: -CW, v1: VC1, u2: CW, v2: drumBox.v1 }, platterFloor);
+  areaRect(direction, "platter-n", { u1: -CW, v1: drumBox.v2, u2: CW, v2: VC2 }, platterFloor);
+  areaRect(direction, "platter-w", { u1: -CW, v1: drumBox.v1, u2: drumBox.u1, v2: drumBox.v2 }, platterFloor);
+  areaRect(direction, "platter-e", { u1: drumBox.u2, v1: drumBox.v1, u2: CW, v2: drumBox.v2 }, platterFloor);
+  // The central SPINDLE drum: a solid 128-tall pillar; its lower (two-sided) wall
+  // faces carry the throughput streaks (line tag 664, painted on the bottom surface
+  // by R_DoomPerfDiskSpindlePixel). The fill height rises with %util.
+  areaRect(direction, "spindle-drum", drumBox, {
+    ...platterStyle,
+    kind: "spindle",
+    floor: DRUM_FLOOR,
+    ceiling: DRUM_FLOOR, // solid pillar
+    floorFlat: "FLOOR0_3",
+    wall: "METAL1",
+    light: 200,
+    lineTag: ids.lineTags[0] + 4, // 664: spindle throughput streaks
+  });
+
+  // ===== AWAIT hall (off step-e1, floor 48): a latency-gauge bank. =====
+  // Each gauge is a dead-end recess whose one-sided MID walls carry wall:gauge +
+  // lineTag 660/661/662 (NO labelSide, or lineTagFor would zero the tag). AWAIT
+  // is named on the hall's far end wall via labelSide.
+  const F_AWAIT = 2 * RISE; // 48
+  const awaitStyle = { ...hallStyle, floor: F_AWAIT, ceiling: F_AWAIT + 128, light: 192 };
+  areaRect(direction, "await-hall", { u1: CW + RING, v1: VC1, u2: 512, v2: VC1 + 160 }, {
+    ...awaitStyle,
+    kind: "pit-sign",
+    labelSide: eWall, // far end wall (local +u) carries the AWAIT placard
+    labelTexture: signs.await.texture,
+  });
+  const gaugeRecess = (id, bounds, k) =>
+    areaRect(direction, id, bounds, { ...awaitStyle, kind: "delay-gauge", wall: gauge.texture, lineTag: ids.lineTags[0] + k });
+  gaugeRecess("await-gauge-0", { u1: 344, v1: 816, u2: 408, v2: VC1 }, 0); // 660 (-v side)
+  gaugeRecess("await-gauge-1", { u1: 424, v1: 816, u2: 488, v2: VC1 }, 1); // 661 (-v side)
+  gaugeRecess("await-gauge-2", { u1: 384, v1: VC1 + 160, u2: 448, v2: VC1 + 160 + 48 }, 2); // 662 (+v side)
+
+  // ===== THROUGHPUT hall (off far-landing, floor 120): pneumatic tubes + iostat
+  // dashboard + terminal. Occluded from the entrance by the platter column. =====
+  areaRect(direction, "tp-hall", { u1: -CW, v1: V3, u2: CW, v2: TP_BACK }, {
+    ...hallStyle,
+    kind: "metric-hall",
+    floor: TP_FLOOR,
+    ceiling: TP_CEIL,
+    light: 184,
+  });
+  // Wall-mounted display panels: a floor==ceiling slot whose room-facing LOWER
+  // texture is the art (textureSide picks the room face; sideWall caps the rest).
+  const panel = (id, bounds, texture, textureSide, extra = {}) =>
+    areaRect(direction, id, bounds, {
+      ...hallStyle,
+      kind: "metric-display",
+      floor: TP_PANEL_Z,
+      ceiling: TP_PANEL_Z,
       floorFlat: "FLOOR0_3",
-      light: 176,
-      labelSide: "right",
-      labelTexture: signs.write.texture,
-      tag: 641,
-    });
-
-  // ===== L2: service deck =====
-    // The deck drops one step below the balcony. "QUEUE" inscribes into the deck
-    // floor just before the loading hopper: a raised brass rim around the live,
-    // recessed queue trough (reserved sector tag 610). The trough remains at the
-    // engine hook's exact world bounds so queue depth keeps painting here.
-    areaRect(direction, "deck-front", { u1: -HW, v1: V_BALCONY, u2: HW, v2: 1088 }, deck);
-    areaRect(direction, "deck-q-w", { u1: -HW, v1: 1088, u2: -96, v2: 1152 }, deck);
-    areaRect(direction, "deck-q-e", { u1: 96, v1: 1088, u2: HW, v2: 1152 }, deck);
-    queueInscription.names.forEach((flatName, k) => {
-      const u1 = southCell(3, k);
-      areaRect(direction, `deck-q-${k}`, { u1, v1: 1088, u2: u1 + 64, v2: 1152 }, { ...deck, floorFlat: flatName });
-    });
-    const hopperRim = { ...deck, floor: F_DECK + 8, floorFlat: "FLOOR0_3", light: 184 };
-    areaRect(direction, "hopper-rim-w", { u1: -HW, v1: 1152, u2: -256, v2: 1216 }, hopperRim);
-    areaRect(direction, "hopper-rim-e", { u1: 256, v1: 1152, u2: HW, v2: 1216 }, hopperRim);
-    areaRect(direction, "queue-channel", { u1: -256, v1: 1152, u2: 256, v2: 1216 }, {
-      ...deck,
-      kind: "queue",
-      floor: F_DECK - 16,
-      floorFlat: "FLOOR1_7",
-      // Light sentinel (reserved storage range 130-134): the engine's r_plane
-      // hook keys the queue floor display off this exact value, painting the
-      // channel floor with flowing request blocks driven by queue depth.
-      light: ids.lights[0] + 4, // 134
-      tag: ids.sectorTags[0] + 10, // 610
-    });
-    areaRect(direction, "hopper-back-lip", { u1: -256, v1: 1216, u2: 256, v2: 1248 }, hopperRim);
-    areaRect(direction, "deck-back-w", { u1: -HW, v1: 1216, u2: -256, v2: V_DECK }, deck);
-    areaRect(direction, "deck-back-e", { u1: 256, v1: 1216, u2: HW, v2: V_DECK }, deck);
-    areaRect(direction, "deck-back-center", { u1: -256, v1: 1248, u2: 256, v2: V_DECK }, deck);
-
-  // ===== L3: engine pit =====
-    // Central stairs descend from the deck to the pit floor; the flanks of the
-    // descent are an open overlook ledge (a 56-unit drop) onto the pit, so the
-    // central engine reads from the deck before you walk down to it.
-    const stairFloors = [F_DECK - 14, F_DECK - 28, F_DECK - 42, F_PIT];
-    stairFloors.forEach((fz, k) => {
-      const v1 = V_DECK + k * 16;
-      areaRect(direction, `pit-stair-${k}`, { u1: -96, v1, u2: 96, v2: v1 + 16 }, {
-        ...pit,
-        kind: "pit-stair",
-        floor: fz,
-        floorFlat: "FLOOR0_3",
-        light: 168,
-      });
-    });
-    areaRect(direction, "pit-front-w", { u1: -PITHW, v1: V_DECK, u2: -96, v2: V_STAIR }, pit);
-    areaRect(direction, "pit-front-e", { u1: 96, v1: V_DECK, u2: PITHW, v2: V_STAIR }, pit);
-
-    // The Great Engine: a 5x5 flywheel base with a raised central piston. The
-    // concentric rings remain the utilization surface driven by tags 620/621/622:
-    // idle is a slow glimmer, high %util makes the whole engine strobe.
-    for (let row = 0; row < 5; row += 1) {
-      for (let col = 0; col < 5; col += 1) {
-        const ring = Math.max(Math.abs(col - 2), Math.abs(row - 2));
-        const ringStyle =
-          ring === 0
-            ? { floor: F_PIT + 64, floorFlat: "FLOOR4_8", tag: 620 } // piston
-            : ring === 1
-              ? { floor: F_PIT + 16, floorFlat: "FLOOR0_3", tag: 621 }
-              : { floor: F_PIT + 8, floorFlat: "FLOOR4_8", tag: 622 };
-        const u1 = -ENGINEHW + col * ENGINE_CELL;
-        const v1 = V_STAIR + row * ENGINE_CELL;
-        areaRect(direction, `engine-flywheel-${col}-${row}`, { u1, v1, u2: u1 + ENGINE_CELL, v2: v1 + ENGINE_CELL }, {
-          ...pit,
-          kind: ring === 0 ? "engine-piston" : "engine-flywheel",
-          light: 168,
-          ...ringStyle,
-        });
-      }
-    }
-    areaRect(direction, "pit-side-w", { u1: -PITHW, v1: V_STAIR, u2: -ENGINEHW, v2: V_ENGINE_END }, pit);
-    areaRect(direction, "pit-side-e", { u1: ENGINEHW, v1: V_STAIR, u2: PITHW, v2: V_ENGINE_END }, pit);
-
-    // Pit back wall + the iostat terminal recess. The recess steps up one lectern
-    // height from the pit floor, so its front riser renders as a control panel
-    // (sideTextures keys that off labelSide:"top" + a label texture), and its far
-    // one-sided wall carries the (blurred) DISK I/O screen, exactly one screen
-    // texture tall. Read-point wired in `terminals`.
-    areaRect(direction, "pit-back", { u1: -PITHW, v1: V_ENGINE_END, u2: PITHW, v2: V_PIT_BACK }, pit);
-    areaRect(direction, "pit-back-w", { u1: -192, v1: V_PIT_BACK, u2: -128, v2: V_TERM_WALL }, pit);
-    areaRect(direction, "pit-back-e", { u1: 128, v1: V_PIT_BACK, u2: PITHW, v2: V_TERM_WALL }, pit);
-    areaRect(direction, "pit-server-rack", serverRack, {
-      ...pit,
-      kind: "server-rack",
-      floor: F_PIT + SERVER_PANEL_HEIGHT,
-      ceiling: F_PIT + SERVER_PANEL_HEIGHT,
-      floorFlat: "FLOOR0_3",
-      wall: rack.texture,
-      light: 184,
-    });
-    areaRect(direction, "storage-terminal", { u1: -128, v1: V_PIT_BACK, u2: 128, v2: V_TERM_WALL }, {
-      ...pit,
-      kind: "terminal",
-      floor: F_TERM,
-      ceiling: C_TERM,
+      wall: texture,
+      sideWall: accent.wall,
+      textureSide,
       light: 192,
-      labelSide: "top",
-      labelTexture: screen.texture,
+      ...extra,
     });
+  // West wall (room face = world "left"): IO RATE plaque, then read/write tubes.
+  panel("tp-rate", { u1: -CW - 16, v1: V3 + 32, u2: -CW, v2: V3 + 96 }, signs.rate.texture, "left");
+  panel("tp-read", { u1: -CW - 16, v1: V3 + 96, u2: -CW, v2: V3 + 168 }, tubeRead.texture, "left");
+  panel("tp-write", { u1: -CW - 16, v1: V3 + 176, u2: -CW, v2: V3 + 248 }, tubeWrite.texture, "left");
+  // East wall (room face = world "right"): the live iostat dashboard (line tag
+  // 663 on its room-facing LOWER texture, 128 wide == storageDisplayTextureSize).
+  panel("tp-dash", { u1: CW, v1: V3 + 56, u2: CW + 16, v2: V3 + 184 }, display.texture, "right", {
+    lineTag: ids.lineTags[0] + 3, // 663
+  });
+  // East wall: the disk-server rack (easter egg), a shorter equipment panel.
+  panel("tp-rack", { u1: CW, v1: V3 + 192, u2: CW + 16, v2: V3 + 256 }, rack.texture, "right", {
+    kind: "server-rack",
+    floor: TP_FLOOR + SERVER_PANEL_HEIGHT,
+    ceiling: TP_FLOOR + SERVER_PANEL_HEIGHT,
+  });
+  // iostat terminal: a one-step lectern recess at the dead end; its far one-sided
+  // wall carries the DISK IO screen (read-point wired in terminals()).
+  areaRect(direction, "storage-terminal", { u1: -terminalHalfWidthLocal, v1: TP_BACK, u2: terminalHalfWidthLocal, v2: TP_TERM_WALL }, {
+    ...hallStyle,
+    kind: "terminal",
+    floor: TP_FLOOR + 16,
+    ceiling: TP_FLOOR + 16 + terminalTextureSize.height,
+    light: 200,
+    labelSide: backWall, // far wall (local +v) = the screen
+    labelTexture: screen.texture,
+  });
 
-    // Left wall: pneumatic throughput tubes. READ/S and WRITE/S are separate
-    // brass/glass panels, capped by an IO RATE plaque; the live dashboard below
-    // is a secondary readout and keeps the existing line-tag contract.
-    const tubePanel = (id, bounds, texture, extra = {}) =>
-      areaRect(direction, id, bounds, {
-        ...pit,
-        kind: "metric-display",
-        floor: F_PIT + DISPLAY_PANEL_HEIGHT,
-        ceiling: F_PIT + DISPLAY_PANEL_HEIGHT,
-        floorFlat: "FLOOR0_3",
-        wall: texture,
-        sideWall: accent.wall,
-        textureSide: "left",
-        light: 192,
-        ...extra,
-      });
-    tubePanel("pit-rate-plaque", tubePanels.rate, signs.rate.texture);
-    tubePanel("pit-read-tube", tubePanels.read, tubeRead.texture);
-    tubePanel("pit-write-tube", tubePanels.write, tubeWrite.texture);
-    tubePanel("pit-metric-display", metricDisplay, display.texture, {
-      // Live dashboard line tag: the engine's R_DoomPerfDiskDashboardPixel
-      // (patch 0027) repaints this panel's room-facing lower texture with the
-      // three scrolling graphs. It gates on the bottom-texture surface so the
-      // tag lands only on the dashboard face, not the seal above it or the
-      // one-sided side/back walls. 663 (gauges hold 660-662).
-      lineTag: ids.lineTags[0] + 3, // 663
-    });
+  // ===== QUEUE hall (off step-w2, floor 168): the queue-depth trough. =====
+  // The recessed channel floor uses light sentinel 134 + sector tag 610; patch
+  // 0023 paints request blocks here, scaled by queue depth.
+  // The hall floor is the brass rim; it's carved around the recessed trough.
+  const rim = {
+    ...hallStyle,
+    kind: "queue-rim",
+    floor: QUEUE_FLOOR,
+    ceiling: QUEUE_FLOOR + 128,
+    floorFlat: "FLOOR0_3",
+    light: 184,
+  };
+  const QO1 = -512, QO2 = -CW - RING; // hall outer u-bounds: [-512, -320]
+  areaRect(direction, "queue-rim-front", { u1: QO1, v1: VC1 + 160, u2: QO2, v2: queueTrough.v1 }, rim);
+  areaRect(direction, "queue-rim-back", { u1: QO1, v1: queueTrough.v2, u2: QO2, v2: VC2 }, rim);
+  areaRect(direction, "queue-rim-w", { u1: QO1, v1: queueTrough.v1, u2: queueTrough.u1, v2: queueTrough.v2 }, rim);
+  areaRect(direction, "queue-rim-e", { u1: queueTrough.u2, v1: queueTrough.v1, u2: QO2, v2: queueTrough.v2 }, rim);
+  areaRect(direction, "queue-channel", queueTrough, {
+    ...hallStyle,
+    kind: "queue",
+    floor: QUEUE_FLOOR - 16,
+    ceiling: QUEUE_FLOOR + 128,
+    floorFlat: "FLOOR1_7",
+    light: ids.lights[0] + 4, // 134: the r_plane queue-floor display sentinel
+    tag: ids.sectorTags[0] + 10, // 610
+  });
 
-    // West wall: a sky slit near the rear pit, kept clear of the equipment bay.
-    // It recesses beyond the wall (u < -PITHW) and opens onto the pit back.
-    areaRect(direction, "pit-sky-w", { u1: -304, v1: 1730, u2: -PITHW, v2: 1758 }, {
-      kind: "outside",
-      resource,
-      floor: 72,
-      ceiling: 192,
-      floorFlat: "FLOOR7_1",
-      ceilingFlat: "F_SKY1",
-      wall: "STONE3",
-      light: 255,
-    });
-    // Right wall: AWAIT delay gauges, the second saturation signal. The three
-    // fluid-column niches reserve line tags 660+ so the renderer can drive fill
-    // height from service/await time.
-    areaRect(direction, "pit-await-sign", { u1: PITHW, v1: 1344, u2: 304, v2: 1408 }, {
-      ...pit,
-      kind: "pit-sign",
-      floor: SIGN_FLOOR,
-      ceiling: SIGN_CEIL,
-      light: 200,
-      labelSide: "right",
-      labelTexture: signs.await.texture,
-    });
-    [1424, 1512, 1600].forEach((v1, k) => {
-      areaRect(direction, `pit-delay-gauge-${k}`, { u1: PITHW, v1, u2: 304, v2: v1 + 72 }, {
-        ...pit,
-        kind: "delay-gauge",
-        floor: SIGN_FLOOR,
-        ceiling: SIGN_CEIL,
-        light: 200,
-        labelSide: "right",
-        labelTexture: gauge.texture,
-        lineTag: ids.lineTags[0] + k, // 660 + k
-      });
-    });
-
-  // ===== Engine-room torches: amber flicker on the deck and around the pit. =====
-    addAreaThing(direction, 46, -296, 1100);
-    addAreaThing(direction, 46, 296, 1100);
-    addAreaThing(direction, 46, -250, 1430);
-    addAreaThing(direction, 46, 250, 1430);
-    addAreaThing(direction, 46, -150, 1740);
-    addAreaThing(direction, 46, 150, 1740);
+  // ===== Engine-room torches: amber flicker up the climb, set hard against the
+  // outer walls (24u clearance > the 16u torch radius) so they never stand in the
+  // stair path. =====
+  addAreaThing(direction, 46, 296, 776); // east foot, against the outer wall
+  addAreaThing(direction, 46, 296, 1108); // east climb, against the outer wall
+  addAreaThing(direction, 46, -296, 1108); // west climb, against the outer wall
+  addAreaThing(direction, 46, -296, 776); // summit corner, against the outer wall
+  addAreaThing(direction, 46, 120, 1208); // far landing, tucked against the column base
 };
 
 // Texture patches this wing contributes: the iostat screen, disk wall signs,
@@ -427,9 +398,8 @@ const textures = [
   },
 ];
 
-// Floor-name inscription flats, generated once (the geometry above references
-// them by name). "IO VAULT" at the entrance, "QUEUE" before the service channel.
-const flats = [...ioInscription.flats, ...queueInscription.flats];
+// Floor-name inscription flat, generated once ("IO VAULT" at the entrance).
+const flats = [...ioInscription.flats];
 
 const toWorld = ([u, v]) => [-u, -v];
 const segment = (a, b) => {
@@ -437,25 +407,23 @@ const segment = (a, b) => {
   const [bx, by] = toWorld(b);
   return { ax, ay, bx, by };
 };
-// The iostat read-point. Storage is the SOUTH wing, so the map builder rotates
-// local (u,v) -> world (-u,-v); the central terminalSegment helper assumes the
-// identity (north) rotation, so we emit the screen face in WORLD coords directly.
-// The face is the terminal recess's far wall (local v = V_TERM_WALL), centred on
-// u=0 and one screen wide, so the browser's USE-distance check (player world
-// position) lines up with the actual screen.
+// The iostat read-point. Storage is the SOUTH wing, so the builder rotates local
+// (u,v) -> world (-u,-v); the central terminalSegment helper assumes the identity
+// (north) rotation, so we emit the screen face in WORLD coords directly. The face
+// is the terminal recess's far wall (local v = TP_TERM_WALL), centred on u=0 and
+// one screen wide, so the browser's USE-distance check lines up with the screen.
 const terminals = ({ terminalHalfWidth }) => {
-  const [ax, ay] = toWorld([-terminalHalfWidth, V_TERM_WALL]);
-  const [bx, by] = toWorld([terminalHalfWidth, V_TERM_WALL]);
+  const [ax, ay] = toWorld([-terminalHalfWidth, TP_TERM_WALL]);
+  const [bx, by] = toWorld([terminalHalfWidth, TP_TERM_WALL]);
   return [{ sign: "storage", segments: [{ ax, ay, bx, by }] }];
 };
 
 const easterEggs = () => {
+  // The disk-server rack panel lives on the throughput hall's east wall.
   return [
     {
       id: "disk-server-rack",
-      segments: [
-        segment([serverRack.u1, serverRack.v1], [serverRack.u2, serverRack.v1]),
-      ],
+      segments: [segment([CW, V3 + 192], [CW, V3 + 256])],
     },
   ];
 };

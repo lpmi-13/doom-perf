@@ -97,9 +97,9 @@ export const mapManifest = {
       "segments": [
         {
           "ax": 128,
-          "ay": -1776,
+          "ay": -1648,
           "bx": -128,
-          "by": -1776
+          "by": -1648
         }
       ]
     },
@@ -120,10 +120,10 @@ export const mapManifest = {
       "id": "disk-server-rack",
       "segments": [
         {
-          "ax": 288,
-          "ay": -1760,
-          "bx": 192,
-          "by": -1760
+          "ax": -160,
+          "ay": -1536,
+          "bx": -160,
+          "by": -1600
         }
       ]
     }

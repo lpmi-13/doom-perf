@@ -1,0 +1,110 @@
+diff --git a/r_main.c b/r_main.c
+index 96d702b..7a10c15 100644
+--- a/r_main.c
++++ b/r_main.c
+@@ -33,6 +33,7 @@ static const char rcsid[] = "$Id: r_main.c,v 1.5 1997/02/03 22:45:12 b1 Exp $";
+ 
+ 
+ #include "doomdef.h"
++#include "doomstat.h"
+ #include "d_net.h"
+ 
+ #include "m_bbox.h"
+@@ -831,18 +832,90 @@ R_PointInSubsector
+ //
+ // R_SetupFrame
+ //
++//
++// Doom Perf: render-viewpoint interpolation.
++// Doom advances the world at 35 Hz (one tic). The browser loop (see D_DoomLoop)
++// now renders faster than that and lerps the view between the previous and the
++// current tic's player viewpoint, so camera motion is smooth on sample-and-hold
++// displays instead of juddering at the tic rate (very visible as "ghosting" on
++// high-contrast props like torches). dp_interpfrac is set per render frame by
++// D_DoomLoop; R_CaptureViewpoint snapshots the viewpoint once per tic.
++//
++fixed_t		dp_interpfrac;			// 0..FRACUNIT within the current tic
++
++static fixed_t	dp_view_oldx, dp_view_oldy, dp_view_oldz;
++static fixed_t	dp_view_newx, dp_view_newy, dp_view_newz;
++static angle_t	dp_view_oldangle, dp_view_newangle;
++static boolean	dp_view_valid = false;		// false until 2 samples / after a warp
++
++// Snap (skip interpolation) when the view jumped farther than a fast run could
++// move in one tic -- i.e. a teleport or fresh level -- to avoid a visible slide.
++#define DP_INTERP_SNAP	(128*FRACUNIT)
++
++void R_CaptureViewpoint (void)
++{
++    player_t*	player = &players[displayplayer];
++
++    if (gamestate != GS_LEVEL || !player->mo)
++    {
++	dp_view_valid = false;
++	return;
++    }
++
++    dp_view_oldx = dp_view_newx;
++    dp_view_oldy = dp_view_newy;
++    dp_view_oldz = dp_view_newz;
++    dp_view_oldangle = dp_view_newangle;
++
++    dp_view_newx = player->mo->x;
++    dp_view_newy = player->mo->y;
++    dp_view_newz = player->viewz;
++    dp_view_newangle = player->mo->angle;
++
++    if (!dp_view_valid
++	|| dp_view_newx - dp_view_oldx > DP_INTERP_SNAP
++	|| dp_view_oldx - dp_view_newx > DP_INTERP_SNAP
++	|| dp_view_newy - dp_view_oldy > DP_INTERP_SNAP
++	|| dp_view_oldy - dp_view_newy > DP_INTERP_SNAP)
++    {
++	// no previous frame, or a warp: anchor old=new so we render the new
++	// viewpoint exactly with no slide.
++	dp_view_oldx = dp_view_newx;
++	dp_view_oldy = dp_view_newy;
++	dp_view_oldz = dp_view_newz;
++	dp_view_oldangle = dp_view_newangle;
++	dp_view_valid = true;
++    }
++}
++
+ void R_SetupFrame (player_t* player)
+-{		
++{
+     int		i;
+-    
++
+     viewplayer = player;
+-    viewx = player->mo->x;
+-    viewy = player->mo->y;
+-    viewangle = player->mo->angle + viewangleoffset;
++
++    if (dp_view_valid && gamestate == GS_LEVEL)
++    {
++	// lerp old -> new by the fraction of a tic elapsed this render frame
++	long long	dangle = (int)(dp_view_newangle - dp_view_oldangle);
++
++	viewx = dp_view_oldx + FixedMul(dp_interpfrac, dp_view_newx - dp_view_oldx);
++	viewy = dp_view_oldy + FixedMul(dp_interpfrac, dp_view_newy - dp_view_oldy);
++	viewz = dp_view_oldz + FixedMul(dp_interpfrac, dp_view_newz - dp_view_oldz);
++	viewangle = dp_view_oldangle
++	    + (angle_t)((dangle * dp_interpfrac) >> FRACBITS)
++	    + viewangleoffset;
++    }
++    else
++    {
++	viewx = player->mo->x;
++	viewy = player->mo->y;
++	viewz = player->viewz;
++	viewangle = player->mo->angle + viewangleoffset;
++    }
++
+     extralight = player->extralight;
+ 
+-    viewz = player->viewz;
+-    
+     viewsin = finesine[viewangle>>ANGLETOFINESHIFT];
+     viewcos = finecosine[viewangle>>ANGLETOFINESHIFT];
+ 	

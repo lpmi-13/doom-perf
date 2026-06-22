@@ -68,8 +68,13 @@ const resourceConfigs = {
     labelPatch: "DPLDSK",
     labelColor: 231,
     labelStyle: "storage",
-    wall: "STONE2",
-    accent: "BROWNHUG",
+    // Doom Perf: bolder, higher-contrast warm walls so the far back/engine-room
+    // wall reads at distance instead of dissolving into a uniform "sandy" blob.
+    // STONE2/BROWNHUG are low-contrast mottled tans whose only detail (mortar)
+    // undersamples away at 320x200 (no mipmapping), leaving the flat base colour;
+    // BROWN96 (banded) and BROWN1 (bold blocks) keep large features that survive.
+    wall: "BROWN96",
+    accent: "BROWN1",
     floor: "FLOOR0_3",
     ceiling: "CEIL3_2",
   },

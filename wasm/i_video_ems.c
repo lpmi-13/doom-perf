@@ -4,6 +4,7 @@
 
 #include <SDL2/SDL.h>
 #include <emscripten.h>
+#include <emscripten/html5.h>
 
 #include "d_main.h"
 #include "doomdef.h"
@@ -579,6 +580,89 @@ static void PollEvents(void)
     }
 }
 
+// Doom Perf: size the SDL backing store (the canvas drawing buffer) to the
+// display's physical pixels and let SDL_RenderSetLogicalSize do the 320x200 ->
+// device upscale with nearest-neighbour. Without this the backing store stays a
+// tiny 320x200 buffer and the browser/compositor bilinear-stretches it to the
+// screen — very visible as soft far walls and smeared sprites under fractional
+// desktop scaling and on high-DPI phones (devicePixelRatio 2-4). Internal Doom
+// rendering stays 320x200, so only the final (cheap) GPU blit grows.
+static void DoomPerf_ResizeBackingStore(void)
+{
+    double css_w = 0.0, css_h = 0.0;
+    double dpr = emscripten_get_device_pixel_ratio();
+
+    if (dpr <= 0.0)
+    {
+        dpr = 1.0;
+    }
+    if (emscripten_get_element_css_size("#canvas", &css_w, &css_h) != EMSCRIPTEN_RESULT_SUCCESS
+        || css_w <= 0.0 || css_h <= 0.0)
+    {
+        css_w = SCREENWIDTH;
+        css_h = SCREENHEIGHT;
+    }
+
+    // The canvas element fills the viewport; `object-fit: contain` letterboxes
+    // the 320x200 (8:5) image inside it. Match the backing store to the
+    // *displayed* image's device pixels so it presents ~1:1 rather than upscaled.
+    const double aspect = (double)SCREENWIDTH / (double)SCREENHEIGHT;
+    double img_w = css_w;
+    double img_h = css_h;
+
+    if (css_w / css_h > aspect)
+    {
+        img_w = css_h * aspect;
+    }
+    else
+    {
+        img_h = css_w / aspect;
+    }
+
+    int dev_w = (int)(img_w * dpr + 0.5);
+
+    if (dev_w < SCREENWIDTH)
+    {
+        dev_w = SCREENWIDTH;
+    }
+    // Ceiling so an enormous display can't make the blit buffer absurd.
+    if (dev_w > 4096)
+    {
+        dev_w = 4096;
+    }
+    // Keep the 8:5 aspect exactly so SDL's logical-size scaler adds no bars.
+    int dev_h = (int)((double)dev_w / aspect + 0.5);
+
+    int cur_w = 0, cur_h = 0;
+    SDL_GetWindowSize(window, &cur_w, &cur_h);
+    if (cur_w != dev_w || cur_h != dev_h)
+    {
+        SDL_SetWindowSize(window, dev_w, dev_h);
+    }
+    SDL_RenderSetLogicalSize(renderer, SCREENWIDTH, SCREENHEIGHT);
+
+    // SDL/emscripten rewrites the canvas CSS size to the new pixel dimensions;
+    // re-assert the responsive layout so the element keeps filling the viewport
+    // (then `object-fit: contain` letterboxes the now high-res buffer).
+    EM_ASM({
+        var c = document.getElementById('canvas');
+        if (c) { c.style.width = '100%'; c.style.height = '100%'; }
+    });
+}
+
+static EM_BOOL DoomPerf_OnResize(int eventType, const EmscriptenUiEvent* uiEvent, void* userData)
+{
+    (void)eventType;
+    (void)uiEvent;
+    (void)userData;
+
+    if (graphics_initialized)
+    {
+        DoomPerf_ResizeBackingStore();
+    }
+    return EM_FALSE;
+}
+
 void I_InitGraphics(void)
 {
     int i;
@@ -637,6 +721,12 @@ void I_InitGraphics(void)
 
     SDL_StartTextInput();
     graphics_initialized = true;
+
+    // Grow the backing store to device pixels now, and keep it matched as the
+    // viewport changes (desktop resize, phone rotation / browser-chrome show).
+    DoomPerf_ResizeBackingStore();
+    emscripten_set_resize_callback(
+        EMSCRIPTEN_EVENT_TARGET_WINDOW, NULL, EM_FALSE, DoomPerf_OnResize);
 }
 
 void I_ShutdownGraphics(void)
@@ -679,6 +769,14 @@ void I_UpdateNoBlit(void)
 {
 }
 
+// Doom Perf: millisecond wall clock for sub-tic render interpolation. I_GetTime
+// only resolves to 35 Hz tics; D_DoomLoop needs finer timing to compute how far
+// into the current tic each interpolated frame falls (dp_interpfrac).
+int I_GetTimeMS(void)
+{
+    return (int) SDL_GetTicks();
+}
+
 void I_FinishUpdate(void)
 {
     int i;
@@ -698,7 +796,11 @@ void I_FinishUpdate(void)
     SDL_RenderCopy(renderer, texture, 0, 0);
     SDL_RenderPresent(renderer);
 
-    emscripten_sleep(1000 / TICRATE);
+    // Yield to the browser and cap the *render* rate. Game logic is still paced
+    // to 35 Hz by TryRunTics (real-time I_GetTime); D_DoomLoop renders multiple
+    // interpolated frames per tic, so this caps that to ~60 fps rather than the
+    // old one-frame-per-tic 35 fps. (Was 1000/TICRATE.)
+    emscripten_sleep(1000 / 60);
 }
 
 void I_ReadScreen(byte* scr)

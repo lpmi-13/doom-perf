@@ -1,0 +1,215 @@
+diff --git a/r_draw.c b/r_draw.c
+index d246d93..d369788 100644
+--- a/r_draw.c
++++ b/r_draw.c
+@@ -106,6 +106,8 @@ static byte R_DoomPerfCpuGaugePixel (int gauge, int ty);
+ static byte R_DoomPerfDiskGaugePixel (int gauge, int ty);
+ static byte R_DoomPerfDiskQueuePixel (fixed_t xfrac, fixed_t yfrac, byte background);
+ static byte R_DoomPerfDiskDashboardPixel (int tx, int ty, byte background);
++static byte R_DoomPerfDiskPlatterPixel (fixed_t xfrac, fixed_t yfrac, byte background);
++static byte R_DoomPerfDiskSpindlePixel (int ty);
+ 
+ //
+ // A column is a vertical slice/span from a wall texture that,
+@@ -149,7 +151,9 @@ void R_DrawColumn (void)
+     // This is as fast as it gets.
+     do 
+     {
+-	if (doomperf_cpu_column_display == 30)
++	if (doomperf_cpu_column_display == 31)
++	    *dest = dc_colormap[R_DoomPerfDiskSpindlePixel((frac>>FRACBITS)&127)];
++	else if (doomperf_cpu_column_display == 30)
+ 	    *dest = dc_colormap[R_DoomPerfDiskDashboardPixel(
+ 				    doomperf_cpu_column_texture_x,
+ 				    (frac>>FRACBITS)&127,
+@@ -1049,6 +1053,144 @@ static byte R_DoomPerfDiskDashboardPixel (int tx, int ty, byte background)
+     return DOOMPERF_DASH_WHITE;
+ }
+ 
++// ===== Storage summit: the spinning-disk PLATTER + central SPINDLE drum. =====
++// Both encode utilization (how busy the disk is) and throughput (work moving
++// through). There is no fed throughput signal yet, so throughput is synthesised
++// from utilization plus the transient IOPS-spike pulse -- enough to drive a
++// convincing rotation/flow. Sim modes 3/4 pin the disk busy/saturated.
++static int R_DoomPerfDiskUtilPermille (void)
++{
++    switch (doomperf_sim_mode)
++    {
++      case 3:
++	return 910 + (leveltime % 50);
++      case 4:
++	return 975 + (leveltime % 20);
++      default:
++	return doomperf_storage_util;
++    }
++}
++
++static int R_DoomPerfDiskThroughputPermille (void)
++{
++    int		t;
++
++    t = R_DoomPerfDiskUtilPermille();
++    if (doomperf_storage_iops_spike > 0)
++	t += 250;			// burst the flow on an IOPS spike
++    if (t < 0)
++	t = 0;
++    if (t > 1000)
++	t = 1000;
++    return t;
++}
++
++// Platter geometry, world units (south wing: local u=0,v=1024 -> world 0,-1024).
++#define DOOMPERF_PLATTER_CX	0
++#define DOOMPERF_PLATTER_CY	(-1024)
++#define DOOMPERF_PLATTER_R	160	// outer track radius
++#define DOOMPERF_PLATTER_HUB	60	// inner hole under the spindle drum
++#define DOOMPERF_PLATTER_TRACKS	8
++
++// The platter FLOOR: concentric tracks fill outward with utilization, and a
++// bright read-head wedge sweeps around the disk (the "spin"), speed scaling with
++// throughput. Painted in world space so the pattern stays locked to the disk.
++static byte
++R_DoomPerfDiskPlatterPixel
++( fixed_t		xfrac,
++  fixed_t		yfrac,
++  byte			background )
++{
++    int		worldx;
++    int		worldy;
++    int		dx;
++    int		dy;
++    int		r2;
++    int		track;
++    int		util;
++    int		fill;
++    int		thr;
++    int		head;
++    int		sweep;
++    int		da;
++
++    worldx = R_DoomPerfCpuWorldX(xfrac);
++    worldy = R_DoomPerfCpuWorldY(yfrac);
++    dx = worldx - DOOMPERF_PLATTER_CX;
++    dy = worldy - DOOMPERF_PLATTER_CY;
++    r2 = dx * dx + dy * dy;
++    if (r2 > DOOMPERF_PLATTER_R * DOOMPERF_PLATTER_R)
++	return background;				// square corners, off-disk
++    if (r2 < DOOMPERF_PLATTER_HUB * DOOMPERF_PLATTER_HUB)
++	return DOOMPERF_DISK_FRAME;			// metal hub under the drum
++
++    // Equal-area tracks: more, thinner rings toward the rim (like a real platter).
++    track = (r2 * DOOMPERF_PLATTER_TRACKS)
++	    / (DOOMPERF_PLATTER_R * DOOMPERF_PLATTER_R);
++    if (track >= DOOMPERF_PLATTER_TRACKS)
++	track = DOOMPERF_PLATTER_TRACKS - 1;
++
++    util = R_DoomPerfDiskUtilPermille();
++    fill = (util * DOOMPERF_PLATTER_TRACKS) / 1000;	// active tracks, inner-out
++
++    // Rotating read head(s): bright wedge(s) sweeping around, faster when busy.
++    thr = R_DoomPerfDiskThroughputPermille();
++    head = (int)(R_PointToAngle2(DOOMPERF_PLATTER_CX << FRACBITS,
++				 DOOMPERF_PLATTER_CY << FRACBITS,
++				 xfrac, yfrac) >> 24);		// 0..255 around disk
++    sweep = (leveltime * (2 + thr / 150)) & 255;
++    da = head - sweep;
++    if (da < 0)
++	da = -da;
++    if (da > 128)
++	da = 256 - da;					// angular distance 0..128
++    if (da < 10 || (thr > 500 && da > 118))		// 2nd head emerges when busy
++	return DOOMPERF_DISK_GOLD;			// the bright sweep
++
++    if ((r2 & 127) < 4)
++	return DOOMPERF_DISK_FRAME;			// faint groove separators
++    if (track < fill)
++	return (track & 1) ? DOOMPERF_DISK_GOLD : DOOMPERF_DISK_RED;
++    return DOOMPERF_DISK_EMPTY;				// dark idle track
++}
++
++// The central SPINDLE drum (a vertical pillar): a glowing fill rises to %util and
++// bright throughput streaks travel UP the wall. ty is the texture row (127=bottom)
++// supplied by r_segs.c, so the fill/streaks lock to the drum surface.
++static byte R_DoomPerfDiskSpindlePixel (int ty)
++{
++    int		util;
++    int		thr;
++    int		tx;
++    int		fill_ty;
++    int		speed;
++    int		seed;
++    int		head_y;
++    int		offset;
++    int		trail;
++
++    util = R_DoomPerfDiskUtilPermille();
++    thr = R_DoomPerfDiskThroughputPermille();
++    tx = doomperf_cpu_column_texture_x & 63;
++
++    fill_ty = 127 - (util * 127) / 1000;		// glowing fill rises with util
++
++    // Rising streaks (throughput): a per-column head climbs (ty -> 0) over time.
++    speed = 1 + thr / 150;
++    trail = 10 + thr / 16;
++    seed = tx * 31 + (tx >> 2) * 7;
++    head_y = (127 - ((leveltime * speed + seed * 11) & 127)) & 127;
++    offset = (ty - head_y + 128) & 127;
++    if (offset < 2)
++	return DOOMPERF_DISK_GOLD;			// bright streak head
++    if (offset < trail && ty >= fill_ty - 16)
++	return DOOMPERF_DISK_RED;			// streak trail near the fill
++
++    if (ty >= fill_ty)
++	return (ty & 3) ? DOOMPERF_DISK_GOLD : DOOMPERF_DISK_FRAME;  // banded util fill
++    return DOOMPERF_DISK_EMPTY;				// dark above the fill
++}
++
+ static byte
+ R_DoomPerfCpuFloorPixel
+ ( fixed_t		xfrac,
+@@ -1061,6 +1203,8 @@ R_DoomPerfCpuFloorPixel
+ 	return R_DoomPerfCpuRunQueuePixel(xfrac, yfrac, background);
+     if (doomperf_cpu_floor_display == 3)
+ 	return R_DoomPerfDiskQueuePixel(xfrac, yfrac, background);
++    if (doomperf_cpu_floor_display == 4)
++	return R_DoomPerfDiskPlatterPixel(xfrac, yfrac, background);
+     return background;
+ }
+ 
+diff --git a/r_plane.c b/r_plane.c
+index 2bcc9c8..04f30d9 100644
+--- a/r_plane.c
++++ b/r_plane.c
+@@ -50,6 +50,8 @@ planefunction_t		ceilingfunc;
+ #define DOOMPERF_CPU_RUN_QUEUE_DISPLAY_LIGHT	144
+ // Storage (disk) wing: the media-pit queue channel's floor (reserved sentinel).
+ #define DOOMPERF_DISK_QUEUE_DISPLAY_LIGHT	134
++// Storage (disk) wing: the summit platter floor (rotating utilization tracks).
++#define DOOMPERF_DISK_PLATTER_DISPLAY_LIGHT	130
+ extern int doomperf_cpu_floor_display;
+ 
+ //
+@@ -436,6 +438,8 @@ void R_DrawPlanes (void)
+ 		doomperf_cpu_floor_display = 2;
+ 	    else if (pl->lightlevel == DOOMPERF_DISK_QUEUE_DISPLAY_LIGHT)
+ 		doomperf_cpu_floor_display = 3;
++	    else if (pl->lightlevel == DOOMPERF_DISK_PLATTER_DISPLAY_LIGHT)
++		doomperf_cpu_floor_display = 4;
+ 	    else
+ 		doomperf_cpu_floor_display = 0;
+ 	}
+diff --git a/r_segs.c b/r_segs.c
+index d652e4e..2f79289 100644
+--- a/r_segs.c
++++ b/r_segs.c
+@@ -74,6 +74,10 @@ static void R_DoomPerfBeginColumn (int texturecolumn, int surface)
+ 	// line. Gate on the bottom surface so the tag drives the dashboard only
+ 	// there, not the seal above it or the one-sided side/back walls.
+ 	doomperf_cpu_column_display = 30;
++    else if (surface == 2 && tag == 664)
++	// Storage summit spindle drum: throughput streaks on the drum\'s lower
++	// (two-sided) wall texture; gate on the bottom surface like the dashboard.
++	doomperf_cpu_column_display = 31;
+     else
+ 	doomperf_cpu_column_display = 0;
+     doomperf_cpu_column_texture_x = texturecolumn;

@@ -51,16 +51,16 @@ index 17dab45..56ce5d3 100644
 +    worldx = R_DoomPerfCpuWorldX(xfrac);
 +    worldy = R_DoomPerfCpuWorldY(yfrac);
 +    // Storage is the south wing: the builder rotates local (u,v) -> (-u,-v), so
-+    // the channel's u[-256,256] v[1152,1216] maps to this world box.
-+    if (worldx < -256 || worldx > 256 || worldy < -1216 || worldy > -1152)
++    // the queue trough's u[-496,-336] v[1088,1152] maps to this world box.
++    if (worldx < 336 || worldx > 496 || worldy < -1152 || worldy > -1088)
 +	return background;
 +
-+    localx = worldx + 256;		// 0 (arrival) .. 512 (dispatch) along the queue
++    localx = worldx - 336;		// 0 (arrival) .. 160 (dispatch) along the queue
 +    queue = R_DoomPerfDiskQueuePermille();
 +    if (queue > 1000)
 +	queue = 1000;
-+    fill = (queue * 512) / 1000;
-+    warn = (333 * 512) / 1000;		// rated-capacity line (~8 of 24 requests)
++    fill = (queue * 160) / 1000;
++    warn = (333 * 160) / 1000;		// rated-capacity line (~8 of 24 requests)
 +
 +    if (localx >= fill)
 +	return DOOMPERF_DISK_EMPTY;	// past the queue tail: dark trough

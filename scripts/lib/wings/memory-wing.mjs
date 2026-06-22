@@ -220,7 +220,10 @@ const buildBookshelfPatch = () => {
     let x = 4;
     let i = 0;
     while (x < W - 5) {
-      const bw = 5 + ((i * 3 + shelf) % 4); // 5..8 px spines
+      // Doom Perf: wider spines (8..12 px vs the old 5..8) lower the texture's
+      // spatial frequency, so the shelf survives 320x200 undersampling at
+      // distance instead of smearing into an undifferentiated band.
+      const bw = 8 + ((i * 3 + shelf) % 5); // 8..12 px spines
       const bh = 22 + ((i * 5 + shelf * 3) % 9); // varied heights
       const c = spineColors[(i + shelf) % spineColors.length];
       rect(x, boardY - bh, bw, bh, c);
@@ -467,7 +470,10 @@ const build = (ctx) => {
     kind: "memory-cache-reservoir",
     floor: -12,
     floorFlat: "FWATER1",
-    light: 156,
+    // Doom Perf: raised from 156 to a readable floor so the high-frequency
+    // bookshelf wall on this flank keeps contrast at distance instead of
+    // smearing to mush (the dim flank was the "left wall blurs" case).
+    light: 176,
     tag: memoryTags.cache,
   });
   areaRect(direction, "cache-sign-recess", { u1: memoryRoomBounds.cache.u1 - 32, v1: 1088, u2: memoryRoomBounds.cache.u1, v2: 1216 }, {
@@ -475,17 +481,20 @@ const build = (ctx) => {
     kind: "memory-sign",
     floor: 8,
     ceiling: 8 + wallSignSize.height,
-    light: 172,
+    light: 184,
     labelSide: localLeftWall,
     labelTexture: memoryWallSigns.rss.texture,
   });
 
-  // OOM bay: deliberately dark and quiet; the red/error treatment is reserved
-  // for a later live OOM hook so static decor does not compete with telemetry.
+  // OOM bay: still the calmest/dimmest corner, but lifted off the floor so its
+  // bookshelf wall stays readable across the room rather than dissolving to mush
+  // (320x200 undersampling kills a high-frequency texture once it goes dark). It
+  // remains the darkest bay so it reads as quiet; a later live OOM hook can still
+  // drive it darker/red under pressure.
   areaRect(direction, "oom-threshold", { u1: memoryRoomBounds.oom.u1, v1: 1120, u2: 512, v2: 1280 }, {
     ...dimWalkway,
     kind: "memory-oom-threshold",
-    light: 132,
+    light: 168,
   });
   areaRect(direction, "oom-bay", { u1: 512, v1: 1120, u2: memoryRoomBounds.oom.u2, v2: 1280 }, {
     ...bankWall,
@@ -493,7 +502,7 @@ const build = (ctx) => {
     floor: -16,
     ceiling: 176,
     floorFlat: "FLOOR0_6",
-    light: 112,
+    light: 160,
     tag: memoryTags.oom,
   });
   areaRect(direction, "oom-sign-recess", { u1: memoryRoomBounds.oom.u2, v1: 1152, u2: 672, v2: 1248 }, {
