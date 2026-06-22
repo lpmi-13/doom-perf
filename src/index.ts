@@ -4,7 +4,7 @@ import { createTelemetryClient, createTerminalOverlay, resolveTelemetrySource } 
 import type { TelemetrySnapshot, TerminalSign } from "./telemetry";
 import { createInteractPrompt } from "./interact";
 import { createMovementPad } from "./ui/movementPad";
-import { createMenuControls } from "./ui/menuControls";
+import { createMenuControls, type MenuAction } from "./ui/menuControls";
 import { mapManifest } from "./doomperf-map-manifest";
 import { playAssetSound, preloadAssetSound } from "./asset_sounds";
 
@@ -506,9 +506,52 @@ const start = async () => {
   if (engineAvailable) {
     attachAudioUnlock();
     preloadAssetSound(interactionSound);
+
+    // --- Mobile long-press menu --------------------------------------------
+    // A phone has no Esc key, so a long-press on the game view opens the Doom
+    // data-source menu (the "new game" / sim picker) just like Esc on desktop,
+    // letting the player abandon a running sim and choose a different one. While
+    // it is open we show the ▲▼/SELECT/BACK menu buttons instead of the movement
+    // pad. The prebuilt engine exposes no menuactive flag, so we mirror the menu
+    // here: on touch every menu key comes from our own buttons or the long-press,
+    // so this model tracks what the engine is showing. menuScreen "closed" means
+    // ordinary gameplay (or, when the player isn't in a level, the title screen).
+    type MenuScreen = "closed" | "main" | "mode" | "options";
+    let menuScreen: MenuScreen = "closed";
+    let mainItem = 0; // main-menu cursor row: 0 = NEW GAME, 1 = OPTIONS
+    let lastSimMode = 0;
+
+    const synthesizeEscapePress = () => {
+      const dispatchEscape = (type: "keydown" | "keyup") => {
+        const event = new KeyboardEvent(type, { key: "Escape", code: "Escape", bubbles: true, cancelable: true });
+        Object.defineProperty(event, "keyCode", { get: () => 27 });
+        Object.defineProperty(event, "which", { get: () => 27 });
+        document.dispatchEvent(event);
+      };
+      dispatchEscape("keydown");
+      window.setTimeout(() => dispatchEscape("keyup"), 90);
+    };
+
+    // Keep menuScreen in step with the on-screen Doom menu as the player drives
+    // it from the touch buttons. Mirrors m_menu.c: BACK (Esc) closes the whole
+    // menu; on the main menu SELECT opens NEW GAME's data-source list or the
+    // options page; on the data-source list SELECT starts the chosen sim and
+    // closes the menu; ▲▼ move the main-menu cursor between its two items.
+    const handleMenuAction = (action: MenuAction) => {
+      if (menuScreen === "closed") return; // title-screen menu: the engine drives it
+      if (action === "back") {
+        menuScreen = "closed";
+      } else if (menuScreen === "main") {
+        if (action === "select") menuScreen = mainItem === 0 ? "mode" : "options";
+        else mainItem = mainItem === 0 ? 1 : 0; // up/down toggles the two rows
+      } else if (menuScreen === "mode" && action === "select") {
+        menuScreen = "closed"; // a data source was chosen; the sim (re)starts
+      }
+    };
+
     const terminal = createTerminalOverlay();
     const movementPad = createMovementPad();
-    const menuControls = createMenuControls();
+    const menuControls = createMenuControls(handleMenuAction);
 
     // On touch, the engine's SDL layer turns canvas drags into mouse-look. Stop
     // canvas-targeted touch/pointer/mouse events in the capture phase (which runs
@@ -520,6 +563,10 @@ const start = async () => {
     // tap handler is assigned once the easter-egg helpers below exist; the canvas
     // swallow (which already sees every canvas touch) calls it.
     let onCanvasTap: (fractionX: number) => void = () => {};
+    // Assigned below once the menu helpers exist; fired by a long-press on the
+    // game view (the phone's Esc). Declared here so the canvas touch handler can
+    // close over it.
+    let onLongPress: () => void = () => {};
     if (isTouchDevice) {
       // A tap is a brief, near-stationary touch; a drag is a look/steer gesture
       // and is ignored. Track the touch start so touchend can tell them apart.
@@ -529,6 +576,19 @@ const start = async () => {
       let touchIsTap = false;
       const tapMaxMovePx = 16;
       const tapMaxMs = 400;
+      // A long-press (finger held still on the game view) is the phone's Esc: it
+      // toggles the Doom data-source menu via onLongPress. The timer is armed on
+      // touchstart and cancelled the moment the touch turns into a drag or ends
+      // early, so only a genuine still hold fires it.
+      const longPressMs = 500;
+      let longPressTimer: number | null = null;
+      let longPressFired = false;
+      const cancelLongPress = () => {
+        if (longPressTimer !== null) {
+          window.clearTimeout(longPressTimer);
+          longPressTimer = null;
+        }
+      };
       const swallowCanvasInput = (event: Event) => {
         if (event.target !== canvas) return;
         if (event.type === "touchstart") {
@@ -540,6 +600,14 @@ const start = async () => {
             touchStartY = touch.clientY;
             touchStartAt = Date.now();
             touchIsTap = true;
+            longPressFired = false;
+            cancelLongPress();
+            longPressTimer = window.setTimeout(() => {
+              longPressTimer = null;
+              longPressFired = true;
+              touchIsTap = false; // a long-press is not a tap
+              onLongPress();
+            }, longPressMs);
           }
         } else if (event.type === "touchmove") {
           const touch = (event as TouchEvent).changedTouches[0];
@@ -549,14 +617,21 @@ const start = async () => {
               Math.abs(touch.clientY - touchStartY) > tapMaxMovePx)
           ) {
             touchIsTap = false;
+            cancelLongPress(); // a drag (look/steer) is not a long-press
           }
         } else if (event.type === "touchend") {
+          cancelLongPress();
           const touch = (event as TouchEvent).changedTouches[0];
-          if (touchIsTap && touch && Date.now() - touchStartAt <= tapMaxMs) {
+          if (!longPressFired && touchIsTap && touch && Date.now() - touchStartAt <= tapMaxMs) {
             const rect = canvas.getBoundingClientRect();
             if (rect.width > 0) onCanvasTap((touch.clientX - rect.left) / rect.width);
           }
           touchIsTap = false;
+          longPressFired = false;
+        } else if (event.type === "touchcancel") {
+          cancelLongPress();
+          touchIsTap = false;
+          longPressFired = false;
         }
         event.preventDefault();
         event.stopImmediatePropagation();
@@ -773,7 +848,7 @@ const start = async () => {
     };
 
     onCanvasTap = (fractionX: number) => {
-      if (terminal.isOpen()) return;
+      if (terminal.isOpen() || menuScreen !== "closed") return;
       const pose = currentPlayerPose();
       if (!pose.active) return;
       if (easterEggs.some((egg) => easterEggTapHits(egg, pose, fractionX))) {
@@ -862,18 +937,29 @@ const start = async () => {
       // held arrow keys.
       if (isTouchDevice) {
         const playerActive = !!getEngine()?._DoomPerf_PlayerActive?.();
+        // Safety nets that keep the long-press menu overlay in step with the
+        // engine: it can only be open inside a running level, and choosing a
+        // data source (by any path, even an external keyboard) changes the sim
+        // mode. Either condition means we are no longer in that menu.
+        const simMode = getEngine()?._DoomPerf_GetSimMode?.() ?? 0;
+        if (!playerActive || (menuScreen !== "closed" && simMode !== lastSimMode)) {
+          menuScreen = "closed";
+        }
+        lastSimMode = simMode;
         if (terminal.isOpen()) {
           movementPad.hide();
           menuControls.hide();
-        } else if (playerActive) {
+        } else if (playerActive && menuScreen === "closed") {
           menuControls.hide();
           movementPad.show();
         } else {
+          // Title/menu screen, or our in-game long-press menu overlay: either
+          // way the player navigates with the ▲▼/SELECT/BACK buttons.
           movementPad.hide();
           menuControls.show();
         }
       }
-      if (terminal.isOpen()) {
+      if (terminal.isOpen() || menuScreen !== "closed") {
         prompt.hide();
         return;
       }
@@ -888,6 +974,24 @@ const start = async () => {
       }
       prompt.show(target.kind);
     };
+
+    // A long-press on the game view is the phone's Esc key: it opens the Doom
+    // data-source menu so the player can back out of the running sim and pick a
+    // different one, and closes it again. While it is open updatePrompt swaps the
+    // movement pad for the ▲▼/SELECT/BACK buttons (see menuScreen above).
+    const toggleInGameMenu = () => {
+      if (!engineReady || terminal.isOpen()) return;
+      const playerActive = !!getEngine()?._DoomPerf_PlayerActive?.();
+      // Only act inside a running level. On the title/menu screens the menu
+      // buttons are already shown and the engine owns Esc, so leave them be.
+      if (!playerActive && menuScreen === "closed") return;
+      synthesizeEscapePress();
+      menuScreen = menuScreen === "closed" ? "main" : "closed";
+      navigator.vibrate?.(20); // a tick of haptic feedback that the hold registered
+      updatePrompt(); // swap the controls now rather than waiting for the poll
+    };
+    onLongPress = toggleInGameMenu;
+
     const promptRefresh = window.setInterval(updatePrompt, 120);
 
     const onKeyDown = (event: KeyboardEvent) => {
@@ -946,14 +1050,7 @@ const start = async () => {
       window.removeEventListener("keydown", noteUserAction, true);
       window.removeEventListener("pointerdown", noteUserAction, true);
       if (userActed) return;
-      const escape = (type: "keydown" | "keyup") => {
-        const event = new KeyboardEvent(type, { key: "Escape", code: "Escape", bubbles: true, cancelable: true });
-        Object.defineProperty(event, "keyCode", { get: () => 27 });
-        Object.defineProperty(event, "which", { get: () => 27 });
-        document.dispatchEvent(event);
-      };
-      escape("keydown");
-      window.setTimeout(() => escape("keyup"), 90);
+      synthesizeEscapePress();
     }, 800);
     return;
   }

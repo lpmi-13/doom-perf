@@ -67,8 +67,9 @@ What currently works:
 - Interactive terminal overlays for CPU (`mpstat`, `vmstat`, `uptime`), memory
   (`free`, top RSS, swap, PSI, OOM), storage (`iostat -x`), and network
   (`/proc/net/dev`) readouts.
-- Touch-device support for menu navigation, movement, and the USE/interact
-  prompt.
+- Touch-device support for menu navigation, movement, the USE/interact prompt,
+  and a long-press on the game view to reopen the data-source menu (the phone's
+  equivalent of Esc) so a different sim can be selected mid-run.
 - Disk server-rack easter egg that plays an interaction sting and spikes the
   storage metrics dashboard.
 
@@ -140,7 +141,10 @@ Perf is currently an observational lab, not a combat game.
 
 On touch devices, the browser host adds menu buttons on the title/menu screens,
 a movement pad in-game, and an on-screen USE/interact prompt near doors and
-terminal screens.
+terminal screens. A long-press on the game view acts as Esc: it reopens the
+data-source menu so you can back out of the running sim and pick a different one
+(the ▲▼/SELECT/BACK buttons replace the movement pad while it is open), and a
+second long-press closes it again.
 
 ## Data Sources
 

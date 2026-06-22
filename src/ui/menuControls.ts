@@ -6,7 +6,7 @@
 // Like the pad, it drives the WASM engine with synthetic KeyboardEvents on
 // `document` (the engine reads keys from a document-level listener).
 
-type MenuAction = "up" | "down" | "select" | "back";
+export type MenuAction = "up" | "down" | "select" | "back";
 
 const KEYS: Record<MenuAction, { code: string; keyCode: number }> = {
   up: { code: "ArrowUp", keyCode: 38 },
@@ -36,7 +36,10 @@ const BUTTONS: { action: MenuAction; label: string; primary?: boolean }[] = [
   { action: "back", label: "BACK" },
 ];
 
-export const createMenuControls = () => {
+// `onAction` lets the caller mirror menu navigation (the prebuilt engine
+// exposes no menuactive flag, so the long-press in-game menu in src/index.ts
+// tracks which screen is showing from the buttons the player presses here).
+export const createMenuControls = (onAction?: (action: MenuAction) => void) => {
   const bar = document.createElement("div");
   bar.className = "doomMenu";
   bar.style.display = "none";
@@ -91,6 +94,7 @@ export const createMenuControls = () => {
       event.preventDefault();
       event.stopPropagation();
       tapKey(action);
+      onAction?.(action);
     });
     bar.appendChild(button);
   }
