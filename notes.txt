@@ -1,4 +1,0 @@
-- have the music be different in each room.
-- after music is set up for each room, see about getting distinct soundscapes per issues (U/S/E)...maybe skip errors, not sure how to reliably trigger.
-- would there be any benefit to compressing the number of patches? Is it conceptually similar to database migrations?
-- if we can make the walls in the library more differentiated than just 3 tones, that would be cool. Richer textures would be great.
