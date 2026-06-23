@@ -1,7 +1,13 @@
-// Memory wing (east): green page banks, a cache/reserve reservoir, swap
-// reclaim channels, and a dark OOM alcove. This is the first static baseline
-// for Track A in PARALLEL_WINGS_PLAN.md: clear room grammar, signs, a terminal,
-// and page-cell/swap/PSI/OOM tags driven by the memory page-bank engine hook.
+// Memory wing (east): a T-junction. A short library stem off the hub door opens
+// into a crossbar whose back wall carries the `free -m` terminal (seen head-on
+// on entry), then the player turns into one of two perpendicular hallway arms:
+// the NORTH arm is ACTIVE memory (the sunken working-set page grid, RSS, PSI
+// pressure pads), the SOUTH arm is RECLAIM/overflow (page-cache reservoir, swap
+// nukage channels, a dark OOM sanctum). The T means no long grazing hall ever
+// faces the player on entry — the topology, not a wall patch, is what resolves
+// the old wide-open-hall smear, and it reads distinct from the network wing's
+// straight-in corridor and the disk wing's spiral tower. Page-cell/cache/swap/
+// PSI/OOM sector tags still drive the live instruments from the engine hook.
 import { addWingEntrance } from "./common.mjs";
 import { reserved, wingName } from "./registry.mjs";
 import {
@@ -44,11 +50,16 @@ const rotatePoint = ([u, v], direction) => {
   }
 };
 
-const memoryRoomBounds = {
-  foyer: { u1: -384, v1: 704, u2: 384, v2: 896 },
-  main: { u1: -448, v1: 896, u2: 448, v2: 1520 },
-  cache: { u1: -736, v1: 976, u2: -448, v2: 1280 },
-  oom: { u1: 448, v1: 1120, u2: 640, v2: 1280 },
+// Shared screen/sign face lines (local u,v) so build() and terminals() agree on
+// where each read-point sits. Local v -> world x, local u -> world -y (east
+// rotation). free -m is on the junction back wall; the four arm signs are on the
+// near walls / far ends of the two arms.
+const mem = {
+  termFaceV: 1200,                          // free -m screen wall (junction back)
+  rss: { u: -800, v1: 1088, v2: 1344 },     // RSS sign, north arm far (west) end
+  pressure: { v: 912, u1: -512, u2: -256 }, // PSI sign, north arm near wall
+  swap: { v: 912, u1: 256, u2: 512 },       // swap sign, south arm near wall
+  oom: { u: 800, v1: 1088, v2: 1344 },      // OOM sign, south arm far (east) end
 };
 
 const memoryTerminal = {
@@ -204,7 +215,12 @@ const bookshelfTexture = {
 const buildBookshelfPatch = () => {
   const W = bookshelfTexture.width;
   const H = bookshelfTexture.height;
-  const px = new Uint8Array(W * H).fill(8); // dark cabinet interior
+  // Doom Perf: cabinet interior is a dark *wood* tone (78) rather than near-black
+  // (8). Roughly half the texture is interior/gap, so when 320x200 undersampling
+  // averages the whole wall at distance the result lands on a readable warm
+  // brown instead of the black mud the near-black fill produced. The per-spine
+  // shadows (idx 0) still give crisp contrast up close.
+  const px = new Uint8Array(W * H).fill(78); // dark wood cabinet interior
   const rect = (x, y, w, h, c) => {
     for (let yy = Math.max(0, y); yy < Math.min(H, y + h); yy += 1) {
       for (let xx = Math.max(0, x); xx < Math.min(W, x + w); xx += 1) {
@@ -214,7 +230,15 @@ const buildBookshelfPatch = () => {
   };
   rect(0, 0, 2, H, 96); // cabinet uprights
   rect(W - 2, 0, 2, H, 96);
-  const spineColors = [176, 231, 96, 47, 5, 231, 176, 96];
+  // Doom Perf: a wider, more varied set of muted spine tones (light grey, brown,
+  // ochre, deep red, pale beige, dark grey, orange, muted red, tan, olive) in
+  // place of the old 5-value warm set that leaned on the two most-saturated
+  // primaries (pure red 176 / pure yellow 231). Adjacent entries deliberately
+  // alternate light/dark luminance so neighbouring spines stay distinguishable
+  // under 320x200 undersampling — the shelf keeps structure at distance instead
+  // of averaging into one smeared band. Bright green/cyan stay reserved for the
+  // metric books.
+  const spineColors = [88, 71, 163, 36, 128, 102, 215, 30, 64, 154];
   [6, 46, 86].forEach((sy, shelf) => {
     const boardY = sy + 32;
     let x = 4;
@@ -282,7 +306,11 @@ const build = (ctx) => {
     ceiling: 192,
   };
   const walkway = { ...memoryBase, kind: "memory-walk", light: 184 };
-  const dimWalkway = { ...walkway, light: 168 };
+  // Doom Perf: the left/cache flank reads as the smear partly because it was the
+  // dimmest walkway (168) — Doom's light diminishing crushes a dark, high-
+  // frequency bookshelf wall toward black at distance. Lift it to 178 (still
+  // below the lit walk at 184) so the texture survives the falloff.
+  const dimWalkway = { ...walkway, light: 178 };
   const bankCell = {
     ...bankWall,
     kind: "memory-page-cell",
@@ -290,85 +318,123 @@ const build = (ctx) => {
     ceiling: 200,
   };
 
-  // Entry foyer, with a three-cell "TOTAL MEMORY" floor inscription at the
-  // threshold (u[-96,96]).
-  areaRect(direction, "foyer-left", { u1: memoryRoomBounds.foyer.u1, v1: 704, u2: -96, v2: 896 }, {
+  // ===== Entry stem: a short library throat off the hub door, carrying the
+  // three-cell "TOTAL MEMORY" floor inscription. It is deliberately short and
+  // ends on the junction, so the player never looks down a long hall on entry.
+  areaRect(direction, "stem-front", { u1: -112, v1: 704, u2: 112, v2: 832 }, {
     ...memoryBase,
-    kind: "foyer",
-    light: 208,
+    kind: "memory-stem",
+    light: 200,
+  });
+  areaRect(direction, "stem-insc-left", { u1: -112, v1: 832, u2: -96, v2: 896 }, {
+    ...memoryBase,
+    kind: "memory-stem",
+    light: 200,
   });
   memoryInscription.names.forEach((flatName, k) => {
     // Forward placement: buildMemoryLabel bakes cell k for world y in this slot.
     const u1 = -96 + k * 64;
     areaRect(direction, `memory-inscription-${k}`, { u1, v1: 832, u2: u1 + 64, v2: 896 }, {
       ...memoryBase,
-      kind: "foyer",
+      kind: "memory-stem",
       floorFlat: flatName,
-      light: 216,
+      light: 208,
     });
   });
-  areaRect(direction, "foyer-right", { u1: 96, v1: 704, u2: memoryRoomBounds.foyer.u2, v2: 896 }, {
+  areaRect(direction, "stem-insc-right", { u1: 96, v1: 832, u2: 112, v2: 896 }, {
     ...memoryBase,
-    kind: "foyer",
-    light: 208,
+    kind: "memory-stem",
+    light: 200,
   });
-  areaRect(direction, "foyer-front", { u1: -96, v1: 704, u2: 96, v2: 832 }, {
+  areaRect(direction, "stem-back", { u1: -112, v1: 896, u2: 112, v2: 944 }, {
     ...memoryBase,
-    kind: "foyer",
-    light: 208,
+    kind: "memory-stem",
+    light: 200,
   });
 
-  // Broad horizontal page-bank chamber. The 9x5 cellular grid is driven by
-  // p_tick.c's memory hook: page cells rise/brighten with utilization while the
-  // side channels and pressure pads pulse under saturation.
-  // Front approach + coliseum descent. The page grid is sunk into a pit (the
-  // engine drives the cells to negative floor heights for a top-down view); a
-  // single tier at -24 rings the grid so the player can step down (and back up:
-  // every grade is <= the 24-unit step limit). The side corridors stay at floor
-  // level, with the descent in the centre, in front of the grid.
-  const pitTier = -24;
-  areaRect(direction, "front-walk-left", { u1: -448, v1: 896, u2: -288, v2: 960 }, walkway);
-  areaRect(direction, "front-walk-right", { u1: 288, v1: 896, u2: 448, v2: 960 }, walkway);
-  areaRect(direction, "front-walk-center", { u1: -288, v1: 896, u2: 288, v2: 932 }, walkway);
-  areaRect(direction, "front-step", { u1: -288, v1: 932, u2: 288, v2: 960 }, {
+  // ===== Junction: the T crossing. The `free -m` screen sits dead ahead on the
+  // back wall (seen head-on as the player enters); the two arms branch left
+  // (north) and right (south) so no long grazing hall is ever in front of you.
+  areaRect(direction, "junction-walk", { u1: -128, v1: 944, u2: 128, v2: mem.termFaceV - terminalPanelDepth }, {
     ...walkway,
-    kind: "memory-pit-step",
-    floor: pitTier,
+    kind: "memory-junction",
+    light: 192,
   });
-  areaRect(direction, "left-walk", { u1: -448, v1: 960, u2: -352, v2: 1280 }, dimWalkway);
-  areaRect(direction, "left-swap-channel", { u1: -352, v1: 960, u2: -320, v2: 1280 }, {
-    ...bankWall,
-    kind: "memory-swap-channel",
-    floor: -20,
-    floorFlat: "NUKAGE1",
-    light: 180,
-    tag: memoryTags.swapIn,
-  });
-  areaRect(direction, "left-inner-walk", { u1: -320, v1: 960, u2: -288, v2: 1280 }, {
+  areaRect(direction, "junction-term", { u1: -128, v1: mem.termFaceV - terminalPanelDepth, u2: 128, v2: mem.termFaceV }, {
     ...walkway,
-    kind: "memory-pit-step",
-    floor: pitTier,
+    kind: "memory-junction",
+    floor: terminalPanelFloor,
+    ceiling: terminalPanelFloor + terminalTextureSize.height,
+    labelSide: backWall,
+    labelTexture: memoryTerminal.texture,
   });
-  areaRect(direction, "right-inner-walk", { u1: 288, v1: 960, u2: 320, v2: 1280 }, {
-    ...walkway,
-    kind: "memory-pit-step",
-    floor: pitTier,
-  });
-  areaRect(direction, "right-swap-channel", { u1: 320, v1: 960, u2: 352, v2: 1280 }, {
-    ...bankWall,
-    kind: "memory-swap-channel",
-    floor: -20,
-    floorFlat: "NUKAGE1",
-    light: 180,
-    tag: memoryTags.swapOut,
-  });
-  areaRect(direction, "right-walk", { u1: 352, v1: 960, u2: 448, v2: 1280 }, dimWalkway);
+  // Reading lamps flanking the junction mouth.
+  addAreaThing(direction, 2028, -112, 968);
+  addAreaThing(direction, 2028, 112, 968);
 
+  // ===== NORTH arm — ACTIVE: working-set page banks, RSS, PSI pressure. A
+  // walkway runs the arm's length; the live 9x5 page grid is a sunken top-down
+  // bank you read from it, the PSI pads are raised platforms at the junction
+  // end, and the RSS screen closes the far (west) end. =====
+  areaRect(direction, "n-walk", { u1: -768, v1: 944, u2: -288, v2: 1024 }, { ...walkway, kind: "memory-walk" });
+  // PSI pressure pads (two raised platforms) + the strip of walk in front of
+  // them that links the junction to the arm walkway.
+  areaRect(direction, "psi-strip", { u1: -288, v1: 976, u2: -128, v2: 1024 }, { ...walkway, kind: "memory-walk" });
+  areaRect(direction, "psi-some-pad", { u1: -288, v1: 944, u2: -208, v2: 976 }, {
+    ...bankWall,
+    kind: "memory-pressure-pad",
+    floor: 20,
+    floorFlat: pageFlatNames.cache,
+    light: 188,
+    tag: memoryTags.psiSome,
+  });
+  areaRect(direction, "psi-full-pad", { u1: -208, v1: 944, u2: -128, v2: 976 }, {
+    ...bankWall,
+    kind: "memory-pressure-pad",
+    floor: 36,
+    floorFlat: pageFlatNames.used,
+    light: 172,
+    tag: memoryTags.psiFull,
+  });
+  // Near-wall signs: the STACKS plaque (decorative) and the PSI read-point.
+  areaRect(direction, "pages-sign-recess", { u1: -768, v1: 912, u2: -512, v2: 944 }, {
+    ...bankWall,
+    kind: "memory-sign",
+    floor: 8,
+    ceiling: 8 + wallSignSize.height,
+    light: 196,
+    labelSide: "left",
+    labelTexture: memoryWallSigns.pages.texture,
+  });
+  areaRect(direction, "pressure-sign-recess", { u1: mem.pressure.u1, v1: mem.pressure.v, u2: mem.pressure.u2, v2: 944 }, {
+    ...bankWall,
+    kind: "memory-sign",
+    floor: 8,
+    ceiling: 8 + wallSignSize.height,
+    light: 188,
+    labelSide: "left",
+    labelTexture: memoryWallSigns.pressure.texture,
+  });
+  // Terminal plaza at the far (west) end of the arm, with the RSS screen.
+  areaRect(direction, "n-end-walk", { u1: -768, v1: 1024, u2: -704, v2: 1344 }, { ...dimWalkway, kind: "memory-walk" });
+  areaRect(direction, "rss-sign-recess", { u1: mem.rss.u, v1: mem.rss.v1, u2: -768, v2: mem.rss.v2 }, {
+    ...bankWall,
+    kind: "memory-sign",
+    floor: 8,
+    ceiling: 8 + wallSignSize.height,
+    light: 184,
+    labelSide: localLeftWall,
+    labelTexture: memoryWallSigns.rss.texture,
+  });
+
+  // Sunken working-set page grid (9 cols x 5 rows), engine-driven per cell by
+  // tag. The pit is shallow (<=24) so it is escapable; the engine drives live
+  // heights at runtime and the floorpic encodes used/cache/free.
   const cellSize = 64;
   const cols = 9;
   const rows = 5;
-  const gridU1 = -288;
-  const gridV1 = 960;
+  const gridU1 = -704;
+  const gridV1 = 1024;
   const staticUsedCells = 31;
   for (let row = 0; row < rows; row += 1) {
     for (let col = 0; col < cols; col += 1) {
@@ -379,124 +445,57 @@ const build = (ctx) => {
       const v1 = gridV1 + row * cellSize;
       areaRect(direction, `page-cell-${row}-${col}`, { u1, v1, u2: u1 + cellSize, v2: v1 + cellSize }, {
         ...bankCell,
-        // Sunk below floor level (the engine drives these to negative heights at
-        // runtime); the initial values match so the pit reads correctly pre-tick.
-        floor: used ? -16 : (cacheTint ? -32 : -48),
+        floor: used ? -8 : (cacheTint ? -16 : -24),
         floorFlat: used ? pageFlatNames.used : (cacheTint ? pageFlatNames.cache : pageFlatNames.free),
-        light: used ? 204 : (cacheTint ? 188 : 164),
+        light: used ? 204 : (cacheTint ? 188 : 168),
         tag: pageCellTag(index),
       });
     }
   }
 
-  areaRect(direction, "rear-walk-west", { u1: -448, v1: 1312, u2: -256, v2: 1376 }, walkway);
-  areaRect(direction, "rear-walk-center", { u1: -256, v1: 1280, u2: 256, v2: 1376 }, walkway);
-  areaRect(direction, "rear-walk-east", { u1: 256, v1: 1280, u2: 448, v2: 1376 }, walkway);
-  areaRect(direction, "page-sign-recess", { u1: -448, v1: 1280, u2: -256, v2: 1312 }, {
-    ...bankWall,
-    kind: "memory-sign",
-    floor: 8,
-    ceiling: 8 + wallSignSize.height,
-    light: 204,
-    labelSide: backWall,
-    labelTexture: memoryWallSigns.pages.texture,
-  });
-  areaRect(direction, "terminal-walk", { u1: -128, v1: 1376, u2: 128, v2: memoryRoomBounds.main.v2 - terminalPanelDepth }, walkway);
-  areaRect(direction, "terminal", { u1: -128, v1: memoryRoomBounds.main.v2 - terminalPanelDepth, u2: 128, v2: memoryRoomBounds.main.v2 }, {
-    ...walkway,
-    floor: terminalPanelFloor,
-    ceiling: terminalPanelFloor + terminalTextureSize.height,
-    labelSide: backWall,
-    labelTexture: memoryTerminal.texture,
-  });
-  areaRect(direction, "rear-right-gallery", { u1: 128, v1: 1376, u2: 256, v2: memoryRoomBounds.main.v2 }, dimWalkway);
-  areaRect(direction, "pressure-sign-recess", { u1: -448, v1: 1376, u2: -256, v2: 1408 }, {
+  // ===== SOUTH arm — RECLAIM: page-cache reservoir, swap channels, OOM sanctum.
+  // A walkway runs the arm; the reclaimable cache (water) and the swap nukage
+  // channels are sunken banks read from it, descending into the dark OOM sanctum
+  // and its screen at the far (east) end. =====
+  areaRect(direction, "s-walk", { u1: 128, v1: 944, u2: 768, v2: 1024 }, { ...walkway, kind: "memory-walk" });
+  areaRect(direction, "swap-sign-recess", { u1: mem.swap.u1, v1: mem.swap.v, u2: mem.swap.u2, v2: 944 }, {
     ...bankWall,
     kind: "memory-sign",
     floor: 8,
     ceiling: 8 + wallSignSize.height,
     light: 188,
-    labelSide: backWall,
-    labelTexture: memoryWallSigns.pressure.texture,
-  });
-  areaRect(direction, "pressure-walk-west", { u1: -448, v1: 1408, u2: -416, v2: memoryRoomBounds.main.v2 }, dimWalkway);
-  areaRect(direction, "pressure-some-pad", { u1: -416, v1: 1408, u2: -368, v2: memoryRoomBounds.main.v2 }, {
-    ...bankWall,
-    kind: "memory-pressure-pad",
-    floor: 20,
-    floorFlat: pageFlatNames.cache,
-    light: 188,
-    tag: memoryTags.psiSome,
-  });
-  areaRect(direction, "pressure-walk-mid", { u1: -368, v1: 1408, u2: -336, v2: memoryRoomBounds.main.v2 }, dimWalkway);
-  areaRect(direction, "pressure-full-pad", { u1: -336, v1: 1408, u2: -288, v2: memoryRoomBounds.main.v2 }, {
-    ...bankWall,
-    kind: "memory-pressure-pad",
-    floor: 36,
-    floorFlat: pageFlatNames.used,
-    light: 172,
-    tag: memoryTags.psiFull,
-  });
-  areaRect(direction, "pressure-walk-east", { u1: -288, v1: 1408, u2: -256, v2: memoryRoomBounds.main.v2 }, dimWalkway);
-  areaRect(direction, "pressure-walk-back", { u1: -256, v1: 1376, u2: -128, v2: memoryRoomBounds.main.v2 }, dimWalkway);
-  areaRect(direction, "swap-sign-recess", { u1: 256, v1: 1376, u2: 448, v2: 1408 }, {
-    ...bankWall,
-    kind: "memory-sign",
-    floor: 8,
-    ceiling: 8 + wallSignSize.height,
-    light: 188,
-    labelSide: backWall,
+    labelSide: "left",
     labelTexture: memoryWallSigns.swap.texture,
   });
-
-  // Cache/reserve side bay: lower, calmer, and more liquid than the page grid.
-  const cacheSplitU = -512;
-  areaRect(direction, "cache-ledge", {
-    u1: cacheSplitU,
-    v1: memoryRoomBounds.cache.v1,
-    u2: memoryRoomBounds.cache.u2,
-    v2: memoryRoomBounds.cache.v2,
-  }, {
-    ...dimWalkway,
-    kind: "memory-cache-ledge",
-  });
-  areaRect(direction, "cache-reservoir", {
-    u1: memoryRoomBounds.cache.u1,
-    v1: memoryRoomBounds.cache.v1,
-    u2: cacheSplitU,
-    v2: memoryRoomBounds.cache.v2,
-  }, {
+  // Page-cache reservoir (reclaimable memory), engine-driven by tag.
+  areaRect(direction, "cache-reservoir", { u1: 128, v1: 1024, u2: 448, v2: 1344 }, {
     ...bankWall,
     kind: "memory-cache-reservoir",
     floor: -12,
     floorFlat: "FWATER1",
-    // Doom Perf: raised from 156 to a readable floor so the high-frequency
-    // bookshelf wall on this flank keeps contrast at distance instead of
-    // smearing to mush (the dim flank was the "left wall blurs" case).
-    light: 176,
+    light: 182,
     tag: memoryTags.cache,
   });
-  areaRect(direction, "cache-sign-recess", { u1: memoryRoomBounds.cache.u1 - 32, v1: 1088, u2: memoryRoomBounds.cache.u1, v2: 1216 }, {
+  // Swap reclaim channels (in / out), nukage.
+  areaRect(direction, "swap-in-channel", { u1: 448, v1: 1024, u2: 512, v2: 1344 }, {
     ...bankWall,
-    kind: "memory-sign",
-    floor: 8,
-    ceiling: 8 + wallSignSize.height,
-    light: 184,
-    labelSide: localLeftWall,
-    labelTexture: memoryWallSigns.rss.texture,
+    kind: "memory-swap-channel",
+    floor: -20,
+    floorFlat: "NUKAGE1",
+    light: 180,
+    tag: memoryTags.swapIn,
   });
-
-  // OOM bay: still the calmest/dimmest corner, but lifted off the floor so its
-  // bookshelf wall stays readable across the room rather than dissolving to mush
-  // (320x200 undersampling kills a high-frequency texture once it goes dark). It
-  // remains the darkest bay so it reads as quiet; a later live OOM hook can still
-  // drive it darker/red under pressure.
-  areaRect(direction, "oom-threshold", { u1: memoryRoomBounds.oom.u1, v1: 1120, u2: 512, v2: 1280 }, {
-    ...dimWalkway,
-    kind: "memory-oom-threshold",
-    light: 168,
+  areaRect(direction, "swap-out-channel", { u1: 512, v1: 1024, u2: 576, v2: 1344 }, {
+    ...bankWall,
+    kind: "memory-swap-channel",
+    floor: -20,
+    floorFlat: "NUKAGE1",
+    light: 180,
+    tag: memoryTags.swapOut,
   });
-  areaRect(direction, "oom-bay", { u1: 512, v1: 1120, u2: memoryRoomBounds.oom.u2, v2: 1280 }, {
+  areaRect(direction, "swap-mid-walk", { u1: 576, v1: 1024, u2: 640, v2: 1344 }, { ...dimWalkway, kind: "memory-walk" });
+  // OOM sanctum: the darkest, deepest corner, with its screen at the far end.
+  areaRect(direction, "oom-bay", { u1: 640, v1: 1024, u2: 768, v2: 1344 }, {
     ...bankWall,
     kind: "memory-oom-bay",
     floor: -16,
@@ -505,19 +504,15 @@ const build = (ctx) => {
     light: 160,
     tag: memoryTags.oom,
   });
-  areaRect(direction, "oom-sign-recess", { u1: memoryRoomBounds.oom.u2, v1: 1152, u2: 672, v2: 1248 }, {
+  areaRect(direction, "oom-sign-recess", { u1: 768, v1: mem.oom.v1, u2: mem.oom.u, v2: mem.oom.v2 }, {
     ...bankWall,
     kind: "memory-sign",
     floor: 0,
     ceiling: wallSignSize.height,
-    light: 116,
+    light: 120,
     labelSide: localRightWall,
     labelTexture: memoryWallSigns.oom.texture,
   });
-
-  // Reading-room lamps (floor lamp, thing 2028) flanking the foyer threshold.
-  addAreaThing(direction, 2028, -432, 928);
-  addAreaThing(direction, 2028, 432, 928);
 };
 
 const textures = [
@@ -557,13 +552,12 @@ const terminals = ({ terminalHalfWidth }) => {
     const [bx, by] = rotatePoint([bu, bv], "east");
     return { ax, ay, bx, by };
   };
-  const v = memoryRoomBounds.main.v2;
   return [
-    { sign: "memory", segments: [segment([-terminalHalfWidth, v], [terminalHalfWidth, v])] },
-    { sign: "memory-rss", segments: [segment([memoryRoomBounds.cache.u1 - 32, 1088], [memoryRoomBounds.cache.u1 - 32, 1216])] },
-    { sign: "memory-pressure", segments: [segment([-448, 1408], [-256, 1408])] },
-    { sign: "memory-swap", segments: [segment([256, 1408], [448, 1408])] },
-    { sign: "memory-oom", segments: [segment([memoryRoomBounds.oom.u2 + 32, 1152], [memoryRoomBounds.oom.u2 + 32, 1248])] },
+    { sign: "memory", segments: [segment([-terminalHalfWidth, mem.termFaceV], [terminalHalfWidth, mem.termFaceV])] },
+    { sign: "memory-rss", segments: [segment([mem.rss.u, mem.rss.v1], [mem.rss.u, mem.rss.v2])] },
+    { sign: "memory-pressure", segments: [segment([mem.pressure.u1, mem.pressure.v], [mem.pressure.u2, mem.pressure.v])] },
+    { sign: "memory-swap", segments: [segment([mem.swap.u1, mem.swap.v], [mem.swap.u2, mem.swap.v])] },
+    { sign: "memory-oom", segments: [segment([mem.oom.u, mem.oom.v1], [mem.oom.u, mem.oom.v2])] },
   ];
 };
 

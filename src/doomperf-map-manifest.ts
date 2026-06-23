@@ -41,9 +41,9 @@ export const mapManifest = {
       "sign": "memory",
       "segments": [
         {
-          "ax": 1520,
+          "ax": 1200,
           "ay": 128,
-          "bx": 1520,
+          "bx": 1200,
           "by": -128
         }
       ]
@@ -53,9 +53,9 @@ export const mapManifest = {
       "segments": [
         {
           "ax": 1088,
-          "ay": 768,
-          "bx": 1216,
-          "by": 768
+          "ay": 800,
+          "bx": 1344,
+          "by": 800
         }
       ]
     },
@@ -63,9 +63,9 @@ export const mapManifest = {
       "sign": "memory-pressure",
       "segments": [
         {
-          "ax": 1408,
-          "ay": 448,
-          "bx": 1408,
+          "ax": 912,
+          "ay": 512,
+          "bx": 912,
           "by": 256
         }
       ]
@@ -74,10 +74,10 @@ export const mapManifest = {
       "sign": "memory-swap",
       "segments": [
         {
-          "ax": 1408,
+          "ax": 912,
           "ay": -256,
-          "bx": 1408,
-          "by": -448
+          "bx": 912,
+          "by": -512
         }
       ]
     },
@@ -85,10 +85,10 @@ export const mapManifest = {
       "sign": "memory-oom",
       "segments": [
         {
-          "ax": 1152,
-          "ay": -672,
-          "bx": 1248,
-          "by": -672
+          "ax": 1088,
+          "ay": -800,
+          "bx": 1344,
+          "by": -800
         }
       ]
     },
