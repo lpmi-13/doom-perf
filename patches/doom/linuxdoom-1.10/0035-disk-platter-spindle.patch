@@ -1,5 +1,5 @@
 diff --git a/r_draw.c b/r_draw.c
-index d246d93..7fa9f1e 100644
+index d246d93..731244a 100644
 --- a/r_draw.c
 +++ b/r_draw.c
 @@ -106,6 +106,8 @@ static byte R_DoomPerfCpuGaugePixel (int gauge, int ty);
@@ -22,7 +22,7 @@ index d246d93..7fa9f1e 100644
  	    *dest = dc_colormap[R_DoomPerfDiskDashboardPixel(
  				    doomperf_cpu_column_texture_x,
  				    (frac>>FRACBITS)&127,
-@@ -1049,6 +1053,175 @@ static byte R_DoomPerfDiskDashboardPixel (int tx, int ty, byte background)
+@@ -1049,6 +1053,164 @@ static byte R_DoomPerfDiskDashboardPixel (int tx, int ty, byte background)
      return DOOMPERF_DASH_WHITE;
  }
  
@@ -95,10 +95,9 @@ index d246d93..7fa9f1e 100644
 +// grows OUTWARD from the drum as disk utilization rises (idle = tucked under the
 +// drum, invisible; saturated = reaches the rim), and within it the colour fades
 +// from light yellow at the cube to dark at the rim -- a single hue darkened
-+// through the engine's own colormaps. A subtle bright ripple radiates outward to
-+// keep it alive. Everything is radially symmetric and painted in WORLD space, so
-+// it stays locked + centred on the drum and never reads as drifting with the
-+// player (unlike the old rotating read-head wedge it replaces).
++// through the engine's own colormaps. It is purely load-driven (no time term):
++// radially symmetric and painted in WORLD space, so it stays locked + centred on
++// the drum and never reads as drifting with the player.
 +static byte
 +R_DoomPerfDiskPlatterPixel
 +( fixed_t		xfrac,
@@ -112,12 +111,9 @@ index d246d93..7fa9f1e 100644
 +    int		r2;
 +    int		r;
 +    int		util;
-+    int		thr;
 +    int		span;
 +    int		fillr;
 +    int		level;
-+    int		wob;
-+    int		ripple;
 +
 +    worldx = R_DoomPerfCpuWorldX(xfrac);
 +    worldy = R_DoomPerfCpuWorldY(yfrac);
@@ -141,15 +137,6 @@ index d246d93..7fa9f1e 100644
 +    // Radial gradient: bright (light yellow) at the cube, darkening toward the
 +    // rim, by stepping deeper into the colormap with radius.
 +    level = ((r - DOOMPERF_PLATTER_INNER) * DOOMPERF_PLATTER_DARKEST) / span;
-+    if (level < 0)
-+	level = 0;
-+
-+    // Subtle life: a soft bright crest that travels OUTWARD over time, faster
-+    // under load (radially symmetric, so it stays centred and never drifts).
-+    thr = R_DoomPerfDiskThroughputPermille();
-+    wob = (r - leveltime * (1 + thr / 250)) & 31;	// outward-moving sawtooth
-+    ripple = (wob < 10) ? (10 - wob) : 0;		// crest brightens by up to 10
-+    level -= ripple;
 +    if (level < 0)
 +	level = 0;
 +    if (level > DOOMPERF_PLATTER_DARKEST)
@@ -180,10 +167,12 @@ index d246d93..7fa9f1e 100644
 +    fill_ty = 127 - (util * 127) / 1000;		// glowing fill rises with util
 +
 +    // Rising streaks (throughput): a per-column head climbs (ty -> 0) over time.
++    // The time term is halved (>>1) for a calm, ~50%-slower rise that stays
++    // visually concordant with the now purely load-driven platter.
 +    speed = 1 + thr / 150;
 +    trail = 10 + thr / 16;
 +    seed = tx * 31 + (tx >> 2) * 7;
-+    head_y = (127 - ((leveltime * speed + seed * 11) & 127)) & 127;
++    head_y = (127 - (((leveltime * speed) / 2 + seed * 11) & 127)) & 127;
 +    offset = (ty - head_y + 128) & 127;
 +    if (offset < 2)
 +	return DOOMPERF_DISK_GOLD;			// bright streak head
@@ -198,7 +187,7 @@ index d246d93..7fa9f1e 100644
  static byte
  R_DoomPerfCpuFloorPixel
  ( fixed_t		xfrac,
-@@ -1061,6 +1234,8 @@ R_DoomPerfCpuFloorPixel
+@@ -1061,6 +1223,8 @@ R_DoomPerfCpuFloorPixel
  	return R_DoomPerfCpuRunQueuePixel(xfrac, yfrac, background);
      if (doomperf_cpu_floor_display == 3)
  	return R_DoomPerfDiskQueuePixel(xfrac, yfrac, background);
@@ -207,7 +196,7 @@ index d246d93..7fa9f1e 100644
      return background;
  }
  
-@@ -1104,8 +1279,18 @@ void R_DrawSpan (void)
+@@ -1104,8 +1268,18 @@ void R_DrawSpan (void)
  	// Lookup pixel from flat texture tile,
  	//  re-index using light/colormap.
  	if (doomperf_cpu_floor_display)
@@ -228,7 +217,7 @@ index d246d93..7fa9f1e 100644
  	else
  	    *dest++ = ds_colormap[ds_source[spot]];
  
-@@ -1232,14 +1417,16 @@ void R_DrawSpanLow (void)
+@@ -1232,14 +1406,16 @@ void R_DrawSpanLow (void)
  	//  while scale is adjusted appropriately.
  	if (doomperf_cpu_floor_display)
  	{
