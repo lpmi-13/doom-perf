@@ -1,5 +1,5 @@
 diff --git a/r_draw.c b/r_draw.c
-index d246d93..0045392 100644
+index d246d93..7fa9f1e 100644
 --- a/r_draw.c
 +++ b/r_draw.c
 @@ -106,6 +106,8 @@ static byte R_DoomPerfCpuGaugePixel (int gauge, int ty);
@@ -22,7 +22,7 @@ index d246d93..0045392 100644
  	    *dest = dc_colormap[R_DoomPerfDiskDashboardPixel(
  				    doomperf_cpu_column_texture_x,
  				    (frac>>FRACBITS)&127,
-@@ -1049,6 +1053,134 @@ static byte R_DoomPerfDiskDashboardPixel (int tx, int ty, byte background)
+@@ -1049,6 +1053,175 @@ static byte R_DoomPerfDiskDashboardPixel (int tx, int ty, byte background)
      return DOOMPERF_DASH_WHITE;
  }
  
@@ -61,17 +61,44 @@ index d246d93..0045392 100644
 +// Platter geometry, world units (south wing: local u=0,v=1024 -> world 0,-1024).
 +#define DOOMPERF_PLATTER_CX	0
 +#define DOOMPERF_PLATTER_CY	(-1024)
-+#define DOOMPERF_PLATTER_R	160	// outer track radius (fills the disk ring)
++#define DOOMPERF_PLATTER_R	160	// rim radius (fills the disk ring)
 +#define DOOMPERF_PLATTER_HUB	60	// inner hole under the central drum
-+#define DOOMPERF_PLATTER_TRACKS	8
++#define DOOMPERF_PLATTER_INNER	80	// closest VISIBLE platter radius (cube edge)
 +#define DOOMPERF_PLATTER_BLACK	0	// palette pure black: the idle disk ring
++#define DOOMPERF_PLATTER_GOLD	231	// light-yellow base hue (darkened outward)
++#define DOOMPERF_PLATTER_DARKEST 25	// deepest colormap level reached at the rim
 +
-+// The platter FLOOR: a STATIC concentric-ring gauge. Tracks fill outward with
-+// %utilization (alternating gold/red), the idle disk is pure black, and the
-+// whole thing is painted in WORLD space so it stays locked to the drum -- it does
-+// not move with the player. (There used to be a time-animated read-head wedge
-+// "spinning" around; that was the only thing that made the disk look like it was
-+// drifting as you walked past, so it's gone -- the disk now sits still.)
++// Integer radius (no FP in the renderer): floor(sqrt(n)) by classic bit-by-bit
++// restoring sqrt. n is r2 <= 160*160, so this is a handful of iterations.
++static int R_DoomPerfISqrt (int n)
++{
++    int		x = 0;
++    int		bit = 1 << 14;	// highest power of 4 <= 2^15 (> max r2)
++
++    while (bit > n)
++	bit >>= 2;
++    while (bit)
++    {
++	if (n >= x + bit)
++	{
++	    n -= x + bit;
++	    x = (x >> 1) + bit;
++	}
++	else
++	    x >>= 1;
++	bit >>= 2;
++    }
++    return x;
++}
++
++// The platter FLOOR: a radial HEAT POOL, centred on the cube. A glowing pool
++// grows OUTWARD from the drum as disk utilization rises (idle = tucked under the
++// drum, invisible; saturated = reaches the rim), and within it the colour fades
++// from light yellow at the cube to dark at the rim -- a single hue darkened
++// through the engine's own colormaps. A subtle bright ripple radiates outward to
++// keep it alive. Everything is radially symmetric and painted in WORLD space, so
++// it stays locked + centred on the drum and never reads as drifting with the
++// player (unlike the old rotating read-head wedge it replaces).
 +static byte
 +R_DoomPerfDiskPlatterPixel
 +( fixed_t		xfrac,
@@ -83,9 +110,14 @@ index d246d93..0045392 100644
 +    int		dx;
 +    int		dy;
 +    int		r2;
-+    int		track;
++    int		r;
 +    int		util;
-+    int		fill;
++    int		thr;
++    int		span;
++    int		fillr;
++    int		level;
++    int		wob;
++    int		ripple;
 +
 +    worldx = R_DoomPerfCpuWorldX(xfrac);
 +    worldy = R_DoomPerfCpuWorldY(yfrac);
@@ -97,24 +129,33 @@ index d246d93..0045392 100644
 +    if (r2 < DOOMPERF_PLATTER_HUB * DOOMPERF_PLATTER_HUB)
 +	return DOOMPERF_DISK_FRAME;			// metal hub under the drum
 +
-+    // Equal-area tracks: more, thinner rings toward the rim (like a real platter).
-+    track = (r2 * DOOMPERF_PLATTER_TRACKS)
-+	    / (DOOMPERF_PLATTER_R * DOOMPERF_PLATTER_R);
-+    if (track >= DOOMPERF_PLATTER_TRACKS)
-+	track = DOOMPERF_PLATTER_TRACKS - 1;
++    r = R_DoomPerfISqrt(r2);				// linear radius, 0..160
++    span = DOOMPERF_PLATTER_R - DOOMPERF_PLATTER_INNER;	// 80
 +
++    // The lit pool grows outward from the cube edge to the rim with utilization.
 +    util = R_DoomPerfDiskUtilPermille();
-+    fill = (util * DOOMPERF_PLATTER_TRACKS) / 1000;	// lit tracks, inner-out
++    fillr = DOOMPERF_PLATTER_INNER + (span * util) / 1000;
++    if (r > fillr)
++	return DOOMPERF_PLATTER_BLACK;			// beyond the pool: black
 +
-+    // Static fill: every track at or beyond the fill front (and the whole idle
-+    // disk, where fill==0) is pure black; lit tracks are alternating gold/red
-+    // rings with faint groove separators. No time term, no view term -- the
-+    // pattern is a pure function of world position, so it stays put.
-+    if (track >= fill)
-+	return DOOMPERF_PLATTER_BLACK;			// unlit / idle: solid black
-+    if ((r2 & 127) < 4)
-+	return DOOMPERF_DISK_FRAME;			// faint groove separators
-+    return (track & 1) ? DOOMPERF_DISK_GOLD : DOOMPERF_DISK_RED;
++    // Radial gradient: bright (light yellow) at the cube, darkening toward the
++    // rim, by stepping deeper into the colormap with radius.
++    level = ((r - DOOMPERF_PLATTER_INNER) * DOOMPERF_PLATTER_DARKEST) / span;
++    if (level < 0)
++	level = 0;
++
++    // Subtle life: a soft bright crest that travels OUTWARD over time, faster
++    // under load (radially symmetric, so it stays centred and never drifts).
++    thr = R_DoomPerfDiskThroughputPermille();
++    wob = (r - leveltime * (1 + thr / 250)) & 31;	// outward-moving sawtooth
++    ripple = (wob < 10) ? (10 - wob) : 0;		// crest brightens by up to 10
++    level -= ripple;
++    if (level < 0)
++	level = 0;
++    if (level > DOOMPERF_PLATTER_DARKEST)
++	level = DOOMPERF_PLATTER_DARKEST;
++
++    return colormaps[level * 256 + DOOMPERF_PLATTER_GOLD];
 +}
 +
 +// The central SPINDLE drum (a vertical pillar): a glowing fill rises to %util and
@@ -157,7 +198,7 @@ index d246d93..0045392 100644
  static byte
  R_DoomPerfCpuFloorPixel
  ( fixed_t		xfrac,
-@@ -1061,6 +1193,8 @@ R_DoomPerfCpuFloorPixel
+@@ -1061,6 +1234,8 @@ R_DoomPerfCpuFloorPixel
  	return R_DoomPerfCpuRunQueuePixel(xfrac, yfrac, background);
      if (doomperf_cpu_floor_display == 3)
  	return R_DoomPerfDiskQueuePixel(xfrac, yfrac, background);
@@ -166,7 +207,7 @@ index d246d93..0045392 100644
      return background;
  }
  
-@@ -1104,8 +1238,18 @@ void R_DrawSpan (void)
+@@ -1104,8 +1279,18 @@ void R_DrawSpan (void)
  	// Lookup pixel from flat texture tile,
  	//  re-index using light/colormap.
  	if (doomperf_cpu_floor_display)
@@ -187,7 +228,7 @@ index d246d93..0045392 100644
  	else
  	    *dest++ = ds_colormap[ds_source[spot]];
  
-@@ -1232,14 +1376,16 @@ void R_DrawSpanLow (void)
+@@ -1232,14 +1417,16 @@ void R_DrawSpanLow (void)
  	//  while scale is adjusted appropriately.
  	if (doomperf_cpu_floor_display)
  	{
