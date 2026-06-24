@@ -1,5 +1,5 @@
 diff --git a/r_draw.c b/r_draw.c
-index d246d93..d369788 100644
+index d246d93..0045392 100644
 --- a/r_draw.c
 +++ b/r_draw.c
 @@ -106,6 +106,8 @@ static byte R_DoomPerfCpuGaugePixel (int gauge, int ty);
@@ -22,15 +22,15 @@ index d246d93..d369788 100644
  	    *dest = dc_colormap[R_DoomPerfDiskDashboardPixel(
  				    doomperf_cpu_column_texture_x,
  				    (frac>>FRACBITS)&127,
-@@ -1049,6 +1053,144 @@ static byte R_DoomPerfDiskDashboardPixel (int tx, int ty, byte background)
+@@ -1049,6 +1053,134 @@ static byte R_DoomPerfDiskDashboardPixel (int tx, int ty, byte background)
      return DOOMPERF_DASH_WHITE;
  }
  
 +// ===== Storage summit: the spinning-disk PLATTER + central SPINDLE drum. =====
-+// Both encode utilization (how busy the disk is) and throughput (work moving
-+// through). There is no fed throughput signal yet, so throughput is synthesised
-+// from utilization plus the transient IOPS-spike pulse -- enough to drive a
-+// convincing rotation/flow. Sim modes 3/4 pin the disk busy/saturated.
++// First pass: BOTH visualize the same metric, disk %utilization, in two mediums --
++// the disk as concentric tracks filling outward, the drum as a vertical fill
++// rising up the pillar. Their animation speed also tracks util (there is no
++// separate throughput feed yet). Sim modes 3/4 pin the disk busy/saturated.
 +static int R_DoomPerfDiskUtilPermille (void)
 +{
 +    switch (doomperf_sim_mode)
@@ -48,9 +48,9 @@ index d246d93..d369788 100644
 +{
 +    int		t;
 +
++    // First pass: both the disk and the drum visualize %utilization, so the
++    // animation speed tracks util too (there is no separate throughput feed yet).
 +    t = R_DoomPerfDiskUtilPermille();
-+    if (doomperf_storage_iops_spike > 0)
-+	t += 250;			// burst the flow on an IOPS spike
 +    if (t < 0)
 +	t = 0;
 +    if (t > 1000)
@@ -61,13 +61,17 @@ index d246d93..d369788 100644
 +// Platter geometry, world units (south wing: local u=0,v=1024 -> world 0,-1024).
 +#define DOOMPERF_PLATTER_CX	0
 +#define DOOMPERF_PLATTER_CY	(-1024)
-+#define DOOMPERF_PLATTER_R	160	// outer track radius
-+#define DOOMPERF_PLATTER_HUB	60	// inner hole under the spindle drum
++#define DOOMPERF_PLATTER_R	160	// outer track radius (fills the disk ring)
++#define DOOMPERF_PLATTER_HUB	60	// inner hole under the central drum
 +#define DOOMPERF_PLATTER_TRACKS	8
++#define DOOMPERF_PLATTER_BLACK	0	// palette pure black: the idle disk ring
 +
-+// The platter FLOOR: concentric tracks fill outward with utilization, and a
-+// bright read-head wedge sweeps around the disk (the "spin"), speed scaling with
-+// throughput. Painted in world space so the pattern stays locked to the disk.
++// The platter FLOOR: a STATIC concentric-ring gauge. Tracks fill outward with
++// %utilization (alternating gold/red), the idle disk is pure black, and the
++// whole thing is painted in WORLD space so it stays locked to the drum -- it does
++// not move with the player. (There used to be a time-animated read-head wedge
++// "spinning" around; that was the only thing that made the disk look like it was
++// drifting as you walked past, so it's gone -- the disk now sits still.)
 +static byte
 +R_DoomPerfDiskPlatterPixel
 +( fixed_t		xfrac,
@@ -82,10 +86,6 @@ index d246d93..d369788 100644
 +    int		track;
 +    int		util;
 +    int		fill;
-+    int		thr;
-+    int		head;
-+    int		sweep;
-+    int		da;
 +
 +    worldx = R_DoomPerfCpuWorldX(xfrac);
 +    worldy = R_DoomPerfCpuWorldY(yfrac);
@@ -104,27 +104,17 @@ index d246d93..d369788 100644
 +	track = DOOMPERF_PLATTER_TRACKS - 1;
 +
 +    util = R_DoomPerfDiskUtilPermille();
-+    fill = (util * DOOMPERF_PLATTER_TRACKS) / 1000;	// active tracks, inner-out
++    fill = (util * DOOMPERF_PLATTER_TRACKS) / 1000;	// lit tracks, inner-out
 +
-+    // Rotating read head(s): bright wedge(s) sweeping around, faster when busy.
-+    thr = R_DoomPerfDiskThroughputPermille();
-+    head = (int)(R_PointToAngle2(DOOMPERF_PLATTER_CX << FRACBITS,
-+				 DOOMPERF_PLATTER_CY << FRACBITS,
-+				 xfrac, yfrac) >> 24);		// 0..255 around disk
-+    sweep = (leveltime * (2 + thr / 150)) & 255;
-+    da = head - sweep;
-+    if (da < 0)
-+	da = -da;
-+    if (da > 128)
-+	da = 256 - da;					// angular distance 0..128
-+    if (da < 10 || (thr > 500 && da > 118))		// 2nd head emerges when busy
-+	return DOOMPERF_DISK_GOLD;			// the bright sweep
-+
++    // Static fill: every track at or beyond the fill front (and the whole idle
++    // disk, where fill==0) is pure black; lit tracks are alternating gold/red
++    // rings with faint groove separators. No time term, no view term -- the
++    // pattern is a pure function of world position, so it stays put.
++    if (track >= fill)
++	return DOOMPERF_PLATTER_BLACK;			// unlit / idle: solid black
 +    if ((r2 & 127) < 4)
 +	return DOOMPERF_DISK_FRAME;			// faint groove separators
-+    if (track < fill)
-+	return (track & 1) ? DOOMPERF_DISK_GOLD : DOOMPERF_DISK_RED;
-+    return DOOMPERF_DISK_EMPTY;				// dark idle track
++    return (track & 1) ? DOOMPERF_DISK_GOLD : DOOMPERF_DISK_RED;
 +}
 +
 +// The central SPINDLE drum (a vertical pillar): a glowing fill rises to %util and
@@ -167,7 +157,7 @@ index d246d93..d369788 100644
  static byte
  R_DoomPerfCpuFloorPixel
  ( fixed_t		xfrac,
-@@ -1061,6 +1203,8 @@ R_DoomPerfCpuFloorPixel
+@@ -1061,6 +1193,8 @@ R_DoomPerfCpuFloorPixel
  	return R_DoomPerfCpuRunQueuePixel(xfrac, yfrac, background);
      if (doomperf_cpu_floor_display == 3)
  	return R_DoomPerfDiskQueuePixel(xfrac, yfrac, background);
@@ -176,6 +166,49 @@ index d246d93..d369788 100644
      return background;
  }
  
+@@ -1104,8 +1238,18 @@ void R_DrawSpan (void)
+ 	// Lookup pixel from flat texture tile,
+ 	//  re-index using light/colormap.
+ 	if (doomperf_cpu_floor_display)
+-	    *dest++ = ds_colormap[R_DoomPerfCpuFloorPixel
+-				  (xfrac, yfrac, ds_source[spot])];
++	{
++	    byte	bg = ds_source[spot];
++	    byte	px = R_DoomPerfCpuFloorPixel (xfrac, yfrac, bg);
++	    // The disk platter is an emissive instrument: draw its painted pixels
++	    // FULLBRIGHT so the whole disk reads uniformly and stays world-locked,
++	    // instead of fading to dark with distance (which made the fill look
++	    // glued to the player). Background floor pixels still shade normally.
++	    if (doomperf_cpu_floor_display == 4 && px != bg)
++		*dest++ = colormaps[px];
++	    else
++		*dest++ = ds_colormap[px];
++	}
+ 	else
+ 	    *dest++ = ds_colormap[ds_source[spot]];
+ 
+@@ -1232,14 +1376,16 @@ void R_DrawSpanLow (void)
+ 	//  while scale is adjusted appropriately.
+ 	if (doomperf_cpu_floor_display)
+ 	{
+-	    byte cpu_pixel = R_DoomPerfCpuFloorPixel
+-		(xfrac, yfrac, ds_source[spot]);
+-	    *dest++ = ds_colormap[cpu_pixel];
+-	    *dest++ = ds_colormap[cpu_pixel];
++	    byte	bg = ds_source[spot];
++	    byte	cpu_pixel = R_DoomPerfCpuFloorPixel (xfrac, yfrac, bg);
++	    byte	out = (doomperf_cpu_floor_display == 4 && cpu_pixel != bg)
++			      ? colormaps[cpu_pixel] : ds_colormap[cpu_pixel];
++	    *dest++ = out;
++	    *dest++ = out;
+ 	}
+ 	else
+ 	{
+-	    *dest++ = ds_colormap[ds_source[spot]]; 
++	    *dest++ = ds_colormap[ds_source[spot]];
+ 	    *dest++ = ds_colormap[ds_source[spot]];
+ 	}
+ 	
 diff --git a/r_plane.c b/r_plane.c
 index 2bcc9c8..04f30d9 100644
 --- a/r_plane.c

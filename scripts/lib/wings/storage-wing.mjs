@@ -6,8 +6,10 @@
 //
 //   ascent      a square ring of 10 stepped sectors rising 24 units each, CCW
 //               around the central column, from the entry foot to the summit.
-//   PLATTER     the column top: a 5x5 concentric ring grid (utilization tags
-//               620/621/622) that pulses/"spins" with disk %util, open to F_SKY1.
+//   PLATTER     the column top: a central solid spindle DRUM (the "cube" whose
+//               throughput streaks rise with %util) ringed by the flush spinning-
+//               disk floor (utilization display, light sentinel 130, drawn
+//               FULLBRIGHT so it stays uniform + world-locked), open to F_SKY1.
 //   AWAIT hall  off an early east step: a bank of service-latency gauges
 //               (one-sided MID walls, line tags 660/661/662).
 //   THROUGHPUT  off the far step (occluded from the entrance by the column, so it
@@ -24,8 +26,10 @@
 // [[disk-spiral-smear-fix]], [[map-builder-architecture]],
 // [[telemetry-terminal-seam]], [[wing-terminal-segment-rotation]].
 //
-// Live-instrument contracts preserved verbatim: platter tags 620/621/622 (scanned
-// by DoomPerf_UpdatePlatter); await gauges = one-sided MID walls with line tags
+// Live-instrument contracts preserved verbatim: platter = flush ring floor with
+// light sentinel 130 (R_DoomPerfDiskPlatterPixel, patch 0035, disk centre 0,-1024)
+// + spindle drum line tag 664 (R_DoomPerfDiskSpindlePixel); await gauges = one-sided
+// MID walls with line tags
 // 660/661/662 + wall:gauge (NO labelSide -- a labelSide override would zero the
 // tag, see lineTagFor); dashboard = line tag 663 on a two-sided LOWER texture;
 // queue floor display = light 134 + sector tag 610 (its world bounds are hardcoded
@@ -133,9 +137,16 @@ const C_TOWER = 304; // solid shaft ceiling over the climb
 const C_SKY = 384; // platter sky ceiling (open shaft above the disk)
 const PLATTER_FLOOR = 8 * RISE; // 192, flush with the west summit landing (walk-on)
 const DRUM_FLOOR = PLATTER_FLOOR + 128; // 320: solid spindle-drum cap; 128-tall streak wall
-// 96x96 spindle drum, centred on the platter (local u=0, v=1024 -> world 0,-1024,
-// matching DOOMPERF_PLATTER_CX/CY in patch 0035).
-const drumBox = { u1: -48, v1: 976, u2: 48, v2: 1072 };
+// First-pass summit: a central solid spindle DRUM (the "cube") standing in the
+// middle of the tower top, ringed by the flush spinning-disk PLATTER floor. BOTH
+// visualize the SAME metric -- disk %utilization -- in two mediums: the cube as a
+// vertical fill that rises with util, the disk as concentric tracks that fill
+// outward with util. The disk display (light 130) is painted FULLBRIGHT by the
+// engine (patch 0035) so it reads uniformly and stays world-locked to the drum
+// centre regardless of where you stand -- it no longer fades to dark with distance
+// (which made the fill look glued to the player). drumBox is centred on the
+// platter (local u=0,v=1024 -> world 0,-1024, matching DOOMPERF_PLATTER_CX/CY).
+const drumBox = { u1: -80, v1: 944, u2: 80, v2: 1104 };
 
 // Throughput hall: panels mount on a floor==ceiling slot whose room-facing LOWER
 // texture carries the art (128 tall, matching the tube/dashboard textures).
@@ -207,12 +218,13 @@ const build = (ctx) => {
     });
   });
 
-  // ===== The PLATTER: a flat painted disk floor at the summit, open to F_SKY1.
-  // Light sentinel 130 makes R_DrawPlanes hand the floor to R_DoomPerfDiskPlatterPixel
-  // (patch 0035), which paints concentric utilization tracks + a rotating throughput
-  // read-head. Flush at 192 with the west landing so you walk straight on. Carved
-  // into bands around the central spindle drum. (Replaces the old 5x5 ring grid;
-  // tags 620/621/622 and the light-pulse hook are retired.)
+  // ===== The PLATTER: a flush painted disk-floor RING around the central drum,
+  // open to F_SKY1. Light sentinel 130 makes R_DrawPlanes hand the floor to
+  // R_DoomPerfDiskPlatterPixel (patch 0035), which fills concentric utilization
+  // tracks outward with %util; the engine draws those pixels FULLBRIGHT so the
+  // disk stays uniform and world-locked to the drum centre (it does not fade with
+  // distance, so it no longer reads as glued to the player). Flush at 192 with the
+  // west landing so you walk straight on, carved into bands around the drum.
   const platterFloor = {
     ...platterStyle,
     kind: "platter",
@@ -224,9 +236,9 @@ const build = (ctx) => {
   areaRect(direction, "platter-n", { u1: -CW, v1: drumBox.v2, u2: CW, v2: VC2 }, platterFloor);
   areaRect(direction, "platter-w", { u1: -CW, v1: drumBox.v1, u2: drumBox.u1, v2: drumBox.v2 }, platterFloor);
   areaRect(direction, "platter-e", { u1: drumBox.u2, v1: drumBox.v1, u2: CW, v2: drumBox.v2 }, platterFloor);
-  // The central SPINDLE drum: a solid 128-tall pillar; its lower (two-sided) wall
-  // faces carry the throughput streaks (line tag 664, painted on the bottom surface
-  // by R_DoomPerfDiskSpindlePixel). The fill height rises with %util.
+  // The central SPINDLE drum (the "cube"): a solid 128-tall pillar; its lower
+  // (two-sided) wall faces carry the vertical utilization fill + streaks (line tag
+  // 664, painted by R_DoomPerfDiskSpindlePixel), the second medium for %util.
   areaRect(direction, "spindle-drum", drumBox, {
     ...platterStyle,
     kind: "spindle",
@@ -235,7 +247,7 @@ const build = (ctx) => {
     floorFlat: "FLOOR0_3",
     wall: "METAL1",
     light: 200,
-    lineTag: ids.lineTags[0] + 4, // 664: spindle throughput streaks
+    lineTag: ids.lineTags[0] + 4, // 664: spindle utilization fill + streaks
   });
 
   // ===== AWAIT hall (off step-e1, floor 48): a latency-gauge bank. =====
