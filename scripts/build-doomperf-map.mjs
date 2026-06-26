@@ -105,22 +105,23 @@ const outwardSide = {
   south: "bottom",
   west: "left",
 };
-// Inverse of outwardSide: which wing each atrium perimeter wall belongs to, keyed
-// by the edge's geometric side. Lets a one-sided hub wall wear its wing's own wall
-// texture (north wall = CPU's COMPTILE, etc.) so the spawn box reads as four
-// distinct thresholds rather than a uniform STARTAN3 cube.
+// Which wing's wall texture each atrium perimeter wall wears, keyed by the edge's
+// geometric side. Lets a one-sided hub wall wear a wing's own wall texture so the
+// spawn box reads as four distinct thresholds rather than a uniform STARTAN3 cube.
+// The wall/flank theming is intentionally rotated one door relative to the doors
+// themselves (cpu->network->disk->cpu); MEMORY (east) is left in place.
 const sideResource = {
-  top: "cpu",
-  right: "memory",
-  bottom: "storage",
-  left: "network",
+  top: "storage", // north (CPU door) wears the DISK wall
+  right: "memory", // east (MEMORY door) unchanged
+  bottom: "network", // south (DISK door) wears the NETWORK wall
+  left: "cpu", // west (NETWORK door) wears the CPU wall
 };
 
 // The geometry builder owns the sectors/things state and the WAD compile
 // pipeline; we destructure its construction API so the layout code below reads
 // the same as before (areaRect/addAreaThing/addThing), then call compile() near
 // the end (with the map-specific texturing) to emit the binary map lumps.
-const { addThing, addRect, areaRect, addAreaThing, compile } = createMapBuilder();
+const { addThing, addRect, areaRect, areaPoly, addAreaThing, compile } = createMapBuilder();
 
 // ===== Atrium (spawn hub) =====
 // Each cardinal wall now wears its wing's identity instead of a uniform STARTAN3
@@ -171,6 +172,7 @@ const addResourceArea = (direction) => {
     base,
     accent,
     areaRect,
+    areaPoly,
     addAreaThing,
     hubRadius,
     doorWidth,
@@ -183,15 +185,16 @@ const addResourceArea = (direction) => {
 directions.forEach(addResourceArea);
 
 // Flanking fixtures: a matched pair just inside the atrium on either side of each
-// doorway, on the corner floor clear of the door passage. Each wing gets a
-// distinct prop, themed to its identity — a glowing techno pillar for CPU's
-// silicon, warning torches for MEMORY's pressure/OOM path, an amber candelabra
-// for the DISK foundry, and a floor lamp echoing the NETWORK wing's own lamps.
+// doorway, on the corner floor clear of the door passage. The prop set is rotated
+// one door alongside the wall texture (see sideResource): the glowing techno
+// pillar (CPU's silicon) now flanks the NETWORK door, the amber candelabra (DISK
+// foundry) flanks the CPU door, and the floor lamp (NETWORK's own lamps) flanks
+// the DISK door. The warning torch (MEMORY's pressure/OOM path) stays at the east.
 const hubFlankThing = {
-  north: 48, // tall techno pillar (ELEC)
-  east: 46, // tall torch (allowed by the patched engine's prop filter)
-  south: 35, // candelabra (CBRA)
-  west: 2028, // floor lamp (COLU)
+  north: 35, // candelabra (CBRA) — DISK's prop, now at the CPU door
+  east: 46, // tall torch (allowed by the patched engine's prop filter) — MEMORY
+  south: 2028, // floor lamp (COLU) — NETWORK's prop, now at the DISK door
+  west: 48, // tall techno pillar (ELEC) — CPU's prop, now at the NETWORK door
 };
 const flankOffset = half + 32; // 128: just outside the door opening
 const flankInset = hubRadius - 48; // 336: a little in front of the wall

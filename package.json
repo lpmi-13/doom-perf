@@ -3,14 +3,15 @@
   "private": false,
   "type": "module",
   "scripts": {
-    "build:map": "node scripts/build-doomperf-map.mjs",
+    "build:map": "node scripts/build-doomperf-map.mjs && node scripts/lib/validate-wad.mjs",
     "build": "node scripts/build-web.mjs",
     "build:engine": "bash scripts/build-doom-wasm.sh",
     "dev": "node scripts/build-web.mjs --watch --serve",
     "dev:telemetry": "bash scripts/dev-with-telemetry.sh",
     "typecheck": "tsc --noEmit",
+    "test:map": "node --test scripts/lib/map-builder.test.mjs",
     "test:go": "go test ./...",
-    "check": "npm run typecheck && npm run test:go && npm run build"
+    "check": "npm run typecheck && npm run test:map && npm run test:go && npm run build"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",

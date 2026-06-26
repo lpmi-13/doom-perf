@@ -51,11 +51,11 @@ index 17dab45..56ce5d3 100644
 +    worldx = R_DoomPerfCpuWorldX(xfrac);
 +    worldy = R_DoomPerfCpuWorldY(yfrac);
 +    // Storage is the south wing: the builder rotates local (u,v) -> (-u,-v), so
-+    // the queue trough's u[-496,-336] v[1088,1152] maps to this world box.
-+    if (worldx < 336 || worldx > 496 || worldy < -1152 || worldy > -1088)
++    // the hex queue trough's u[-750,-590] v[897,961] maps to this world box.
++    if (worldx < 590 || worldx > 750 || worldy < -961 || worldy > -897)
 +	return background;
 +
-+    localx = worldx - 336;		// 0 (arrival) .. 160 (dispatch) along the queue
++    localx = worldx - 590;		// 0 (arrival) .. 160 (dispatch) along the queue
 +    queue = R_DoomPerfDiskQueuePermille();
 +    if (queue > 1000)
 +	queue = 1000;

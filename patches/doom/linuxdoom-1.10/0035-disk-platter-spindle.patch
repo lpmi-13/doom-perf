@@ -60,10 +60,10 @@ index d246d93..731244a 100644
 +
 +// Platter geometry, world units (south wing: local u=0,v=1024 -> world 0,-1024).
 +#define DOOMPERF_PLATTER_CX	0
-+#define DOOMPERF_PLATTER_CY	(-1024)
-+#define DOOMPERF_PLATTER_R	160	// rim radius (fills the disk ring)
-+#define DOOMPERF_PLATTER_HUB	60	// inner hole under the central drum
-+#define DOOMPERF_PLATTER_INNER	80	// closest VISIBLE platter radius (cube edge)
++#define DOOMPERF_PLATTER_CY	(-1153)
++#define DOOMPERF_PLATTER_R	200	// rim radius (fills the disk ring; +25% hex)
++#define DOOMPERF_PLATTER_HUB	75	// inner hole under the central drum
++#define DOOMPERF_PLATTER_INNER	86	// closest VISIBLE platter radius (hex drum inradius)
 +#define DOOMPERF_PLATTER_BLACK	0	// palette pure black: the idle disk ring
 +#define DOOMPERF_PLATTER_GOLD	231	// light-yellow base hue (darkened outward)
 +#define DOOMPERF_PLATTER_DARKEST 25	// deepest colormap level reached at the rim
@@ -125,8 +125,8 @@ index d246d93..731244a 100644
 +    if (r2 < DOOMPERF_PLATTER_HUB * DOOMPERF_PLATTER_HUB)
 +	return DOOMPERF_DISK_FRAME;			// metal hub under the drum
 +
-+    r = R_DoomPerfISqrt(r2);				// linear radius, 0..160
-+    span = DOOMPERF_PLATTER_R - DOOMPERF_PLATTER_INNER;	// 80
++    r = R_DoomPerfISqrt(r2);				// linear radius, 0..200
++    span = DOOMPERF_PLATTER_R - DOOMPERF_PLATTER_INNER;	// 114
 +
 +    // The lit pool grows outward from the cube edge to the rim with utilization.
 +    util = R_DoomPerfDiskUtilPermille();
