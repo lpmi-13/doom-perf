@@ -44,8 +44,9 @@ const resourceConfigs = {
     labelPatch: "DPLCPU",
     labelColor: 176,
     labelStyle: "cpu",
-    wall: "COMPTILE",
-    accent: "METAL1",
+    // Reactor-red identity: bold REDWALL1 hero walls with a TEKWALL1 tech accent.
+    wall: "REDWALL1",
+    accent: "TEKWALL1",
     floor: "FLOOR4_8",
     ceiling: "CEIL3_5",
   },
@@ -110,11 +111,14 @@ const outwardSide = {
 // spawn box reads as four distinct thresholds rather than a uniform STARTAN3 cube.
 // The wall/flank theming is intentionally rotated one door relative to the doors
 // themselves (cpu->network->disk->cpu); MEMORY (east) is left in place.
+// A value is either a wing key (resolved to that wing's wall) or a literal texture
+// name (used as-is); see sideTextures.
 const sideResource = {
-  top: "storage", // north (CPU door) wears the DISK wall
+  top: "cpu", // north (CPU door) matches the CPU wing wall (REDWALL1)
   right: "memory", // east (MEMORY door) unchanged
   bottom: "network", // south (DISK door) wears the NETWORK wall
-  left: "cpu", // west (NETWORK door) wears the CPU wall
+  left: "COMPTILE", // west (NETWORK door) keeps the blue-ish computer-tile detail,
+  // decoupled from the CPU wing now that CPU's own wall is reactor-red
 };
 
 // The geometry builder owns the sectors/things state and the WAD compile
@@ -257,7 +261,8 @@ const sideTextures = (sector, other, overrideTexture, edge) => {
     // resolved independently). Everything else keeps its own wall.
     let mid = overrideTexture ?? sector.wall;
     if (!overrideTexture && sector.kind === "hub" && edge) {
-      mid = resourceConfigs[sideResource[edge.side]].wall;
+      const side = sideResource[edge.side];
+      mid = resourceConfigs[side]?.wall ?? side;
     }
     return {
       top: "-",

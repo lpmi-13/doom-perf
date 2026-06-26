@@ -59,7 +59,6 @@ const cpuRoomBounds = {
   main: { u1: -320, v1: 896, u2: 320, v2: 1624 },
   runQueue: { u1: -1024, v1: 768, u2: -384, v2: 1600 },
   load: { u1: 384, v1: 896, u2: 884, v2: 1676 },
-  sideEntry: { v1: 1024, v2: 1216 },
 };
 
 const cpuTerminalScreens = {
@@ -122,6 +121,7 @@ const loadGaugeNameplates = [
 const build = (ctx) => {
   const {
     areaRect,
+    areaPoly,
     addAreaThing,
     direction,
     resource,
@@ -161,7 +161,7 @@ const build = (ctx) => {
     const frame = {
       ...accent,
       kind: "core-frame",
-      wall: "METAL1",
+      wall: "REDWALL1", // reactor-red core chamber; cores pop against it
       floorFlat: "FLOOR0_1",
       ceilingFlat: "CEIL5_1",
       light: frameLight,
@@ -243,26 +243,27 @@ const build = (ctx) => {
         }
       }
     }
-    // ===== Open entryways (no doors) into the two side rooms =====
-    const corridor = {
+    // ===== Angled entryways (no doors) into the two side rooms. Each connector is
+    // a parallelogram that leans 45 degrees off the chamber's N-S axis (run-queue
+    // NW, load NE): main mouth on the chamber side wall, room mouth shifted 64u
+    // north over the 64u gap, so the player veers ~45 degrees to enter instead of
+    // turning a square 90. The rooms stay axis-aligned (their live instruments are
+    // bound to fixed world coords); only the connector splays. The RUN QUEUE / LOAD
+    // floor names are inscribed flush just inside each room at the threshold (see
+    // rq-platform and load-walk-w-west below), since an angled floor can't carry
+    // the 64-grid-aligned inscription cells.
+    const connector = {
       ...base,
       kind: "entry",
-      wall: "METAL1",
       floorFlat: "FLOOR0_1",
       ceilingFlat: "CEIL5_1",
       light: frameLight,
       ceiling: 144,
     };
-    // RUN QUEUE / LOAD names inscribed flush into the entry-corridor floors at
-    // each room's threshold (the player walks over them on the way in).
-    rqInscriptionNames.forEach((flatName, k) => {
-      const v1 = cpuRoomBounds.sideEntry.v1 + k * 64;
-      areaRect(direction, `rq-inscription-${k}`, { u1: cpuRoomBounds.runQueue.u2, v1, u2: cpuRoomBounds.main.u1, v2: v1 + 64 }, { ...corridor, floorFlat: flatName });
-    });
-    loadInscriptionNames.forEach((flatName, k) => {
-      const v1 = cpuRoomBounds.sideEntry.v1 + k * 64;
-      areaRect(direction, `load-inscription-${k}`, { u1: cpuRoomBounds.main.u2, v1, u2: cpuRoomBounds.load.u1, v2: v1 + 64 }, { ...corridor, floorFlat: flatName });
-    });
+    // Clockwise loops (interior on the right). Run-queue: room-top, main-top,
+    // main-bottom, room-bottom. Load is its mirror across u=0.
+    areaPoly(direction, "rq-connector", [[-384, 1224], [-320, 1160], [-320, 1000], [-384, 1064]], connector);
+    areaPoly(direction, "load-connector", [[320, 1160], [384, 1224], [384, 1064], [320, 1000]], connector);
     // ===== LEFT wing: RUN QUEUE — a "subway" hall. The player enters from the
     // east onto a raised PLATFORM (floor 0; RUN QUEUE wall terminal on its north
     // end wall) and looks WEST down into the sunken TRACKS (a ravine at floor -56)
@@ -283,14 +284,24 @@ const build = (ctx) => {
     // South end held at v768 so the trench clears the west (network) wing, whose
     // geometry tops out near y704 — a solid-wall gap keeps the wings unconnected.
     const rqTrV1 = 768, rqTrV2 = 1600;                            // track trench N-S
-    const rqHall = { ...base, wall: "METAL1", ceilingFlat: "CEIL5_1", ceiling: rqCeil };
+    const rqHall = { ...base, wall: "TEKWALL1", ceilingFlat: "CEIL5_1", ceiling: rqCeil };
     const platform = { ...rqHall, kind: "rq-overlook", floorFlat: "FLOOR4_8", floor: 0, light: 176 };
     const tracks = { ...rqHall, kind: "rq-ravine", floorFlat: "FLOOR1_7", floor: rqRavineFloor, light: 168 };
 
-    // Platform (raised) + RUN QUEUE wall terminal on its solid north end wall.
+    // Platform (raised) + RUN QUEUE wall terminal on its solid north end wall. The
+    // east strip (u[-448,-384], against the angled connector mouth) is carved to
+    // inscribe RUN QUEUE flush into the floor at the threshold; the bulk of the
+    // platform stays one sector to its west.
     const rqTermV = rqPlatV2 - terminalPanelDepth;   // 1296
     const rqTermU1 = -640;                            // 256-wide screen, east-aligned
-    areaRect(direction, "rq-platform", { u1: rqPlatU1, v1: rqPlatV1, u2: rqPlatU2, v2: rqTermV }, platform);
+    const rqInscU1 = -448;                            // east threshold strip (64 wide)
+    areaRect(direction, "rq-platform", { u1: rqPlatU1, v1: rqPlatV1, u2: rqInscU1, v2: rqTermV }, platform);
+    areaRect(direction, "rq-plat-thresh-s", { u1: rqInscU1, v1: rqPlatV1, u2: rqPlatU2, v2: 1024 }, platform);
+    rqInscriptionNames.forEach((flatName, k) => {
+      const v1 = 1024 + k * 64;
+      areaRect(direction, `rq-inscription-${k}`, { u1: rqInscU1, v1, u2: rqPlatU2, v2: v1 + 64 }, { ...platform, floorFlat: flatName });
+    });
+    areaRect(direction, "rq-plat-thresh-n", { u1: rqInscU1, v1: 1216, u2: rqPlatU2, v2: rqTermV }, platform);
     areaRect(direction, "rq-plat-nw", { u1: rqPlatU1, v1: rqTermV, u2: rqTermU1, v2: rqPlatV2 }, platform);
     areaRect(direction, "rq-terminal", { u1: rqTermU1, v1: rqTermV, u2: rqPlatU2, v2: rqPlatV2 }, {
       ...platform,
@@ -394,7 +405,7 @@ const build = (ctx) => {
     const loadWalk = {
       ...base,
       kind: "load-room",
-      wall: "METAL1",
+      wall: "TEKWALL1",
       floorFlat: "FLOOR4_8",
       ceilingFlat: "CEIL5_1",
       ceiling: 256,
@@ -419,7 +430,14 @@ const build = (ctx) => {
     // overlapping sectors. West/east strips flank the nameplate strip; the
     // nameplate strip itself is plain walk except for the three label cells.
     const loadLabelU1 = 448, loadLabelU2 = 512;
-    areaRect(direction, "load-walk-w-west", { u1: cpuRoomBounds.load.u1, v1: cpuRoomBounds.load.v1, u2: loadLabelU1, v2: loadGaugeV2 }, loadWalk);
+    // West walkway strip (u[384,448], against the angled connector mouth), carved to
+    // inscribe LOAD flush into the floor at the threshold.
+    areaRect(direction, "load-walk-w-west-s", { u1: cpuRoomBounds.load.u1, v1: cpuRoomBounds.load.v1, u2: loadLabelU1, v2: 1024 }, loadWalk);
+    loadInscriptionNames.forEach((flatName, k) => {
+      const v1 = 1024 + k * 64;
+      areaRect(direction, `load-inscription-${k}`, { u1: cpuRoomBounds.load.u1, v1, u2: loadLabelU1, v2: v1 + 64 }, { ...loadWalk, floorFlat: flatName });
+    });
+    areaRect(direction, "load-walk-w-west-n", { u1: cpuRoomBounds.load.u1, v1: 1216, u2: loadLabelU1, v2: loadGaugeV2 }, loadWalk);
     areaRect(direction, "load-walk-w-strip-n", { u1: loadLabelU1, v1: cpuRoomBounds.load.v1, u2: loadLabelU2, v2: loadGaugeNameplates[0].v1 }, loadWalk);
     loadGaugeNameplates.forEach(({ v1, inscription }, k) => {
       areaRect(direction, `load-nameplate-${k}`, { u1: loadLabelU1, v1, u2: loadLabelU2, v2: v1 + 64 }, { ...loadWalk, floorFlat: inscription.names[0] });
@@ -456,12 +474,12 @@ const build = (ctx) => {
     });
 
   // ===== Wall torches flanking the side-room doorways and the back staircases.
-    // One torch beside each side-room doorway -- against the side wall and just
-    // south of the v=1024..1216 opening (radius 16 reaches only to v=1024, so it
+    // One torch beside each angled side-room mouth -- against the side wall and just
+    // south of the new v=1000..1160 opening (radius 16 reaches only to v=1000, so it
     // never intrudes into the entry/exit) -- and one at the foot of each back
     // staircase (stairs start at v=1368), against the rear side wall.
-    addAreaThing(direction, 46, -306, 1008);
-    addAreaThing(direction, 46, 306, 1008);
+    addAreaThing(direction, 46, -306, 984);
+    addAreaThing(direction, 46, 306, 984);
     addAreaThing(direction, 46, -354, 1352);
     addAreaThing(direction, 46, 354, 1352);
 };
