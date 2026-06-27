@@ -19,9 +19,9 @@ export const mapManifest = {
       "sign": "runqueue",
       "segments": [
         {
-          "ax": -640,
+          "ax": -896,
           "ay": 1312,
-          "bx": -384,
+          "bx": -640,
           "by": 1312
         }
       ]
@@ -30,9 +30,9 @@ export const mapManifest = {
       "sign": "load",
       "segments": [
         {
-          "ax": 506,
+          "ax": 762,
           "ay": 1676,
-          "bx": 762,
+          "bx": 1018,
           "by": 1676
         }
       ]

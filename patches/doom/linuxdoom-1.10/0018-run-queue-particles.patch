@@ -145,7 +145,7 @@ index 0a1e232..adf9ff0 100644
 +// gates: they pile up 2x2 per level, the pile growing with the blocked count
 +// (uninterruptible sleep), while the pen light PULSES ~once/sec so the sleeping
 +// pile glows. World coords match build-doomperf-map.mjs (CPU/north wing =
-+// identity): trench x[-1024,-768], gates at y~1104, pen at x[-1136,-1024].
++// identity): trench x[-1280,-1024], gates at y~1104, pen at x[-1392,-1280].
 +#define DOOMPERF_RQ_GATE_TAG_BASE	230
 +#define DOOMPERF_RQ_GATE_COUNT		8
 +#define DOOMPERF_RQ_GATE_OPEN_Z		(-56 * FRACUNIT)
@@ -153,7 +153,7 @@ index 0a1e232..adf9ff0 100644
 +#define DOOMPERF_RQ_DEPTH		5		// max queued (stopped) orbs per lane
 +#define DOOMPERF_RQ_MAX_RUN		28		// dispatched orbs in flight to the exit
 +#define DOOMPERF_RQ_BUDGET		56		// hard cap on live CPU orbs (WASM perf)
-+#define DOOMPERF_RQ_LANE_X0		(-1006)		// centre x of gate lane 0 (cu+18, cu=-1024)
++#define DOOMPERF_RQ_LANE_X0		(-1262)		// centre x of gate lane 0 (cu+18, cu=-1280)
 +#define DOOMPERF_RQ_LANE_PITCH		32		// lane spacing (= rqCell)
 +#define DOOMPERF_RQ_SPEED		(6 * FRACUNIT)	// forward glide / run speed
 +#define DOOMPERF_RQ_STEER		(3 * FRACUNIT)	// lateral homing toward a lane centre
@@ -170,7 +170,7 @@ index 0a1e232..adf9ff0 100644
 +#define DOOMPERF_RQ_PEN_DIM		176		// pulse trough light (avoids sentinels 144/160)
 +#define DOOMPERF_RQ_PEN_LIT		255		// pulse peak light
 +#define DOOMPERF_RQ_PULSE		35		// pulse period in tics (~1 sec)
-+#define DOOMPERF_RQ_STACK_CX		(-1080)		// stack centre x (deep in the pen)
++#define DOOMPERF_RQ_STACK_CX		(-1336)		// stack centre x (deep in the pen)
 +#define DOOMPERF_RQ_STACK_CY		1030		// stack centre y
 +#define DOOMPERF_RQ_STACK_OFF		8		// 2x2 half-spacing (orbs 16 apart)
 +#define DOOMPERF_RQ_STACK_Z		(-56 * FRACUNIT)	// level-0 base z (pen floor)

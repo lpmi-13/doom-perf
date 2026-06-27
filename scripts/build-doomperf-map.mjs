@@ -44,9 +44,10 @@ const resourceConfigs = {
     labelPatch: "DPLCPU",
     labelColor: 176,
     labelStyle: "cpu",
-    // Reactor-red identity: bold REDWALL1 hero walls with a TEKWALL1 tech accent.
-    wall: "REDWALL1",
-    accent: "TEKWALL1",
+    // Classic Doom spacelab identity: detailed STARTAN2 tech panels with a STARTAN3
+    // accent; the core chamber adds COMPUTE1 computer banks (see cpu-wing.mjs).
+    wall: "STARTAN2",
+    accent: "STARTAN3",
     floor: "FLOOR4_8",
     ceiling: "CEIL3_5",
   },

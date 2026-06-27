@@ -55,10 +55,19 @@ for (let c = 4; c >= 0; c -= 2) ringOrder.push([c, 4]);
 ringOrder.push([0, 2]);
 const ringPillarIndex = new Map(ringOrder.map(([c, r], i) => [`${c},${r}`, i]));
 
+// The two side rooms are pushed ~5x farther from the core chamber: the angled
+// entry connectors keep their 45-degree mouths, and a straight extension corridor
+// (built in build()) bridges the new 256u gap, so the entry passage grows from 64u
+// to 320u (5x). The run-queue moves a pure 256u WEST so only its X-coordinates
+// shift -- the run-queue engine patches (0018 orb coords, 0007 display origin) are
+// shifted by the same RQ_ROOM_DX. The load room moves 256u EAST; its gauges are tag
+// + texture-space driven, so no engine change is needed there.
+const RQ_ROOM_DX = -256;
+const LOAD_ROOM_DX = 256;
 const cpuRoomBounds = {
   main: { u1: -320, v1: 896, u2: 320, v2: 1624 },
-  runQueue: { u1: -1024, v1: 768, u2: -384, v2: 1600 },
-  load: { u1: 384, v1: 896, u2: 884, v2: 1676 },
+  runQueue: { u1: -1024 + RQ_ROOM_DX, v1: 768, u2: -384 + RQ_ROOM_DX, v2: 1600 },
+  load: { u1: 384 + LOAD_ROOM_DX, v1: 896, u2: 884 + LOAD_ROOM_DX, v2: 1676 },
 };
 
 const cpuTerminalScreens = {
@@ -149,6 +158,16 @@ const build = (ctx) => {
         floorFlat: flatName,
       });
     });
+    // Recessed blue light strips framed by support beams, lining the foyer side
+    // walls (classic spacelab detailing). Each niche cuts 16u into the side wall:
+    // its back face is a LITEBLU4 light strip (full-bright) and its return jambs
+    // carry SUPPORT2 beams. Two per side, clear of the v=704 entry throat and the
+    // v=896 chamber mouth.
+    const foyerLight = { ...foyer, kind: "wall-light", wall: "SUPPORT2", light: 255 };
+    [768, 832].forEach((vc, k) => {
+      areaRect(direction, `foyer-lite-w${k}`, { u1: -336, v1: vc - 16, u2: -320, v2: vc + 16 }, { ...foyerLight, labelSide: "left", labelTexture: "LITEBLU4" });
+      areaRect(direction, `foyer-lite-e${k}`, { u1: 320, v1: vc - 16, u2: 336, v2: vc + 16 }, { ...foyerLight, labelSide: "right", labelTexture: "LITEBLU4" });
+    });
 
   // ===== Core chamber + run-queue and load side rooms.
     // Core ring: a lit metal frame surrounds a 5x5 grid platform whose ceiling
@@ -161,14 +180,15 @@ const build = (ctx) => {
     const frame = {
       ...accent,
       kind: "core-frame",
-      wall: "REDWALL1", // reactor-red core chamber; cores pop against it
+      wall: "COMP2", // computer banks framing the cores + the back terminal recess (no AGM screen)
       floorFlat: "FLOOR0_1",
       ceilingFlat: "CEIL5_1",
       light: frameLight,
     };
     // Open-air variant for the core courtyard (ring + balconies + stairs) so the
-    // columns are seen rising into the sky from the raised overlook.
-    const openSky = { ...frame, ceiling: 288, ceilingFlat: "F_SKY1" };
+    // columns are seen rising into the sky from the raised overlook. STARTAN2 walls
+    // keep the big courtyard surfaces varied against the COMPUTE1 core frame.
+    const openSky = { ...frame, wall: "STARTAN2", ceiling: 288, ceilingFlat: "F_SKY1" };
     areaRect(direction, "main-frame-south", { u1: cpuRoomBounds.main.u1, v1: cpuRoomBounds.main.v1, u2: cpuRoomBounds.main.u2, v2: ringV0 }, frame);
     // Behind the cores the chamber flares wider (rearU vs the +/-320 core area)
     // and leaves a flat breathing space before the stairs, so the overlook feels
@@ -255,6 +275,7 @@ const build = (ctx) => {
     const connector = {
       ...base,
       kind: "entry",
+      wall: "SUPPORT2", // angled passages framed as braced, support-beam structural throats
       floorFlat: "FLOOR0_1",
       ceilingFlat: "CEIL5_1",
       light: frameLight,
@@ -264,6 +285,12 @@ const build = (ctx) => {
     // main-bottom, room-bottom. Load is its mirror across u=0.
     areaPoly(direction, "rq-connector", [[-384, 1224], [-320, 1160], [-320, 1000], [-384, 1064]], connector);
     areaPoly(direction, "load-connector", [[320, 1160], [384, 1224], [384, 1064], [320, 1000]], connector);
+    // Straight extension corridors bridging each angled mouth (u=+/-384) to the
+    // now-distant room walls, making the entry passage ~5x longer. Floor flush with
+    // the connectors; SUPPORT2 walls continue the braced look. v[1064,1224] matches
+    // the angled mouths' room-side edge.
+    areaRect(direction, "rq-extension", { u1: cpuRoomBounds.runQueue.u2, v1: 1064, u2: -384, v2: 1224 }, connector);
+    areaRect(direction, "load-extension", { u1: 384, v1: 1064, u2: cpuRoomBounds.load.u1, v2: 1224 }, connector);
     // ===== LEFT wing: RUN QUEUE — a "subway" hall. The player enters from the
     // east onto a raised PLATFORM (floor 0; RUN QUEUE wall terminal on its north
     // end wall) and looks WEST down into the sunken TRACKS (a ravine at floor -56)
@@ -277,14 +304,15 @@ const build = (ctx) => {
     // + tags only. Light levels avoid the floor-display sentinels (144/160).
     const rqRavineFloor = -56;
     const rqCeil = 224;
-    const rqPlatU1 = -704, rqPlatU2 = cpuRoomBounds.runQueue.u2; // platform E-W (-704..-384)
+    // All run-queue u-coords shift by RQ_ROOM_DX (room pushed west); v unchanged.
+    const rqPlatU1 = -704 + RQ_ROOM_DX, rqPlatU2 = cpuRoomBounds.runQueue.u2; // platform E-W
     const rqPlatV1 = 928, rqPlatV2 = 1312;                        // platform N-S (384 long)
-    const rqStairU1 = -768, rqStairU2 = -704;                     // egress stairs (64 wide)
-    const rqTrU1 = -1024, rqTrU2 = -768;                          // track trench E-W (256 wide)
+    const rqStairU1 = -768 + RQ_ROOM_DX, rqStairU2 = -704 + RQ_ROOM_DX; // egress stairs (64 wide)
+    const rqTrU1 = -1024 + RQ_ROOM_DX, rqTrU2 = -768 + RQ_ROOM_DX; // track trench E-W (256 wide)
     // South end held at v768 so the trench clears the west (network) wing, whose
     // geometry tops out near y704 — a solid-wall gap keeps the wings unconnected.
     const rqTrV1 = 768, rqTrV2 = 1600;                            // track trench N-S
-    const rqHall = { ...base, wall: "TEKWALL1", ceilingFlat: "CEIL5_1", ceiling: rqCeil };
+    const rqHall = { ...base, wall: "STARTAN3", ceilingFlat: "CEIL5_1", ceiling: rqCeil };
     const platform = { ...rqHall, kind: "rq-overlook", floorFlat: "FLOOR4_8", floor: 0, light: 176 };
     const tracks = { ...rqHall, kind: "rq-ravine", floorFlat: "FLOOR1_7", floor: rqRavineFloor, light: 168 };
 
@@ -293,8 +321,8 @@ const build = (ctx) => {
     // inscribe RUN QUEUE flush into the floor at the threshold; the bulk of the
     // platform stays one sector to its west.
     const rqTermV = rqPlatV2 - terminalPanelDepth;   // 1296
-    const rqTermU1 = -640;                            // 256-wide screen, east-aligned
-    const rqInscU1 = -448;                            // east threshold strip (64 wide)
+    const rqTermU1 = -640 + RQ_ROOM_DX;              // 256-wide screen, east-aligned
+    const rqInscU1 = -448 + RQ_ROOM_DX;             // east threshold strip (64 wide)
     areaRect(direction, "rq-platform", { u1: rqPlatU1, v1: rqPlatV1, u2: rqInscU1, v2: rqTermV }, platform);
     areaRect(direction, "rq-plat-thresh-s", { u1: rqInscU1, v1: rqPlatV1, u2: rqPlatU2, v2: 1024 }, platform);
     rqInscriptionNames.forEach((flatName, k) => {
@@ -405,7 +433,7 @@ const build = (ctx) => {
     const loadWalk = {
       ...base,
       kind: "load-room",
-      wall: "TEKWALL1",
+      wall: "STARTAN2",
       floorFlat: "FLOOR4_8",
       ceilingFlat: "CEIL5_1",
       ceiling: 256,
@@ -421,15 +449,16 @@ const build = (ctx) => {
       ceilingFlat: "CEIL5_1",
       light: 176,
     };
-    // Gauge column + terminal are centred on the (now wider) room centre u=634.
-    const loadGU1 = 570, loadGU2 = 698;            // gauge column (128 wide), centred
-    const loadTermU1 = 506, loadTermU2 = 762;      // terminal (256 wide), centred
+    // Gauge column + terminal centred on the room centre (u=634 + LOAD_ROOM_DX);
+    // all load u-coords shift east by LOAD_ROOM_DX with the room. v is unchanged.
+    const loadGU1 = 570 + LOAD_ROOM_DX, loadGU2 = 698 + LOAD_ROOM_DX; // gauge column (128 wide)
+    const loadTermU1 = 506 + LOAD_ROOM_DX, loadTermU2 = 762 + LOAD_ROOM_DX; // terminal (256 wide)
     const loadGaugeV2 = 1240;                       // south gauge band top
     // West walkway in front of the gauges, split so the per-gauge floor
     // nameplates (a 64-deep u-strip at u448..512) can be inscribed without
     // overlapping sectors. West/east strips flank the nameplate strip; the
     // nameplate strip itself is plain walk except for the three label cells.
-    const loadLabelU1 = 448, loadLabelU2 = 512;
+    const loadLabelU1 = 448 + LOAD_ROOM_DX, loadLabelU2 = 512 + LOAD_ROOM_DX;
     // West walkway strip (u[384,448], against the angled connector mouth), carved to
     // inscribe LOAD flush into the floor at the threshold.
     areaRect(direction, "load-walk-w-west-s", { u1: cpuRoomBounds.load.u1, v1: cpuRoomBounds.load.v1, u2: loadLabelU1, v2: 1024 }, loadWalk);
@@ -553,7 +582,7 @@ const sprites = [
 // given an explicit segment.
 const terminals = ({ terminalSegment, terminalHalfWidth }) => [
   { sign: "cores", segments: [terminalSegment(cpuRoomBounds.main)] },
-  { sign: "runqueue", segments: [{ ax: -512 - terminalHalfWidth, ay: 1312, bx: -512 + terminalHalfWidth, by: 1312 }] },
+  { sign: "runqueue", segments: [{ ax: -512 + RQ_ROOM_DX - terminalHalfWidth, ay: 1312, bx: -512 + RQ_ROOM_DX + terminalHalfWidth, by: 1312 }] },
   { sign: "load", segments: [terminalSegment(cpuRoomBounds.load)] },
 ];
 
