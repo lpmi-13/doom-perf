@@ -1,0 +1,209 @@
+diff --git a/info.c b/info.c
+index a070e3d..12353ed 100644
+--- a/info.c
++++ b/info.c
+@@ -1120,7 +1120,27 @@ state_t	states[NUMSTATES] = {
+     // SOULA0 is replaced with a green orb in the project PWAD. NOT fullbright --
+     // these sit in the D-state pen whose light patch 0018 pulses, so the orbs
+     // brighten/dim with it (a sleeping-thread "glow").
+-    {SPR_SOUL,0,-1,{NULL},S_NULL,0,0}	// S_DP_IOTASK
++    {SPR_SOUL,0,-1,{NULL},S_NULL,0,0},	// S_DP_IOTASK
++    // Doom Perf orb spawn/despawn polish (patch 0037). Frames are fullbright
++    // (+32768); they reference BON1 (blue CPU FX: A small, B mid, C flash, D ring)
++    // and BON2 (green I/O FX: A small, B mid; plus blue sparks C/D), all PWAD-
++    // replaced. Bloom chains into the static orb; burst/fade/spark chain to S_NULL.
++    // Dramatic materialize, mirroring the burst so spawn-in reads as salient as
++    // spawn-out: an incoming ring converges (D) into a bright flash (C) and then
++    // settles (B) into the static orb. Reuses the burst's flash/ring frames.
++    {SPR_BON1,32771,3,{NULL},S_DP_CPUTASK_BLOOM2,0,0},	// S_DP_CPUTASK_BLOOM1 (incoming ring)
++    {SPR_BON1,32770,3,{NULL},S_DP_CPUTASK_BLOOM3,0,0},	// S_DP_CPUTASK_BLOOM2 (flash)
++    {SPR_BON1,32769,2,{NULL},S_DP_CPUTASK,0,0},		// S_DP_CPUTASK_BLOOM3 (settle -> orb)
++    {SPR_BON1,32770,3,{NULL},S_DP_CPUTASK_BURST2,0,0},	// S_DP_CPUTASK_BURST1 (flash)
++    {SPR_BON1,32771,3,{NULL},S_NULL,0,0},		// S_DP_CPUTASK_BURST2 (ring)
++    {SPR_BON1,32769,3,{NULL},S_DP_CPUTASK_FADE2,0,0},	// S_DP_CPUTASK_FADE1
++    {SPR_BON1,32768,3,{NULL},S_NULL,0,0},		// S_DP_CPUTASK_FADE2
++    {SPR_BON2,32768,2,{NULL},S_DP_IOTASK_BLOOM2,0,0},	// S_DP_IOTASK_BLOOM1
++    {SPR_BON2,32769,2,{NULL},S_DP_IOTASK,0,0},		// S_DP_IOTASK_BLOOM2
++    {SPR_BON2,32769,3,{NULL},S_DP_IOTASK_FADE2,0,0},	// S_DP_IOTASK_FADE1
++    {SPR_BON2,32768,3,{NULL},S_NULL,0,0},		// S_DP_IOTASK_FADE2
++    {SPR_BON2,32770,4,{NULL},S_DP_SPARK2,0,0},		// S_DP_SPARK1
++    {SPR_BON2,32771,4,{NULL},S_NULL,0,0}		// S_DP_SPARK2
+ };
+ 
+ 
+@@ -4690,7 +4710,7 @@ mobjinfo_t mobjinfo[NUMMOBJTYPES] = {
+ 
+     {		// MT_DP_CPUTASK -- run-queue task orb (solid, no AI, no pickup)
+ 	-1,		// doomednum (runtime-spawned only)
+-	S_DP_CPUTASK,		// spawnstate
++	S_DP_CPUTASK_BLOOM1,	// spawnstate (bloom-in, then -> static S_DP_CPUTASK)
+ 	1000,		// spawnhealth
+ 	S_NULL,		// seestate
+ 	sfx_None,		// seesound
+@@ -4716,7 +4736,7 @@ mobjinfo_t mobjinfo[NUMMOBJTYPES] = {
+ 
+     {		// MT_DP_IOTASK -- I/O-wait orb (solid, no AI, no pickup)
+ 	-1,		// doomednum (runtime-spawned only)
+-	S_DP_IOTASK,		// spawnstate
++	S_DP_IOTASK_BLOOM1,	// spawnstate (bloom-in, then -> static S_DP_IOTASK)
+ 	1000,		// spawnhealth
+ 	S_NULL,		// seestate
+ 	sfx_None,		// seesound
+@@ -4738,6 +4758,32 @@ mobjinfo_t mobjinfo[NUMMOBJTYPES] = {
+ 	sfx_None,		// activesound
+ 	MF_SOLID,		// flags
+ 	S_NULL		// raisestate
++    },
++
++    {		// MT_DP_SPARK -- short-lived "task done" spark (no collision, fades)
++	-1,		// doomednum (runtime-spawned only)
++	S_DP_SPARK1,		// spawnstate
++	1000,		// spawnhealth
++	S_NULL,		// seestate
++	sfx_None,		// seesound
++	8,		// reactiontime
++	sfx_None,		// attacksound
++	S_NULL,		// painstate
++	0,		// painchance
++	sfx_None,		// painsound
++	S_NULL,		// meleestate
++	S_NULL,		// missilestate
++	S_NULL,		// deathstate
++	S_NULL,		// xdeathstate
++	sfx_None,		// deathsound
++	0,		// speed
++	2*FRACUNIT,		// radius
++	2*FRACUNIT,		// height
++	100,		// mass
++	0,		// damage
++	sfx_None,		// activesound
++	MF_NOGRAVITY|MF_NOBLOCKMAP|MF_NOCLIP,		// flags
++	S_NULL		// raisestate
+     }
+ };
+ 
+diff --git a/info.h b/info.h
+index 80f01cf..6ccdbe6 100644
+--- a/info.h
++++ b/info.h
+@@ -1142,6 +1142,24 @@ typedef enum
+     S_TECH2LAMP4,
+     S_DP_CPUTASK,
+     S_DP_IOTASK,
++    // Doom Perf orb spawn/despawn polish (patch 0037). Bloom-in plays on every
++    // orb spawn (-> the static orb state); burst is the "task done" flourish at
++    // the RUN QUEUE exit; fade is the quieter despawn for a queue-length cull or
++    // an I/O wake. Frames live on the BON1 (blue CPU FX) and BON2 (green I/O FX +
++    // blue sparks) sprites, PWAD-replaced in the project map.
++    S_DP_CPUTASK_BLOOM1,
++    S_DP_CPUTASK_BLOOM2,
++    S_DP_CPUTASK_BLOOM3,
++    S_DP_CPUTASK_BURST1,
++    S_DP_CPUTASK_BURST2,
++    S_DP_CPUTASK_FADE1,
++    S_DP_CPUTASK_FADE2,
++    S_DP_IOTASK_BLOOM1,
++    S_DP_IOTASK_BLOOM2,
++    S_DP_IOTASK_FADE1,
++    S_DP_IOTASK_FADE2,
++    S_DP_SPARK1,
++    S_DP_SPARK2,
+     NUMSTATES
+ } statenum_t;
+ 
+@@ -1302,6 +1320,7 @@ typedef enum {
+     MT_MISC86,
+     MT_DP_CPUTASK,
+     MT_DP_IOTASK,
++    MT_DP_SPARK,
+     NUMMOBJTYPES
+ 
+ } mobjtype_t;
+diff --git a/p_tick.c b/p_tick.c
+index 034a927..6f2e89a 100644
+--- a/p_tick.c
++++ b/p_tick.c
+@@ -516,6 +516,38 @@ static void DoomPerf_RqHome (mobj_t* mo, int tx, int ty, fixed_t fwd)
+     mo->momy = dy;
+ }
+ 
++// Doom Perf spawn/despawn polish: instead of vanishing instantly, an orb is
++// handed to a short self-removing animation. Drop the pool reference BEFORE
++// calling this (the update passes must ignore a despawning orb); the orb stops,
++// goes non-blocking, and plays `state` through to S_NULL on its own thinker.
++static void DoomPerf_RqDespawn (mobj_t* mo, statenum_t state)
++{
++    if (!mo)
++	return;
++    mo->momx = mo->momy = mo->momz = 0;
++    mo->flags &= ~MF_SOLID;
++    mo->flags |= MF_NOGRAVITY;
++    P_SetMobjState (mo, state);
++}
++
++// A small "task done" flourish: a few short-lived sparks burst outward from
++// (x,y,z) when a thread completes its run at the RUN QUEUE exit. They are
++// MF_NOCLIP/NOGRAVITY so they fly free and fade out (S_DP_SPARK1 -> S_NULL)
++// without colliding with the towers or the player.
++static void DoomPerf_RqSparks (fixed_t x, fixed_t y, fixed_t z)
++{
++    int		n;
++    mobj_t*	sp;
++
++    for (n = 0; n < 3; n++)
++    {
++	sp = P_SpawnMobj (x, y, z + 8 * FRACUNIT, MT_DP_SPARK);
++	sp->momx = ((P_Random () - 128) * FRACUNIT) / 48;
++	sp->momy = ((P_Random () - 128) * FRACUNIT) / 48;
++	sp->momz = (P_Random () % 160) * (FRACUNIT / 64);
++    }
++}
++
+ void DoomPerf_UpdateRunQueueParticles (void)
+ {
+     int		cores;
+@@ -600,8 +632,11 @@ void DoomPerf_UpdateRunQueueParticles (void)
+ 	}
+ 	if (mo->y > DOOMPERF_RQ_EXIT_Y)
+ 	{
+-	    P_RemoveMobj (mo);
++	    // Completion: the thread finished its run. Drop the pool ref, fling a
++	    // few sparks, and hand the orb to its burst-out animation.
+ 	    doomperf_rq_run[i] = NULL;
++	    DoomPerf_RqSparks (mo->x, mo->y, mo->z);
++	    DoomPerf_RqDespawn (mo, S_DP_CPUTASK_BURST1);
+ 	    continue;
+ 	}
+ 	lane = ((mo->x >> FRACBITS) - DOOMPERF_RQ_LANE_X0
+@@ -655,13 +690,14 @@ void DoomPerf_UpdateRunQueueParticles (void)
+ 	if (depth > DOOMPERF_RQ_DEPTH)
+ 	    depth = DOOMPERF_RQ_DEPTH;
+ 
+-	// Instant clear: when the queue shrinks, vanish the surplus from the back.
++	// Queue shrank: fade the surplus from the back. This is a queue-length
++	// correction, not a completion, so it gets the quiet fade -- no burst.
+ 	while (doomperf_rq_qn[L] > depth)
+ 	{
+ 	    mo = doomperf_rq_q[L][--doomperf_rq_qn[L]];
+ 	    doomperf_rq_q[L][doomperf_rq_qn[L]] = NULL;
+ 	    if (mo)
+-		P_RemoveMobj (mo);
++		DoomPerf_RqDespawn (mo, S_DP_CPUTASK_FADE1);
+ 	    total--;
+ 	}
+ 
+@@ -775,11 +811,12 @@ void DoomPerf_UpdateRunQueueParticles (void)
+ 	while (io_live < DOOMPERF_RQ_MAX_IO && doomperf_rq_io[io_live])
+ 	    io_live++;
+ 
+-	// Pop from the top when the pile shrinks (threads woke up).
++	// Pop from the top when the pile shrinks (threads woke up): a soft fade.
+ 	while (io_live > io_target)
+ 	{
+-	    P_RemoveMobj (doomperf_rq_io[--io_live]);
++	    mo = doomperf_rq_io[--io_live];
+ 	    doomperf_rq_io[io_live] = NULL;
++	    DoomPerf_RqDespawn (mo, S_DP_IOTASK_FADE1);
+ 	}
+ 
+ 	// Push onto the top when the pile grows: a motionless orb at the next 2x2

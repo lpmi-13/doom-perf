@@ -424,6 +424,42 @@ export const buildOrbPatch = (ramp) => {
   });
 };
 
+// Doom Perf: spawn/despawn "polish" effect frames for the run-queue orbs (engine
+// patch 0037). A radial disc or ring on a `size` canvas, ramped from the inner
+// edge (ramp[0], brightest) to the outer edge (ramp[last]); innerFrac=0 gives a
+// solid disc, innerFrac>0 a hollow ring (the burst's expanding shockwave). The
+// billboard is centred on the orb's mid-height (z + orbSpriteSize.height/2) so a
+// flash/ring blooms from the orb's centre rather than its feet. The CPU orb FX
+// ride BON1, the I/O orb FX + completion sparks ride BON2 (PWAD-replaced names).
+export const fxBlueRamp = [4, 194, 196, 198, 200, 203]; // matches the blue CPU orb
+export const fxBlueFlash = [4, 4, 4, 194, 196, 200]; // whiter, brighter burst core
+export const fxGreenRamp = [4, 112, 114, 116, 118, 121]; // matches the green I/O orb
+export const fxSparkRamp = [4, 4, 194, 200]; // tiny bright blue-white sparks
+export const buildFxPatch = ({ size, ramp, innerFrac = 0, outerFrac = 1 }) => {
+  const TRANSPARENT = 247;
+  const pixels = new Uint8Array(size * size).fill(TRANSPARENT);
+  const c = (size - 1) / 2;
+  const maxR = size / 2 - 1;
+  const inner = innerFrac * maxR;
+  const outer = outerFrac * maxR;
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
+      const dx = x - c;
+      const dy = y - c;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < inner || dist > outer) continue;
+      const t = outer > inner ? (dist - inner) / (outer - inner) : 0;
+      const k = Math.min(ramp.length - 1, Math.floor(t * ramp.length));
+      pixels[y * size + x] = ramp[k];
+    }
+  }
+  return buildPatch(pixels, size, size, {
+    leftOffset: Math.round(size / 2),
+    topOffset: Math.round(size / 2 + orbSpriteSize.height / 2),
+    transparent: TRANSPARENT,
+  });
+};
+
 // Rack-mounted server panel for the wall below the terminal screens. Gray metal
 // split by horizontal rack seams into stacked units, each carrying an irregular,
 // non-repeating mix of equipment -- black mini-screens with green data, amber/
@@ -651,6 +687,35 @@ const renderInscriptionText = (text, readLen, color = signTextColor) => {
   drawCenteredText(img, readLen, FLAT_DIM, text, startY, inscriptionFontScale, color, 4, readLen - 4);
   return img; // T[letterRow][readPos] = img[letterRow * readLen + readPos]
 };
+// Doom Perf: a CPU-chip icon flat (64x64) capping the RUN QUEUE lane towers. The
+// player looks down onto this die from the overlook. Floors sample
+// flat[((-worldY)&63)*64 + (worldX&63)]; each 32u tower sits centred in a 64-unit
+// grid cell, so along the worldX axis it shows the central flat columns ~16..48
+// (centred on col 32) and the ~32u band shows rows ~16..48 (centred on row 32).
+// The chip is therefore drawn centred at (32,32) inside that central 32x32 window
+// and shown as-is (no seam wrap to correct).
+export const cpuIconFlatName = "DPCPUIC";
+export const buildCpuIconFlat = () => {
+  const D = FLAT_DIM; // 64
+  const f = new Uint8Array(D * D).fill(96); // grey pedestal metal
+  // Pin ticks marching along the die edges (kept inside the central 16..48 window
+  // that the tower samples), drawn first so the die overpaints their inner ends.
+  [24, 30, 36].forEach((r) => {
+    drawRect(f, D, D, 16, r, 21, r + 2, 8);
+    drawRect(f, D, D, 43, r, 48, r + 2, 8);
+  });
+  [24, 30, 36].forEach((c) => {
+    drawRect(f, D, D, c, 16, c + 2, 21, 8);
+    drawRect(f, D, D, c, 43, c + 2, 48, 8);
+  });
+  // Die: dark border, blue body, light heat-spreader, bright centre mark.
+  drawRect(f, D, D, 20, 20, 44, 44, 0);
+  drawRect(f, D, D, 22, 22, 42, 42, 200);
+  drawRect(f, D, D, 25, 25, 39, 39, 8);
+  drawRect(f, D, D, 29, 29, 35, 35, 4);
+  return [lump(cpuIconFlatName, Buffer.from(f))];
+};
+
 export const makeInscription = (prefix, text, facing, cells, color = signTextColor) => {
   const readLen = cells * FLAT_DIM;
   const T = renderInscriptionText(text, readLen, color);

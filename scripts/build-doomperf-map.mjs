@@ -249,7 +249,7 @@ const oppositeSide = {
   left: "right",
 };
 
-const equipmentKinds = new Set(["core-column", "load-gauge", "server-rack", "metric-display"]);
+const equipmentKinds = new Set(["core-column", "load-gauge", "server-rack", "metric-display", "rq-tower"]);
 const equipmentTextureForSide = (equipment, side) =>
   equipment.textureSide && side !== equipment.textureSide
     ? (equipment.sideWall ?? equipment.wall)

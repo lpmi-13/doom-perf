@@ -79,4 +79,9 @@ extern int doomperf_memory_cache;
 //   utilization/saturation (free/vmstat/PSI terminal scenarios).
 extern int doomperf_sim_mode;
 
+// Doom Perf: human-readable scenario title for the active doomperf_sim_mode,
+// used as the automap heads-up title in place of the Doom level name. Defined
+// in m_menu.c next to the data-source labels it is derived from.
+char* M_DoomPerfModeTitle(int mode);
+
 #endif

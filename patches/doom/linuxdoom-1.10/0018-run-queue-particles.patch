@@ -128,7 +128,7 @@ index 0a1e232..adf9ff0 100644
 +// Doom Perf: RUN QUEUE "subway". CPU task-orbs (MT_DP_CPUTASK) are runnable
 +// threads. They appear under the QUEUE sign (the player's left / south end of the
 +// trench) and glide NORTH up the lanes toward the constriction gates (sector tags
-+// 230..237). `cores` gates open; the rest raise into solid blockers. Up to
++// 230..233). `cores` gates open; the rest raise into short pedestals. Up to
 +// `cores` threads "run": they pass through an open gate and stream on north to
 +// despawn under the RUNNING sign (the player's right). The overflow -- exactly
 +// (runnable - cores) of them -- cannot get a core, so they hold STOPPED in tidy
@@ -147,14 +147,14 @@ index 0a1e232..adf9ff0 100644
 +// pile glows. World coords match build-doomperf-map.mjs (CPU/north wing =
 +// identity): trench x[-1280,-1024], gates at y~1104, pen at x[-1392,-1280].
 +#define DOOMPERF_RQ_GATE_TAG_BASE	230
-+#define DOOMPERF_RQ_GATE_COUNT		8
++#define DOOMPERF_RQ_GATE_COUNT		3		// orb lanes (gates now static map towers; this is just the lane count)
 +#define DOOMPERF_RQ_GATE_OPEN_Z		(-56 * FRACUNIT)
-+#define DOOMPERF_RQ_GATE_SHUT_Z		(224 * FRACUNIT)
++#define DOOMPERF_RQ_GATE_SHUT_Z		(-8 * FRACUNIT)	// short pedestal: 48u (~3x orb height) above the track floor
 +#define DOOMPERF_RQ_DEPTH		5		// max queued (stopped) orbs per lane
 +#define DOOMPERF_RQ_MAX_RUN		28		// dispatched orbs in flight to the exit
 +#define DOOMPERF_RQ_BUDGET		56		// hard cap on live CPU orbs (WASM perf)
-+#define DOOMPERF_RQ_LANE_X0		(-1262)		// centre x of gate lane 0 (cu+18, cu=-1280)
-+#define DOOMPERF_RQ_LANE_PITCH		32		// lane spacing (= rqCell)
++#define DOOMPERF_RQ_LANE_X0		(-1216)		// centre x of orb lane 0 (lanes -1216/-1152/-1088, between the towers)
++#define DOOMPERF_RQ_LANE_PITCH		64		// lane spacing (= tower cell pitch)
 +#define DOOMPERF_RQ_SPEED		(6 * FRACUNIT)	// forward glide / run speed
 +#define DOOMPERF_RQ_STEER		(3 * FRACUNIT)	// lateral homing toward a lane centre
 +#define DOOMPERF_RQ_SPAWN_Y		980		// arrival line, south of the gates (QUEUE side)

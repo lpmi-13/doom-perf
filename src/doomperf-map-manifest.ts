@@ -31,9 +31,9 @@ export const mapManifest = {
       "segments": [
         {
           "ax": 762,
-          "ay": 1676,
+          "ay": 1456,
           "bx": 1018,
-          "by": 1676
+          "by": 1456
         }
       ]
     },

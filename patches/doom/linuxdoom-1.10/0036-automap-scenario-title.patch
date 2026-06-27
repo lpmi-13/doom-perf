@@ -1,0 +1,69 @@
+diff --git a/hu_stuff.c b/hu_stuff.c
+index efb1396..d626010 100644
+--- a/hu_stuff.c
++++ b/hu_stuff.c
+@@ -443,29 +443,11 @@ void HU_Start(void)
+ 		       hu_font,
+ 		       HU_FONTSTART);
+     
+-    switch ( gamemode )
+-    {
+-      case shareware:
+-      case registered:
+-      case retail:
+-	s = HU_TITLE;
+-	break;
+-
+-/* FIXME
+-      case pack_plut:
+-	s = HU_TITLEP;
+-	break;
+-      case pack_tnt:
+-	s = HU_TITLET;
+-	break;
+-*/
+-	
+-      case commercial:
+-      default:
+-	 s = HU_TITLE2;
+-	 break;
+-    }
+-    
++    // Doom Perf: the lab has a single map, so the Doom level name ("E1M1:
++    // HANGAR") is meaningless. Title the automap with the active data-source
++    // scenario instead (e.g. "LIVE STATS", "HIGH CPU UTILIZATION").
++    s = M_DoomPerfModeTitle(doomperf_sim_mode);
++
+     while (*s)
+ 	HUlib_addCharToTextLine(&w_title, *(s++));
+ 
+diff --git a/m_menu.c b/m_menu.c
+index 70dc9a3..f8a3cf5 100644
+--- a/m_menu.c
++++ b/m_menu.c
+@@ -936,6 +936,25 @@ static char* ModeLabels[] =
+     "SIM: HIGH NETWORK SATURATION"
+ };
+ 
++//
++// Doom Perf: scenario title for the automap heads-up, derived from the active
++// data-source label (ModeLabels[doomperf_sim_mode]). The "SIM: " prefix is
++// dropped so the map reads as the condition it is showing ("HIGH CPU
++// UTILIZATION"); live telemetry stays "LIVE STATS". Reusing ModeLabels keeps
++// the scenario names in one place as wings are added.
++//
++char* M_DoomPerfModeTitle(int mode)
++{
++    char* label;
++
++    if (mode < 0 || mode >= mode_end)
++	mode = mode_live;
++    label = ModeLabels[mode];
++    if (!strncmp(label, "SIM: ", 5))
++	label += 5;
++    return label;
++}
++
+ #define MODE_TITLE_Y  56
+ #define MODE_FIRST_Y  80
+ #define MODE_PER_PAGE 5

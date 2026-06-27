@@ -23,6 +23,13 @@ import {
   buildCpuColumnPatch,
   buildControlPanelPatch,
   buildOrbPatch,
+  buildFxPatch,
+  fxBlueRamp,
+  fxBlueFlash,
+  fxGreenRamp,
+  fxSparkRamp,
+  buildCpuIconFlat,
+  cpuIconFlatName,
   makeInscription,
 } from "../textures.mjs";
 
@@ -67,7 +74,11 @@ const LOAD_ROOM_DX = 256;
 const cpuRoomBounds = {
   main: { u1: -320, v1: 896, u2: 320, v2: 1624 },
   runQueue: { u1: -1024 + RQ_ROOM_DX, v1: 768, u2: -384 + RQ_ROOM_DX, v2: 1600 },
-  load: { u1: 384 + LOAD_ROOM_DX, v1: 896, u2: 884 + LOAD_ROOM_DX, v2: 1676 },
+  // v2 (back/terminal wall) pulled south from 1676 to halve the empty walkway
+  // between the load-average gauge bank (north edge v=1240) and the LOAD AVG
+  // terminal: 436u -> 216u. The north-strip sectors, terminal panel, and the
+  // terminalSegment read-point all derive from v2, so they move together.
+  load: { u1: 384 + LOAD_ROOM_DX, v1: 896, u2: 884 + LOAD_ROOM_DX, v2: 1456 },
 };
 
 const cpuTerminalScreens = {
@@ -299,9 +310,9 @@ const build = (ctx) => {
     // lanes track CPU core count; stairs run the full west edge of the platform.
     // The footprint is a T: a long N-S track trench (west) with the platform as an
     // east nub at the middle, so the platform's N/S end walls are solid (terminal
-    // fits) and the tracks extend past it both ways. Orbs, lane gates (sector tags
-    // 230..237) and load halos are animated by patch 0018; this is static geometry
-    // + tags only. Light levels avoid the floor-display sentinels (144/160).
+    // fits) and the tracks extend past it both ways. The orbs are animated by
+    // patch 0018; the CPU towers at the constriction are STATIC (see below). Light
+    // levels avoid the floor-display sentinels (144/160).
     const rqRavineFloor = -56;
     const rqCeil = 224;
     // All run-queue u-coords shift by RQ_ROOM_DX (room pushed west); v unchanged.
@@ -352,19 +363,42 @@ const build = (ctx) => {
     const rqConV1 = 1104, rqConV2 = 1136;            // constriction band (mid, at the platform)
     areaRect(direction, "rq-spawn", { u1: rqTrU1, v1: 1500, u2: rqTrU2, v2: rqTrV2 }, { ...tracks, kind: "rq-spawn", light: 184 });
     areaRect(direction, "rq-flow-up", { u1: rqTrU1, v1: rqConV2, u2: rqTrU2, v2: 1500 }, tracks);
-    // Constriction: 8 lane gates (tags 230..237) split by solid dividers across
-    // the track width; the tick sinks `cores` gates open and raises the rest.
-    const rqLanes = 8;
-    const rqCell = (rqTrU2 - rqTrU1) / rqLanes;      // 32
-    for (let i = 0; i < rqLanes; i += 1) {
-      const cu = rqTrU1 + i * rqCell;
-      areaRect(direction, `rq-divider-${i}`, { u1: cu, v1: rqConV1, u2: cu + 4, v2: rqConV2 }, {
-        ...tracks, kind: "rq-divider", floor: rqCeil, ceiling: rqCeil, wall: cpuCoreWallTexture, light: 176,
-      });
-      areaRect(direction, `rq-gate-${i}`, { u1: cu + 4, v1: rqConV1, u2: cu + rqCell, v2: rqConV2 }, {
-        ...tracks, kind: "rq-gate", tag: 230 + i, wall: cpuCoreWallTexture,
-      });
-    }
+    // Constriction: FOUR free-standing CPU TOWERS, with the orb lanes threading
+    // between them. The towers are deliberately STATIC -- never driven by
+    // telemetry. The orbs alone carry the live queue/run/blocked state (patch
+    // 0018), so the towers can stand permanently raised. They sit centred in the
+    // four 64-unit grid cells (centres -1248/-1184/-1120/-1056), 32u square, so
+    // each shows the icon flat's centre (no seam wrap) and the three orb lanes run
+    // in the 32u gaps between them (centres -1216/-1152/-1088, matching patch
+    // 0018's LANE_X0/PITCH) with ~10u clearance. Each tower rises to a pedestal
+    // whose top sits just below eye level (viewable from the overlook): floor -16,
+    // ~40u above the track. The tower HEIGHT is fixed (no sector sink tag), but the
+    // riser faces carry linedef tag 101+i, so patch 0013's rising-streak renderer
+    // paints them exactly like the main-room cores -- streak colour and density
+    // driven by core i's live utilization (doomperf_cpu_cores[i]). kind rq-tower is
+    // an equipmentKind so the riser draws the wall (DPCOLM) the streaks overpaint,
+    // not STEP1; tops carry the chip icon. Gate animation in patch 0018 is a no-op
+    // (no sector carries the gate tags).
+    const rqCell = (rqTrU2 - rqTrU1) / 4;            // 64: cell pitch (matches 0018)
+    const rqTowerHalf = 16;                          // 32u-square tower footprint
+    const rqTowerFloor = -16;                        // ~40u pedestal; top just below eye
+    const rqTowerXs = [0, 1, 2, 3].map((i) => rqTrU1 + rqCell / 2 + i * rqCell); // -1248..-1056
+    const strip = { ...tracks, kind: "rq-lane" };    // orb lanes / end fillers: plain track floor
+    const tower = {
+      ...tracks,
+      kind: "rq-tower",
+      floor: rqTowerFloor,
+      floorFlat: cpuIconFlatName,
+      wall: cpuCoreWallTexture,                      // streak fallback; matches the cores
+      light: 200,
+    };
+    let cu = rqTrU1;
+    rqTowerXs.forEach((tx, i) => {
+      areaRect(direction, `rq-lane-${i}`, { u1: cu, v1: rqConV1, u2: tx - rqTowerHalf, v2: rqConV2 }, strip);
+      areaRect(direction, `rq-tower-${i}`, { u1: tx - rqTowerHalf, v1: rqConV1, u2: tx + rqTowerHalf, v2: rqConV2 }, { ...tower, lineTag: 101 + i });
+      cu = tx + rqTowerHalf;
+    });
+    areaRect(direction, "rq-lane-4", { u1: cu, v1: rqConV1, u2: rqTrU2, v2: rqConV2 }, strip);
     areaRect(direction, "rq-flow-down", { u1: rqTrU1, v1: 868, u2: rqTrU2, v2: rqConV1 }, tracks);
     areaRect(direction, "rq-exit", { u1: rqTrU1, v1: rqTrV1, u2: rqTrU2, v2: 868 }, { ...tracks, kind: "rq-exit" });
 
@@ -564,6 +598,7 @@ const flats = [
   ...makeInscription("DPFRQ", "RUN QUEUE", "west", 3).flats,
   ...makeInscription("DPFLD", "LOAD", "east", 3).flats,
   ...loadGaugeNameplates.flatMap(({ inscription }) => inscription.flats),
+  ...buildCpuIconFlat(), // CPU-chip flat capping the RUN QUEUE lane gates
 ];
 
 // Sprite replacements: each PWAD-replaces an unused IWAD item sprite by name.
@@ -573,6 +608,19 @@ const flats = [
 const sprites = [
   { name: "PINSA0", build: () => buildOrbPatch([4, 194, 196, 198, 200, 203]) },
   { name: "SOULA0", build: () => buildOrbPatch([4, 112, 114, 116, 118, 121]) },
+  // Spawn/despawn polish frames (engine patch 0037). The orb mobj states chain
+  // bloom -> static orb on spawn, and burst/fade -> S_NULL on despawn; sparks are
+  // a separate completion mobj. BON1* = blue CPU-orb FX, BON2* = green I/O-orb FX
+  // plus the blue completion sparks (C/D). Frame letters must stay A..D -- those
+  // are the only BON1/BON2 frames in the IWAD, so only they can be PWAD-overridden.
+  { name: "BON1A0", build: () => buildFxPatch({ size: 22, ramp: fxBlueRamp, outerFrac: 0.4 }) },   // CPU grow / small
+  { name: "BON1B0", build: () => buildFxPatch({ size: 22, ramp: fxBlueRamp, outerFrac: 0.78 }) },  // CPU grow / near-orb
+  { name: "BON1C0", build: () => buildFxPatch({ size: 32, ramp: fxBlueFlash, outerFrac: 0.72 }) }, // CPU burst flash
+  { name: "BON1D0", build: () => buildFxPatch({ size: 32, ramp: fxBlueRamp, innerFrac: 0.55 }) },  // CPU burst ring
+  { name: "BON2A0", build: () => buildFxPatch({ size: 22, ramp: fxGreenRamp, outerFrac: 0.4 }) },  // I/O grow / small
+  { name: "BON2B0", build: () => buildFxPatch({ size: 22, ramp: fxGreenRamp, outerFrac: 0.78 }) }, // I/O grow / near-orb
+  { name: "BON2C0", build: () => buildFxPatch({ size: 12, ramp: fxSparkRamp, outerFrac: 0.62 }) }, // spark frame 1
+  { name: "BON2D0", build: () => buildFxPatch({ size: 12, ramp: fxBlueRamp, outerFrac: 0.4 }) },   // spark frame 2 (dimmer)
 ];
 
 // Terminal read-points for the interaction manifest. `api` supplies the central

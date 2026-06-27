@@ -34,11 +34,13 @@ export const controlPanelPatch = "DPPCTRL";
 //   exist; new wings keep to their prefix so 8-char names never clash.
 export const reserved = {
   cpu: {
-    sectorTags: [200, 245], // sink mirrors 201-208, lane gates 230-237, io-pen 245
+    sectorTags: [200, 245], // sink mirrors 201-208, lane gates 230-233, io-pen 245
     lineTags: [100, 123], //   base 100, core pillars 101-108, load gauges 121-123
     lights: [144, 160], //     run-queue / core floor-display sentinels
     namePrefixes: ["DPC", "DPL", "DPF", "DPR", "DPSG", "DPP"], // legacy CPU/shared
-    spriteReplacements: ["PINSA0", "SOULA0"], // run-queue + I/O-wait orbs
+    // run-queue + I/O-wait orbs (PINS/SOUL); BON1*/BON2* = orb spawn/despawn FX
+    // frames (bloom/burst/fade) + completion sparks (engine patch 0037).
+    spriteReplacements: ["PINSA0", "SOULA0", "BON1A0", "BON1B0", "BON1C0", "BON1D0", "BON2A0", "BON2B0", "BON2C0", "BON2D0"],
   },
   memory: {
     sectorTags: [500, 559],
