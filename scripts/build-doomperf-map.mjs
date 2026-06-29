@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { lump, i16, i32, ascii8, record, buildWad } from "./lib/wad-bytes.mjs";
+import { lump, i16, i32, ascii8, record, buildWad, buildPatch } from "./lib/wad-bytes.mjs";
 import {
   labelTextureSize,
   terminalTextureSize,
@@ -10,6 +10,7 @@ import {
 } from "./lib/textures.mjs";
 import { createMapBuilder } from "./lib/map-builder.mjs";
 import { controlPanelTexture } from "./lib/wings/registry.mjs";
+import { buildPerfTitlePic, buildPerfMenuTitle } from "./lib/titlepic.mjs";
 import { cpuWing } from "./lib/wings/cpu-wing.mjs";
 import { memoryWing } from "./lib/wings/memory-wing.mjs";
 import { storageWing } from "./lib/wings/storage-wing.mjs";
@@ -451,6 +452,23 @@ const inscriptionFlats = wings.flatMap((wing) => wing.flats ?? []);
 
 const basePNames = readWadLump(readFileSync(baseIwadPath), "PNAMES");
 const basePatchCount = basePNames.readInt32LE(0);
+
+// Relabel the wordmark "FREED∞M" -> "PERFD∞M" by overriding two IWAD lumps: the
+// TITLEPIC background and the M_DOOM menu header (Freedoom draws the wordmark as
+// its menu title over both the title page and gameplay). The PWAD loads after the
+// IWAD (-file) so these copies win. Both are built from the IWAD's own art.
+const iwadBytes = readFileSync(baseIwadPath);
+const playpalLump = readWadLump(iwadBytes, "PLAYPAL");
+const perfTitlePic = buildPerfTitlePic({
+  titlepicLump: readWadLump(iwadBytes, "TITLEPIC"),
+  playpalLump,
+  buildPatch,
+});
+const perfMenuTitle = buildPerfMenuTitle({
+  mdoomLump: readWadLump(iwadBytes, "M_DOOM"),
+  playpalLump,
+  buildPatch,
+});
 const labelConfigs = Object.values(resourceConfigs);
 // The four shared door/label textures (one per wing) plus each wing's own
 // texture contributions, in `wings` order. Adding a texture is a single-file
@@ -524,6 +542,9 @@ const map = compile({
 });
 
 const mapLumps = [
+  // Wordmark relabel (FREED∞M -> PERFD∞M); overrides the IWAD title + menu lumps.
+  lump("TITLEPIC", perfTitlePic),
+  lump("M_DOOM", perfMenuTitle),
   lump("PNAMES", buildPNames()),
   ...textureConfigs.map(({ patch, build }) => lump(patch, build())),
   lump("TEXTURE2", buildTexture2()),

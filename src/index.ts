@@ -15,6 +15,19 @@ declare const __WAD_VERSION__: string;
 declare const __ENGINE_VERSION__: string;
 const assetVersion = (version: string): string => (version === "dev" ? String(Date.now()) : version);
 
+// The prebuilt engine calls emscripten_set_window_title at startup, which sets
+// document.title to "DOOM" and clobbers our <title>. Pin the tab to the product
+// name by shadowing the title setter so any engine write resolves back to it.
+const lockDocumentTitle = (title: string): void => {
+  const titleEl = document.querySelector("title") ?? document.head.appendChild(document.createElement("title"));
+  titleEl.textContent = title;
+  Object.defineProperty(document, "title", {
+    configurable: true,
+    get: () => title,
+    set: () => { titleEl.textContent = title; },
+  });
+};
+
 // The engine's USE trace reaches USERANGE (linuxdoom p_local.h = 64 map units)
 // in front of the player, so pressing space — or tapping the on-screen prompt,
 // which synthesizes a space press — only opens a door or activates a terminal
@@ -175,6 +188,8 @@ type DoomPerfEngine = {
   _DoomPerf_SetCpuRunQueueCount?: (count: number) => void;
   _DoomPerf_SetCpuBlockedCount?: (count: number) => void;
   _DoomPerf_SetCpuLoadPressure?: (permille: number) => void;
+  // Overall CPU load (per-mille) driving the title wordmark "oo" pulse.
+  _DoomPerf_SetTitleLoad?: (permille: number) => void;
   _DoomPerf_SetLoad?: (index: number, milliLoad: number) => void;
   // Storage service time (await) as permille of a 250ms full scale, driving the
   // media-pit latency gauges in the disk wing; and disk busy fraction (%util) in
@@ -227,6 +242,7 @@ const pushTelemetryToEngine = (engine: DoomPerfEngine | undefined, telemetry: Te
   engine?._DoomPerf_SetCpuRunQueueCount?.(Math.max(0, Math.round(telemetry.cpu.runQueue ?? 0)));
   engine?._DoomPerf_SetCpuBlockedCount?.(Math.max(0, Math.round(telemetry.cpu.blocked ?? 0)));
   engine?._DoomPerf_SetCpuLoadPressure?.(Math.round(telemetry.cpu.loadPressure * 1000));
+  engine?._DoomPerf_SetTitleLoad?.(Math.round(telemetry.cpu.loadPressure * 1000));
   engine?._DoomPerf_SetLoad?.(0, Math.round(telemetry.cpu.load1 * 1000));
   engine?._DoomPerf_SetLoad?.(1, Math.round(telemetry.cpu.load5 * 1000));
   engine?._DoomPerf_SetLoad?.(2, Math.round(telemetry.cpu.load15 * 1000));
@@ -493,6 +509,7 @@ const scenarioTelemetry = (
 };
 
 const start = async () => {
+  lockDocumentTitle("Doom Perf");
   // Probe for the engine bundle by importing it directly rather than with a
   // blocking HEAD round trip. A missing bundle (dev without a built engine)
   // throws here and we fall back to the pure-TS stub renderer; the import is

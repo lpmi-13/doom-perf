@@ -37,6 +37,49 @@ int doomperf_memory_errors = 0;
 int doomperf_memory_cache = 0;
 int doomperf_sim_mode = 0;
 
+// Doom Perf: title wordmark "oo" live-load pulse (see doom_emscripten_compat.h).
+// The oo is drawn with reserved palette indices DOOMPERF_OO_TAG[]; while
+// doomperf_title_remap is set (V_DrawPatch, around the TITLEPIC/M_DOOM draws) those
+// indices are remapped through doomperf_title_lut to a bright amber darkened via
+// the engine's COLORMAP — dim at rest, brighter with CPU load plus a gentle pulse.
+extern lighttable_t* colormaps;
+int doomperf_title_remap = 0;
+unsigned char doomperf_title_lut[256];
+static int doomperf_title_load = 0;                  // 0..1000 per-mille CPU load
+static const unsigned char DOOMPERF_OO_TAG[4] = {16, 17, 18, 19}; // HI,MID,LO,RIM
+#define DOOMPERF_AMBER_BASE 248                       // bright amber; colormap darkens it
+
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_SetTitleLoad(int permille)
+{
+    if (permille < 0) permille = 0;
+    if (permille > 1000) permille = 1000;
+    doomperf_title_load = permille;
+}
+
+void DoomPerf_UpdateTitleLut(void)
+{
+    int i;
+    for (i = 0; i < 256; i++)
+        doomperf_title_lut[i] = (unsigned char)i;     // identity for everything else
+    if (!colormaps)
+        return;
+    // Triangle pulse off the game tic (~35 Hz), period ~48 tics (~1.4s).
+    int period = 48;
+    int phase = (int)(gametic % period);
+    int tri = phase < period / 2 ? phase : period - phase;   // 0..24
+    int pulse = (24 - tri) / 6;                              // 0..4, peaks mid-cycle
+    int boost = (doomperf_title_load * 8) / 1000;            // 0..8 from CPU load
+    int top = 11 - boost - pulse;                            // colormap level for the highlight (lower = brighter)
+    for (i = 0; i < 4; i++)
+    {
+        int lvl = top + i * 3;                               // per-shade HI<MID<LO<RIM (darker)
+        if (lvl < 0) lvl = 0;
+        if (lvl > 31) lvl = 31;
+        doomperf_title_lut[DOOMPERF_OO_TAG[i]] = colormaps[lvl * 256 + DOOMPERF_AMBER_BASE];
+    }
+}
+
 EMSCRIPTEN_KEEPALIVE
 void DoomPerf_SetCpuCoreCount(int count)
 {
