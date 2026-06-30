@@ -4,10 +4,11 @@ set -euo pipefail
 # Build the Doom Perf browser engine from a CLEAN external Doom source tree.
 #
 # The external Doom checkout (DOOM_SRC_DIR) is treated as read-only build
-# input. Doom Perf C changes live as ordered patches in this repo under
-# patches/doom/linuxdoom-1.10/ and are applied to a disposable staged copy of
-# the source. This keeps /home/adam/projects/doom clean and makes the engine
-# modifications reproducible from doom-typescript alone.
+# input. Doom Perf C changes live as one patch per modified engine file in this
+# repo under patches/doom/linuxdoom-1.10/ and are applied to a disposable
+# staged copy of the source. Because each patch touches a distinct file the set
+# is order-independent. This keeps /home/adam/projects/doom clean and makes the
+# engine modifications reproducible from doom-typescript alone.
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SRC_DIR="${DOOM_SRC_DIR:-$ROOT_DIR/DOOM/linuxdoom-1.10}"
@@ -52,13 +53,14 @@ mkdir -p "$STAGE_SRC"
 # Copy the source contents (not the directory itself) into the staged tree.
 cp -R "$SRC_DIR/." "$STAGE_SRC/"
 
-# --- Apply ordered Doom Perf patches ----------------------------------------
+# --- Apply Doom Perf patches ------------------------------------------------
 
 if [[ -d "$PATCH_DIR" ]]; then
   shopt -s nullglob
   patches=("$PATCH_DIR"/*.patch)
   shopt -u nullglob
-  # Apply in lexical order (0001-, 0002-, ...).
+  # One patch per file, so order does not matter; sort only for a
+  # deterministic, reproducible build log.
   IFS=$'\n' patches=($(printf '%s\n' "${patches[@]}" | sort))
   unset IFS
   for patch in "${patches[@]}"; do
@@ -67,7 +69,7 @@ if [[ -d "$PATCH_DIR" ]]; then
       printf '\nFailed to apply patch: %s\n' "$patch" >&2
       printf 'Staged source directory: %s\n' "$STAGE_SRC" >&2
       printf 'The patch did not apply cleanly to the clean Doom source.\n' >&2
-      printf 'Patches must apply in order to an unmodified linuxdoom-1.10 tree.\n' >&2
+      printf 'Each patch must apply to an unmodified linuxdoom-1.10 tree.\n' >&2
       exit 1
     fi
   done

@@ -1,0 +1,164 @@
+# Doom Perf engine patch: info.c
+#
+# Cumulative Doom Perf changes to info.c, consolidated from the original
+# per-feature patch series. Bundles (original patch -> feature):
+#   0018  run-queue-particles
+#   0033  dim-tall-red-torches
+#   0037  orb-spawn-despawn-polish
+#
+# Order-independent: this is the only Doom Perf patch that touches info.c.
+# Regenerate by diffing a clean tree against the staged build tree;
+# see scripts/build-doom-wasm.sh.
+
+--- a/info.c
++++ b/info.c
+@@ -1067,10 +1067,21 @@
+     {SPR_TGRN,32769,4,{NULL},S_GREENTORCH3,0,0},	// S_GREENTORCH2
+     {SPR_TGRN,32770,4,{NULL},S_GREENTORCH4,0,0},	// S_GREENTORCH3
+     {SPR_TGRN,32771,4,{NULL},S_GREENTORCH,0,0},	// S_GREENTORCH4
+-    {SPR_TRED,32768,4,{NULL},S_REDTORCH2,0,0},	// S_REDTORCH
+-    {SPR_TRED,32769,4,{NULL},S_REDTORCH3,0,0},	// S_REDTORCH2
+-    {SPR_TRED,32770,4,{NULL},S_REDTORCH4,0,0},	// S_REDTORCH3
+-    {SPR_TRED,32771,4,{NULL},S_REDTORCH,0,0},	// S_REDTORCH4
++    // Doom Perf: neutralize the tall red torch as a camera-pan motion-trail
++    // source on two axes. (1) The fullbright bit (0x8000) is CLEARED so the
++    // flame is shaded by the room's sector light instead of blazing at max
++    // brightness, collapsing the bright-on-dark contrast. (2) The 4-frame flame
++    // flicker is FROZEN to a single static frame -- tics -1, next S_NULL, the
++    // same idiom as the static COLU/CBRA props -- so the silhouette no longer
++    // churns at the tic rate. The per-tic animation was un-interpolated (only
++    // the camera lerps, see R_SetupFrame), so a panning camera stacked slightly
++    // different flame frames into a visible "ghost trail" (sample-and-hold
++    // blur). All four states resolve to the same static frame so the spawnstate
++    // (S_REDTORCH) and any chained entry land on identical, motionless fire.
++    {SPR_TRED,0,-1,{NULL},S_NULL,0,0},	// S_REDTORCH
++    {SPR_TRED,0,-1,{NULL},S_NULL,0,0},	// S_REDTORCH2
++    {SPR_TRED,0,-1,{NULL},S_NULL,0,0},	// S_REDTORCH3
++    {SPR_TRED,0,-1,{NULL},S_NULL,0,0},	// S_REDTORCH4
+     {SPR_SMBT,32768,4,{NULL},S_BTORCHSHRT2,0,0},	// S_BTORCHSHRT
+     {SPR_SMBT,32769,4,{NULL},S_BTORCHSHRT3,0,0},	// S_BTORCHSHRT2
+     {SPR_SMBT,32770,4,{NULL},S_BTORCHSHRT4,0,0},	// S_BTORCHSHRT3
+@@ -1099,7 +1110,37 @@
+     {SPR_TLP2,32768,4,{NULL},S_TECH2LAMP2,0,0},	// S_TECH2LAMP
+     {SPR_TLP2,32769,4,{NULL},S_TECH2LAMP3,0,0},	// S_TECH2LAMP2
+     {SPR_TLP2,32770,4,{NULL},S_TECH2LAMP4,0,0},	// S_TECH2LAMP3
+-    {SPR_TLP2,32771,4,{NULL},S_TECH2LAMP,0,0}	// S_TECH2LAMP4
++    {SPR_TLP2,32771,4,{NULL},S_TECH2LAMP,0,0},	// S_TECH2LAMP4
++    // Doom Perf: run-queue task orb. Reuses the blursphere sprite (SPR_PINS),
++    // frame A fullbright, static (tics -1). The PINSA0 lump is replaced with orb
++    // art in the project PWAD; only frame A is used, so the other PINS frames are
++    // irrelevant.
++    {SPR_PINS,32768,-1,{NULL},S_NULL,0,0},	// S_DP_CPUTASK
++    // I/O-wait orb: reuses the soulsphere sprite (SPR_SOUL), frame A, static.
++    // SOULA0 is replaced with a green orb in the project PWAD. NOT fullbright --
++    // these sit in the D-state pen whose light patch 0018 pulses, so the orbs
++    // brighten/dim with it (a sleeping-thread "glow").
++    {SPR_SOUL,0,-1,{NULL},S_NULL,0,0},	// S_DP_IOTASK
++    // Doom Perf orb spawn/despawn polish (patch 0037). Frames are fullbright
++    // (+32768); they reference BON1 (blue CPU FX: A small, B mid, C flash, D ring)
++    // and BON2 (green I/O FX: A small, B mid; plus blue sparks C/D), all PWAD-
++    // replaced. Bloom chains into the static orb; burst/fade/spark chain to S_NULL.
++    // Dramatic materialize, mirroring the burst so spawn-in reads as salient as
++    // spawn-out: an incoming ring converges (D) into a bright flash (C) and then
++    // settles (B) into the static orb. Reuses the burst's flash/ring frames.
++    {SPR_BON1,32771,3,{NULL},S_DP_CPUTASK_BLOOM2,0,0},	// S_DP_CPUTASK_BLOOM1 (incoming ring)
++    {SPR_BON1,32770,3,{NULL},S_DP_CPUTASK_BLOOM3,0,0},	// S_DP_CPUTASK_BLOOM2 (flash)
++    {SPR_BON1,32769,2,{NULL},S_DP_CPUTASK,0,0},		// S_DP_CPUTASK_BLOOM3 (settle -> orb)
++    {SPR_BON1,32770,3,{NULL},S_DP_CPUTASK_BURST2,0,0},	// S_DP_CPUTASK_BURST1 (flash)
++    {SPR_BON1,32771,3,{NULL},S_NULL,0,0},		// S_DP_CPUTASK_BURST2 (ring)
++    {SPR_BON1,32769,3,{NULL},S_DP_CPUTASK_FADE2,0,0},	// S_DP_CPUTASK_FADE1
++    {SPR_BON1,32768,3,{NULL},S_NULL,0,0},		// S_DP_CPUTASK_FADE2
++    {SPR_BON2,32768,2,{NULL},S_DP_IOTASK_BLOOM2,0,0},	// S_DP_IOTASK_BLOOM1
++    {SPR_BON2,32769,2,{NULL},S_DP_IOTASK,0,0},		// S_DP_IOTASK_BLOOM2
++    {SPR_BON2,32769,3,{NULL},S_DP_IOTASK_FADE2,0,0},	// S_DP_IOTASK_FADE1
++    {SPR_BON2,32768,3,{NULL},S_NULL,0,0},		// S_DP_IOTASK_FADE2
++    {SPR_BON2,32770,4,{NULL},S_DP_SPARK2,0,0},		// S_DP_SPARK1
++    {SPR_BON2,32771,4,{NULL},S_NULL,0,0}		// S_DP_SPARK2
+ };
+ 
+ 
+@@ -4665,6 +4706,84 @@
+ 	sfx_None,		// activesound
+ 	MF_NOBLOCKMAP,		// flags
+ 	S_NULL		// raisestate
++    },
++
++    {		// MT_DP_CPUTASK -- run-queue task orb (solid, no AI, no pickup)
++	-1,		// doomednum (runtime-spawned only)
++	S_DP_CPUTASK_BLOOM1,	// spawnstate (bloom-in, then -> static S_DP_CPUTASK)
++	1000,		// spawnhealth
++	S_NULL,		// seestate
++	sfx_None,		// seesound
++	8,		// reactiontime
++	sfx_None,		// attacksound
++	S_NULL,		// painstate
++	0,		// painchance
++	sfx_None,		// painsound
++	S_NULL,		// meleestate
++	S_NULL,		// missilestate
++	S_NULL,		// deathstate
++	S_NULL,		// xdeathstate
++	sfx_None,		// deathsound
++	0,		// speed
++	6*FRACUNIT,		// radius
++	16*FRACUNIT,		// height
++	100,		// mass
++	0,		// damage
++	sfx_None,		// activesound
++	MF_SOLID,		// flags
++	S_NULL		// raisestate
++    },
++
++    {		// MT_DP_IOTASK -- I/O-wait orb (solid, no AI, no pickup)
++	-1,		// doomednum (runtime-spawned only)
++	S_DP_IOTASK_BLOOM1,	// spawnstate (bloom-in, then -> static S_DP_IOTASK)
++	1000,		// spawnhealth
++	S_NULL,		// seestate
++	sfx_None,		// seesound
++	8,		// reactiontime
++	sfx_None,		// attacksound
++	S_NULL,		// painstate
++	0,		// painchance
++	sfx_None,		// painsound
++	S_NULL,		// meleestate
++	S_NULL,		// missilestate
++	S_NULL,		// deathstate
++	S_NULL,		// xdeathstate
++	sfx_None,		// deathsound
++	0,		// speed
++	6*FRACUNIT,		// radius
++	16*FRACUNIT,		// height
++	100,		// mass
++	0,		// damage
++	sfx_None,		// activesound
++	MF_SOLID,		// flags
++	S_NULL		// raisestate
++    },
++
++    {		// MT_DP_SPARK -- short-lived "task done" spark (no collision, fades)
++	-1,		// doomednum (runtime-spawned only)
++	S_DP_SPARK1,		// spawnstate
++	1000,		// spawnhealth
++	S_NULL,		// seestate
++	sfx_None,		// seesound
++	8,		// reactiontime
++	sfx_None,		// attacksound
++	S_NULL,		// painstate
++	0,		// painchance
++	sfx_None,		// painsound
++	S_NULL,		// meleestate
++	S_NULL,		// missilestate
++	S_NULL,		// deathstate
++	S_NULL,		// xdeathstate
++	sfx_None,		// deathsound
++	0,		// speed
++	2*FRACUNIT,		// radius
++	2*FRACUNIT,		// height
++	100,		// mass
++	0,		// damage
++	sfx_None,		// activesound
++	MF_NOGRAVITY|MF_NOBLOCKMAP|MF_NOCLIP,		// flags
++	S_NULL		// raisestate
+     }
+ };
+ 

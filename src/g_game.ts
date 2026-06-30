@@ -5,7 +5,6 @@ import { HU_Ticker } from "./hu_stuff";
 import { RS_Ticker } from "./r_simple";
 import { ST_Ticker } from "./st_stuff";
 
-let gametic = 0;
 const keyState = new Set<number>();
 let mouseDeltaX = 0;
 let mouseDeltaY = 0;
@@ -34,7 +33,6 @@ export const G_Init = () => {
 };
 
 export const G_Ticker = () => {
-  gametic += 1;
   AM_Ticker(keyState);
   if (!isEngineActive()) {
     RS_Ticker(keyState, {
@@ -48,10 +46,6 @@ export const G_Ticker = () => {
   HU_Ticker(keyState);
   ST_Ticker();
 };
-
-export const G_GetTic = () => gametic;
-
-export const G_IsKeyDown = (key: number) => keyState.has(key);
 
 export const G_AdvanceTics = (count: number) => {
   for (let i = 0; i < count; i += 1) {

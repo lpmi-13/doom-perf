@@ -1,0 +1,808 @@
+# Doom Perf engine patch: r_draw.c
+#
+# Cumulative Doom Perf changes to r_draw.c, consolidated from the original
+# per-feature patch series. Bundles (original patch -> feature):
+#   0007  cpu-core-floor-display
+#   0013  cpu-core-column-streaks
+#   0014  sim-modes-and-level-select
+#   0016  cpu-core-pads
+#   0017  cpu-load-gauges
+#   0021  disk-latency-gauges
+#   0023  disk-queue-channel
+#   0027  disk-metrics-dashboard
+#   0029  cpu-load-gauge-redesign
+#   0035  disk-platter-spindle
+#
+# Order-independent: this is the only Doom Perf patch that touches r_draw.c.
+# Regenerate by diffing a clean tree against the staged build tree;
+# see scripts/build-doom-wasm.sh.
+
+--- a/r_draw.c
++++ b/r_draw.c
+@@ -95,6 +95,20 @@
+ // just for profiling 
+ int			dccount;
+ 
++// Doom Perf: CPU core pillar streaks. r_segs.c sets these globals before
++// each colfunc() call; R_DrawColumn switches into a procedural rising-streak
++// pattern when active. The streak helper is defined further below alongside
++// the other R_DoomPerfCpu* functions.
++int			doomperf_cpu_column_display = 0;
++int			doomperf_cpu_column_texture_x = 0;
++static byte R_DoomPerfCpuStreakPixel (int ty);
++static byte R_DoomPerfCpuGaugePixel (int gauge, int ty);
++static byte R_DoomPerfDiskGaugePixel (int gauge, int ty);
++static byte R_DoomPerfDiskQueuePixel (fixed_t xfrac, fixed_t yfrac, byte background);
++static byte R_DoomPerfDiskDashboardPixel (int tx, int ty, byte background);
++static byte R_DoomPerfDiskPlatterPixel (fixed_t xfrac, fixed_t yfrac, byte background);
++static byte R_DoomPerfDiskSpindlePixel (int ty);
++
+ //
+ // A column is a vertical slice/span from a wall texture that,
+ //  given the DOOM style restrictions on the view orientation,
+@@ -137,9 +151,25 @@
+     // This is as fast as it gets.
+     do 
+     {
+-	// Re-map color indices from wall texture column
+-	//  using a lighting/special effects LUT.
+-	*dest = dc_colormap[dc_source[(frac>>FRACBITS)&127]];
++	if (doomperf_cpu_column_display == 31)
++	    *dest = dc_colormap[R_DoomPerfDiskSpindlePixel((frac>>FRACBITS)&127)];
++	else if (doomperf_cpu_column_display == 30)
++	    *dest = dc_colormap[R_DoomPerfDiskDashboardPixel(
++				    doomperf_cpu_column_texture_x,
++				    (frac>>FRACBITS)&127,
++				    dc_source[(frac>>FRACBITS)&127])];
++	else if (doomperf_cpu_column_display >= 20)
++	    *dest = dc_colormap[R_DoomPerfDiskGaugePixel(doomperf_cpu_column_display - 20,
++							 (frac>>FRACBITS)&127)];
++	else if (doomperf_cpu_column_display >= 17)
++	    *dest = dc_colormap[R_DoomPerfCpuGaugePixel(doomperf_cpu_column_display - 17,
++							(frac>>FRACBITS)&255)];
++	else if (doomperf_cpu_column_display)
++	    *dest = dc_colormap[R_DoomPerfCpuStreakPixel((frac>>FRACBITS)&127)];
++	else
++	    // Re-map color indices from wall texture column
++	    //  using a lighting/special effects LUT.
++	    *dest = dc_colormap[dc_source[(frac>>FRACBITS)&127]];
+ 	
+ 	dest += SCREENWIDTH; 
+ 	frac += fracstep;
+@@ -514,6 +544,690 @@
+ // just for profiling
+ int			dscount;
+ 
++// Doom Perf: CPU room instrument floors. The core chamber shows one geometric
++// cell per logical CPU while two physically separate saturation chambers map
++// instantaneous runnable queue and sustained load overcommit. build-doomperf-map.mjs aligns the display
++// sectors to these grids; r_plane.c selects one special span path at a time.
++#define DOOMPERF_CPU_GRID_X0		-128
++#define DOOMPERF_CPU_GRID_Y0		992
++#define DOOMPERF_CPU_GRID_COLUMNS	8
++#define DOOMPERF_CPU_GRID_CELL_SIZE	32
++
++#define DOOMPERF_CPU_RUN_QUEUE_X0	-928
++#define DOOMPERF_CPU_RUN_QUEUE_Y0	1000
++#define DOOMPERF_CPU_RUN_QUEUE_WIDTH	224
++#define DOOMPERF_CPU_RUN_QUEUE_HEIGHT	240
++
++#define DOOMPERF_CPU_CORE_DARK		5
++#define DOOMPERF_CPU_CORE_FRAME		96
++#define DOOMPERF_CPU_CORE_BLUE		200
++#define DOOMPERF_CPU_CORE_GREEN		112
++#define DOOMPERF_CPU_CORE_YELLOW	231
++#define DOOMPERF_CPU_CORE_RED		176
++
++int			doomperf_cpu_floor_display;
++
++static int R_DoomPerfAbs (int value)
++{
++    return value < 0 ? -value : value;
++}
++
++static byte R_DoomPerfCpuColor (int permille)
++{
++    if (permille < 350)
++	return DOOMPERF_CPU_CORE_BLUE;
++    if (permille < 700)
++	return DOOMPERF_CPU_CORE_GREEN;
++    if (permille < 900)
++	return DOOMPERF_CPU_CORE_YELLOW;
++    return DOOMPERF_CPU_CORE_RED;
++}
++
++static byte R_DoomPerfCpuPressureColor (int permille)
++{
++    if (permille < 250)
++	return DOOMPERF_CPU_CORE_BLUE;
++    if (permille < 550)
++	return DOOMPERF_CPU_CORE_GREEN;
++    if (permille < 800)
++	return DOOMPERF_CPU_CORE_YELLOW;
++    return DOOMPERF_CPU_CORE_RED;
++}
++
++
++// Doom Perf: effective CPU telemetry. doomperf_sim_mode (set by the level-
++// select menu) overrides the live browser telemetry with canned scenarios so
++// the CPU room can be demonstrated without a real workload:
++//   0 = live (browser telemetry)
++//   1 = simulated high utilization (cores pinned near 100%)
++//   2 = simulated high saturation (busy cores + an overloaded run queue)
++static int R_DoomPerfCoreCount (void)
++{
++    if (doomperf_sim_mode != 0)
++	return DOOMPERF_CPU_GRID_COLUMNS;
++    return doomperf_cpu_core_count;
++}
++
++static int R_DoomPerfCorePermille (int core)
++{
++    switch (doomperf_sim_mode)
++    {
++      case 1:
++	return 880 + ((leveltime * 2 + core * 97) % 120);
++      case 2:
++	return 700 + ((leveltime + core * 53) % 200);
++      default:
++	return (core >= 0 && core < doomperf_cpu_core_count)
++	    ? doomperf_cpu_cores[core] : 0;
++    }
++}
++
++static int R_DoomPerfRunQueuePermille (void)
++{
++    switch (doomperf_sim_mode)
++    {
++      case 1:
++	return 150;
++      case 2:
++	return 840 + ((leveltime * 3) % 160);
++      default:
++	return doomperf_cpu_run_queue_pressure;
++    }
++}
++
++
++// Rising-streak procedural pixel for the eight CPU core pillars. Each pillar
++// is driven by per-core utilization (in permille). The texture column index
++// is supplied by r_segs.c so streaks stay locked to the wall surface.
++static byte R_DoomPerfCpuStreakPixel (int ty)
++{
++    int			core_id;
++    int			util;
++    int			tx;
++    int			seed;
++    int			density;
++    int			speed;
++    int			trail_len;
++    int			head_y;
++    int			offset;
++
++    core_id = doomperf_cpu_column_display - 1;
++    if (core_id < 0 || core_id >= 16)
++	return DOOMPERF_CPU_CORE_DARK;
++    util = R_DoomPerfCorePermille(core_id);
++
++    // Density and streak parameters scale with utilization so a busy core
++    // packs more rising particles travelling faster with longer trails.
++    tx = doomperf_cpu_column_texture_x & 63;
++    seed = tx * 31 + core_id * 13 + (tx >> 2) * 7;
++    density = 5 + util / 50;
++    if (((seed * 17) & 31) >= density)
++	return DOOMPERF_CPU_CORE_DARK;
++
++    // Head descends from ty=127 toward ty=0 over time so streaks rise.
++    // Trail extends behind the head (toward higher ty).
++    speed = 1 + util / 200;
++    trail_len = 24 + util / 12;
++    head_y = (127 - ((leveltime * speed + seed * 11) & 127)) & 127;
++    offset = (ty - head_y + 128) & 127;
++    if (offset < 2)
++	return DOOMPERF_CPU_CORE_FRAME;
++    if (offset < trail_len)
++	return R_DoomPerfCpuColor(util);
++    return DOOMPERF_CPU_CORE_DARK;
++}
++
++// Vertical load-average gauge for the three pillars in the LOAD room. gauge
++// 0/1/2 = 1m/5m/15m. Each pillar's 128-tall lower wall fills from the bottom
++// (ty 127) proportional to the load average; a full bar is 2x the logical CPU
++// count, so the "load == cores" line sits at the middle (ty 64). Filled pixels
++// below that line are green (headroom), above it red (overcommit); the line and
++// the left/right edges are framed bright.
++// Doom Perf: sim-aware load average in milli-units (load * 1000) for gauge
++// 0/1/2 = 1m/5m/15m. Mirrors DoomPerf_EffectiveLoadValue in the browser adapter
++// (which feeds the uptime terminal popup) so the gauges and the popup agree: in
++// live mode this is the raw load pushed from the browser, but under a sim the
++// canned scenario drives it. Without this the gauges read the idle live value
++// even while a saturation sim is running.
++static int R_DoomPerfLoadMilli (int gauge)
++{
++    switch (doomperf_sim_mode)
++    {
++      case 1:
++	if (gauge == 0) return 7600 + ((leveltime * 5) % 400);
++	if (gauge == 1) return 7000 + ((leveltime * 3) % 350);
++	return 6200 + ((leveltime * 2) % 300);
++      case 2:
++	if (gauge == 0) return 14800 + ((leveltime * 5) % 800);
++	if (gauge == 1) return 13800 + ((leveltime * 3) % 700);
++	return 12600 + ((leveltime * 2) % 600);
++      default:
++	return (gauge >= 0 && gauge <= 2) ? doomperf_load[gauge] : 0;
++    }
++}
++
++// Vertical load-average gauge for the three pillars in the LOAD room. gauge
++// 0/1/2 = 1m/5m/15m. The pillar's full 256-tall face fills from the floor
++// (ty 255) proportional to the load average; full scale is 2x the logical CPU
++// count, so the "load == cores" saturation line sits at the middle (ty 128,
++// world height 128 -- the top of the old half-height panel). Filled pixels below
++// that line are green (headroom), above it red (overcommit); the saturation line
++// itself is always drawn bright as the gauge's key landmark.
++static byte R_DoomPerfCpuGaugePixel (int gauge, int ty)
++{
++    int			load;
++    int			cores;
++    int			max_milli;
++    int			fill_ty;
++    int			threshold_ty;
++
++    if (gauge < 0 || gauge > 2)
++	return DOOMPERF_CPU_CORE_DARK;
++
++    cores = R_DoomPerfCoreCount();
++    if (cores < 1)
++	cores = 1;
++    max_milli = cores * 2 * 1000;
++    load = R_DoomPerfLoadMilli(gauge);
++    if (load > max_milli)
++	load = max_milli;
++
++    fill_ty = 255 - (load * 255) / max_milli;
++    threshold_ty = 255 - (cores * 1000 * 255) / max_milli;
++
++    // 2px bright saturation line (load == cores), always visible as the landmark.
++    if (ty == threshold_ty || ty == threshold_ty + 1)
++	return DOOMPERF_CPU_CORE_FRAME;
++    if (ty < fill_ty)
++	return DOOMPERF_CPU_CORE_DARK;
++    if (ty < threshold_ty)
++	return DOOMPERF_CPU_CORE_RED;
++    return DOOMPERF_CPU_CORE_GREEN;
++}
++
++// Storage (disk) wing: service-latency gauges. Palette aliases reuse the shared
++// instrument indices -- gold is the DISK label's hue (231), red the danger hue.
++#define DOOMPERF_DISK_EMPTY	DOOMPERF_CPU_CORE_DARK	/* 5  */
++#define DOOMPERF_DISK_FRAME	DOOMPERF_CPU_CORE_FRAME	/* 96 */
++#define DOOMPERF_DISK_GOLD	DOOMPERF_CPU_CORE_YELLOW	/* 231 */
++#define DOOMPERF_DISK_RED	DOOMPERF_CPU_CORE_RED	/* 176 */
++
++// Effective disk service time (iostat await) in permille of a 250ms full scale.
++// In live mode it is the value pushed from the browser (doomperf_storage_await);
++// the disk sims synthesize it so the gauges react without a real workload. Mode 3
++// (high utilization) stays low -- a busy disk that keeps up has little latency --
++// while mode 4 (saturation) blows the queue out and spikes await into the red.
++// The CPU sims (1/2) leave it on the live value, since disk isn't their subject.
++static int R_DoomPerfDiskAwaitPermille (void)
++{
++    switch (doomperf_sim_mode)
++    {
++      case 3:
++	return 26 + (leveltime % 16);
++      case 4:
++	return 660 + ((leveltime * 3) % 220);
++      default:
++	return doomperf_storage_await;
++    }
++}
++
++// A bank of three vertical await gauges in the media pit (gauge 0/1/2), with a
++// small per-column phase ripple so they shimmer like a live meter. Each 128-tall
++// niche wall fills from the bottom (ty 127) by await/service time; filled pixels
++// are gold up to the warning line (70% of the 250ms scale, ~175ms) and red above
++// it, so a healthy-busy disk shows a short gold bar and a saturated one spikes red.
++static byte R_DoomPerfDiskGaugePixel (int gauge, int ty)
++{
++    int		await;
++    int		fill_ty;
++    int		warn_ty;
++    int		tx;
++
++    if (gauge < 0 || gauge > 2)
++	return DOOMPERF_DISK_EMPTY;
++
++    tx = doomperf_cpu_column_texture_x & 127;
++    if (tx < 3 || tx > 124)
++	return DOOMPERF_DISK_FRAME;
++
++    await = R_DoomPerfDiskAwaitPermille() + (((leveltime >> 1) + gauge * 13) % 24) - 12;
++    if (await < 0)
++	await = 0;
++    if (await > 1000)
++	await = 1000;
++
++    fill_ty = 127 - (await * 127) / 1000;
++    warn_ty = 127 - (700 * 127) / 1000;
++
++    if (ty == warn_ty)
++	return DOOMPERF_DISK_FRAME;
++    if (ty < fill_ty)
++	return DOOMPERF_DISK_EMPTY;
++    if (ty < warn_ty)
++	return DOOMPERF_DISK_RED;
++    return DOOMPERF_DISK_GOLD;
++}
++
++static int R_DoomPerfCpuWorldX (fixed_t xfrac)
++{
++    return xfrac >> FRACBITS;
++}
++
++static int R_DoomPerfCpuWorldY (fixed_t yfrac)
++{
++    return -(yfrac >> FRACBITS);
++}
++
++// World-space centres of the 8 ring pillars (north wing, identity rotation),
++// matching ringOrder in build-doomperf-map.mjs so pad i sits under pillar i.
++static const int doomperf_pad_u[8] = { -96, 0, 96, 96, 96, 0, -96, -96 };
++static const int doomperf_pad_v[8] = { 1024, 1024, 1024, 1120, 1216, 1216, 1216, 1120 };
++
++static byte
++R_DoomPerfCpuCorePixel
++( fixed_t		xfrac,
++  fixed_t		yfrac,
++  byte			background )
++{
++    int			worldx;
++    int			worldy;
++    int			count;
++    int			core;
++    int			dist;
++    int			util;
++
++    worldx = R_DoomPerfCpuWorldX(xfrac);
++    worldy = R_DoomPerfCpuWorldY(yfrac);
++    count = R_DoomPerfCoreCount();
++    if (count > 8)
++	count = 8;
++
++    // A glowing pad disc per live core, centred under its ring pillar. The
++    // pillar occludes the centre, so what shows is a coloured base with a
++    // bright rim in the gaps around each column. Colour tracks utilization.
++    for (core = 0; core < count; core++)
++    {
++	dist = R_DoomPerfAbs(worldx - doomperf_pad_u[core])
++	     + R_DoomPerfAbs(worldy - doomperf_pad_v[core]);
++	if (dist > 40)
++	    continue;
++	util = R_DoomPerfCorePermille(core);
++	if (dist >= 34)
++	    return DOOMPERF_CPU_CORE_FRAME;
++	if (dist >= 12)
++	    return R_DoomPerfCpuColor(util);
++	return DOOMPERF_CPU_CORE_DARK;
++    }
++    return background;
++}
++
++static byte
++R_DoomPerfCpuRunQueuePixel
++( fixed_t		xfrac,
++  fixed_t		yfrac,
++  byte			background )
++{
++    int			localx;
++    int			localy;
++    int			lane;
++    int			lane_x;
++    int			thread;
++    int			pulse;
++    int			active_width;
++    int			pressure;
++
++    pressure = R_DoomPerfRunQueuePermille();
++    localx = R_DoomPerfCpuWorldX(xfrac) - DOOMPERF_CPU_RUN_QUEUE_X0;
++    localy = R_DoomPerfCpuWorldY(yfrac) - DOOMPERF_CPU_RUN_QUEUE_Y0;
++    if (localx < 0 || localy < 0
++	|| localx >= DOOMPERF_CPU_RUN_QUEUE_WIDTH
++	|| localy >= DOOMPERF_CPU_RUN_QUEUE_HEIGHT)
++	return background;
++
++    if (localx < 7 || localy < 7
++	|| localx >= DOOMPERF_CPU_RUN_QUEUE_WIDTH - 7
++	|| localy >= DOOMPERF_CPU_RUN_QUEUE_HEIGHT - 7)
++	return DOOMPERF_CPU_CORE_FRAME;
++
++    // Runnable tasks queue into eight machine-like lanes. More pressure
++    // thickens the bright packet in each lane, leaving dark grooves between.
++    lane = (localx - 8) / 26;
++    lane_x = (localx - 8) % 26;
++    if (lane < 0 || lane >= 8)
++	return background;
++    if (lane_x < 3 || lane_x > 20)
++	return DOOMPERF_CPU_CORE_DARK;
++
++    active_width = pressure ? 2 + pressure / 85 : 0;
++    thread = R_DoomPerfAbs(lane_x - 11);
++    pulse = (localy - leveltime * (1 + pressure / 250) + lane * 17) & 31;
++    if (thread <= active_width && pulse < 18)
++	return R_DoomPerfCpuPressureColor(pressure);
++    if ((localy & 31) < 3 && thread < 8)
++	return DOOMPERF_CPU_CORE_FRAME;
++    if (thread < 9)
++	return DOOMPERF_CPU_CORE_DARK;
++    return background;
++}
++
++// Effective disk queue depth (iostat aqu-sz) in permille of a 24-request full
++// channel. Live mode uses the browser-pushed value; the disk sims synthesize it
++// (mode 3 a shallow queue, mode 4 a deep one that overflows rated capacity). The
++// CPU sims leave it on the live value.
++static int R_DoomPerfDiskQueuePermille (void)
++{
++    switch (doomperf_sim_mode)
++    {
++      case 3:
++	return 40 + (leveltime % 30);
++      case 4:
++	return 560 + ((leveltime * 2) % 240);
++      default:
++	return doomperf_storage_queue;
++    }
++}
++
++// Floor display for the media-pit QUEUE channel (storage wing): request blocks
++// queued along the trough, scrolling toward dispatch. The fill length tracks
++// queue depth; blocks within rated capacity are gold, the excess past the
++// capacity line is red. Bounds-checked to the channel's world box, so the shared
++// light sentinel can never paint another sector's floor.
++static byte R_DoomPerfDiskQueuePixel
++( fixed_t		xfrac,
++  fixed_t		yfrac,
++  byte			background )
++{
++    int		worldx;
++    int		worldy;
++    int		localx;
++    int		queue;
++    int		fill;
++    int		warn;
++
++    worldx = R_DoomPerfCpuWorldX(xfrac);
++    worldy = R_DoomPerfCpuWorldY(yfrac);
++    // Storage is the south wing: the builder rotates local (u,v) -> (-u,-v), so
++    // the hex queue trough's u[-750,-590] v[897,961] maps to this world box.
++    if (worldx < 590 || worldx > 750 || worldy < -961 || worldy > -897)
++	return background;
++
++    localx = worldx - 590;		// 0 (arrival) .. 160 (dispatch) along the queue
++    queue = R_DoomPerfDiskQueuePermille();
++    if (queue > 1000)
++	queue = 1000;
++    fill = (queue * 160) / 1000;
++    warn = (333 * 160) / 1000;		// rated-capacity line (~8 of 24 requests)
++
++    if (localx >= fill)
++	return DOOMPERF_DISK_EMPTY;	// past the queue tail: dark trough
++    if (((localx - leveltime * 2) & 15) < 3)
++	return DOOMPERF_DISK_FRAME;	// block separators, scrolling toward dispatch
++    if (localx >= warn)
++	return DOOMPERF_DISK_RED;	// excess queue beyond rated capacity
++    return DOOMPERF_DISK_GOLD;
++}
++
++// Storage media-pit metrics dashboard (storage wing). The panel's room-facing
++// lower texture is the static DPDDASH art (titles, section frames, grid, axes,
++// baseline bars); this hook repaints only the three plot rectangles with the
++// live scrolling sample ring that p_tick.c advances, and returns the source
++// texel (background) everywhere else so the static art shows through unchanged.
++// tx/ty index the 128x128 texture; the chart geometry mirrors
++// buildStorageDisplayPatch() in scripts/lib/textures.mjs -- keep them in step.
++#define DOOMPERF_DASH_CHART_X	50
++#define DOOMPERF_DASH_CHART_W	72
++#define DOOMPERF_DASH_CHART_H	22
++#define DOOMPERF_DASH_PITCH	4
++#define DOOMPERF_DASH_BAR_W	3
++// Palette indices shared with the static art.
++#define DOOMPERF_DASH_WHITE	4
++#define DOOMPERF_DASH_GRID	96
++#define DOOMPERF_DASH_AXIS	0
++#define DOOMPERF_DASH_BAR_A	200
++#define DOOMPERF_DASH_BAR_B	204
++#define DOOMPERF_DASH_BAR_CAP	206
++
++extern int doomperf_disk_dashboard[3][DOOMPERF_DASH_SAMPLES];
++
++static byte R_DoomPerfDiskDashboardPixel (int tx, int ty, byte background)
++{
++    int		section;
++    int		cx;
++    int		cy;
++    int		index;
++    int		x0;
++    int		value;
++    int		fill;
++    int		bartop;
++
++    tx &= 127;
++
++    // Each plot rectangle is chartY..chartY+22 tall; the three sections sit 40
++    // texels apart (chartY 17 / 57 / 97). Rows outside them are static art.
++    if (ty >= 17 && ty < 39)		section = 0;	// LATENCY
++    else if (ty >= 57 && ty < 79)	section = 1;	// IOPS
++    else if (ty >= 97 && ty < 119)	section = 2;	// READ/S
++    else
++	return background;
++
++    if (tx < DOOMPERF_DASH_CHART_X
++	|| tx >= DOOMPERF_DASH_CHART_X + DOOMPERF_DASH_CHART_W)
++	return background;				// title gutter / right margin
++
++    cx = tx - DOOMPERF_DASH_CHART_X;			// 0 .. 71
++    cy = ty - (17 + section * 40);			// 0 .. 21 within the plot
++
++    // Bars (topmost): 15 samples filled from the baseline up by value.
++    if (cx >= 4)
++    {
++	index = (cx - 4) / DOOMPERF_DASH_PITCH;
++	x0 = 4 + index * DOOMPERF_DASH_PITCH;
++	if (index < DOOMPERF_DASH_SAMPLES && cx < x0 + DOOMPERF_DASH_BAR_W)
++	{
++	    value = doomperf_disk_dashboard[section][index];
++	    if (value < 0)
++		value = 0;
++	    if (value > 1000)
++		value = 1000;
++	    fill = (value * (DOOMPERF_DASH_CHART_H - 5)) / 1000;
++	    if (fill < 2)
++		fill = 2;
++	    bartop = (DOOMPERF_DASH_CHART_H - 2) - fill;
++	    if (cy >= bartop && cy < DOOMPERF_DASH_CHART_H - 2)
++		return (cy == bartop)
++		    ? DOOMPERF_DASH_BAR_CAP
++		    : ((index & 1) ? DOOMPERF_DASH_BAR_B : DOOMPERF_DASH_BAR_A);
++	}
++    }
++
++    // Axes: left edge column and the baseline row.
++    if (cx == 0 || cy == DOOMPERF_DASH_CHART_H - 1)
++	return DOOMPERF_DASH_AXIS;
++
++    // Grid: horizontal every 6 rows, vertical every 12 columns.
++    if (cy > 0 && (cy % 6) == 0)
++	return DOOMPERF_DASH_GRID;
++    if (cx >= 12 && (cx % 12) == 0)
++	return DOOMPERF_DASH_GRID;
++
++    return DOOMPERF_DASH_WHITE;
++}
++
++// ===== Storage summit: the spinning-disk PLATTER + central SPINDLE drum. =====
++// First pass: BOTH visualize the same metric, disk %utilization, in two mediums --
++// the disk as concentric tracks filling outward, the drum as a vertical fill
++// rising up the pillar. Their animation speed also tracks util (there is no
++// separate throughput feed yet). Sim modes 3/4 pin the disk busy/saturated.
++static int R_DoomPerfDiskUtilPermille (void)
++{
++    switch (doomperf_sim_mode)
++    {
++      case 3:
++	return 910 + (leveltime % 50);
++      case 4:
++	return 975 + (leveltime % 20);
++      default:
++	return doomperf_storage_util;
++    }
++}
++
++static int R_DoomPerfDiskThroughputPermille (void)
++{
++    int		t;
++
++    // First pass: both the disk and the drum visualize %utilization, so the
++    // animation speed tracks util too (there is no separate throughput feed yet).
++    t = R_DoomPerfDiskUtilPermille();
++    if (t < 0)
++	t = 0;
++    if (t > 1000)
++	t = 1000;
++    return t;
++}
++
++// Platter geometry, world units (south wing: local u=0,v=1024 -> world 0,-1024).
++#define DOOMPERF_PLATTER_CX	0
++#define DOOMPERF_PLATTER_CY	(-1153)
++#define DOOMPERF_PLATTER_R	200	// rim radius (fills the disk ring; +25% hex)
++#define DOOMPERF_PLATTER_HUB	75	// inner hole under the central drum
++#define DOOMPERF_PLATTER_INNER	86	// closest VISIBLE platter radius (hex drum inradius)
++#define DOOMPERF_PLATTER_BLACK	0	// palette pure black: the idle disk ring
++#define DOOMPERF_PLATTER_GOLD	231	// light-yellow base hue (darkened outward)
++#define DOOMPERF_PLATTER_DARKEST 25	// deepest colormap level reached at the rim
++
++// Integer radius (no FP in the renderer): floor(sqrt(n)) by classic bit-by-bit
++// restoring sqrt. n is r2 <= 160*160, so this is a handful of iterations.
++static int R_DoomPerfISqrt (int n)
++{
++    int		x = 0;
++    int		bit = 1 << 14;	// highest power of 4 <= 2^15 (> max r2)
++
++    while (bit > n)
++	bit >>= 2;
++    while (bit)
++    {
++	if (n >= x + bit)
++	{
++	    n -= x + bit;
++	    x = (x >> 1) + bit;
++	}
++	else
++	    x >>= 1;
++	bit >>= 2;
++    }
++    return x;
++}
++
++// The platter FLOOR: a radial HEAT POOL, centred on the cube. A glowing pool
++// grows OUTWARD from the drum as disk utilization rises (idle = tucked under the
++// drum, invisible; saturated = reaches the rim), and within it the colour fades
++// from light yellow at the cube to dark at the rim -- a single hue darkened
++// through the engine's own colormaps. It is purely load-driven (no time term):
++// radially symmetric and painted in WORLD space, so it stays locked + centred on
++// the drum and never reads as drifting with the player.
++static byte
++R_DoomPerfDiskPlatterPixel
++( fixed_t		xfrac,
++  fixed_t		yfrac,
++  byte			background )
++{
++    int		worldx;
++    int		worldy;
++    int		dx;
++    int		dy;
++    int		r2;
++    int		r;
++    int		util;
++    int		span;
++    int		fillr;
++    int		level;
++
++    worldx = R_DoomPerfCpuWorldX(xfrac);
++    worldy = R_DoomPerfCpuWorldY(yfrac);
++    dx = worldx - DOOMPERF_PLATTER_CX;
++    dy = worldy - DOOMPERF_PLATTER_CY;
++    r2 = dx * dx + dy * dy;
++    if (r2 > DOOMPERF_PLATTER_R * DOOMPERF_PLATTER_R)
++	return background;				// square corners, off-disk
++    if (r2 < DOOMPERF_PLATTER_HUB * DOOMPERF_PLATTER_HUB)
++	return DOOMPERF_DISK_FRAME;			// metal hub under the drum
++
++    r = R_DoomPerfISqrt(r2);				// linear radius, 0..200
++    span = DOOMPERF_PLATTER_R - DOOMPERF_PLATTER_INNER;	// 114
++
++    // The lit pool grows outward from the cube edge to the rim with utilization.
++    util = R_DoomPerfDiskUtilPermille();
++    fillr = DOOMPERF_PLATTER_INNER + (span * util) / 1000;
++    if (r > fillr)
++	return DOOMPERF_PLATTER_BLACK;			// beyond the pool: black
++
++    // Radial gradient: bright (light yellow) at the cube, darkening toward the
++    // rim, by stepping deeper into the colormap with radius.
++    level = ((r - DOOMPERF_PLATTER_INNER) * DOOMPERF_PLATTER_DARKEST) / span;
++    if (level < 0)
++	level = 0;
++    if (level > DOOMPERF_PLATTER_DARKEST)
++	level = DOOMPERF_PLATTER_DARKEST;
++
++    return colormaps[level * 256 + DOOMPERF_PLATTER_GOLD];
++}
++
++// The central SPINDLE drum (a vertical pillar): a glowing fill rises to %util and
++// bright throughput streaks travel UP the wall. ty is the texture row (127=bottom)
++// supplied by r_segs.c, so the fill/streaks lock to the drum surface.
++static byte R_DoomPerfDiskSpindlePixel (int ty)
++{
++    int		util;
++    int		thr;
++    int		tx;
++    int		fill_ty;
++    int		speed;
++    int		seed;
++    int		head_y;
++    int		offset;
++    int		trail;
++
++    util = R_DoomPerfDiskUtilPermille();
++    thr = R_DoomPerfDiskThroughputPermille();
++    tx = doomperf_cpu_column_texture_x & 63;
++
++    fill_ty = 127 - (util * 127) / 1000;		// glowing fill rises with util
++
++    // Rising streaks (throughput): a per-column head climbs (ty -> 0) over time.
++    // The time term is halved (>>1) for a calm, ~50%-slower rise that stays
++    // visually concordant with the now purely load-driven platter.
++    speed = 1 + thr / 150;
++    trail = 10 + thr / 16;
++    seed = tx * 31 + (tx >> 2) * 7;
++    head_y = (127 - (((leveltime * speed) / 2 + seed * 11) & 127)) & 127;
++    offset = (ty - head_y + 128) & 127;
++    if (offset < 2)
++	return DOOMPERF_DISK_GOLD;			// bright streak head
++    if (offset < trail && ty >= fill_ty - 16)
++	return DOOMPERF_DISK_RED;			// streak trail near the fill
++
++    if (ty >= fill_ty)
++	return (ty & 3) ? DOOMPERF_DISK_GOLD : DOOMPERF_DISK_FRAME;  // banded util fill
++    return DOOMPERF_DISK_EMPTY;				// dark above the fill
++}
++
++static byte
++R_DoomPerfCpuFloorPixel
++( fixed_t		xfrac,
++  fixed_t		yfrac,
++  byte			background )
++{
++    if (doomperf_cpu_floor_display == 1)
++	return R_DoomPerfCpuCorePixel(xfrac, yfrac, background);
++    if (doomperf_cpu_floor_display == 2)
++	return R_DoomPerfCpuRunQueuePixel(xfrac, yfrac, background);
++    if (doomperf_cpu_floor_display == 3)
++	return R_DoomPerfDiskQueuePixel(xfrac, yfrac, background);
++    if (doomperf_cpu_floor_display == 4)
++	return R_DoomPerfDiskPlatterPixel(xfrac, yfrac, background);
++    return background;
++}
++
+ 
+ //
+ // Draws the actual span.
+@@ -553,7 +1267,21 @@
+ 
+ 	// Lookup pixel from flat texture tile,
+ 	//  re-index using light/colormap.
+-	*dest++ = ds_colormap[ds_source[spot]];
++	if (doomperf_cpu_floor_display)
++	{
++	    byte	bg = ds_source[spot];
++	    byte	px = R_DoomPerfCpuFloorPixel (xfrac, yfrac, bg);
++	    // The disk platter is an emissive instrument: draw its painted pixels
++	    // FULLBRIGHT so the whole disk reads uniformly and stays world-locked,
++	    // instead of fading to dark with distance (which made the fill look
++	    // glued to the player). Background floor pixels still shade normally.
++	    if (doomperf_cpu_floor_display == 4 && px != bg)
++		*dest++ = colormaps[px];
++	    else
++		*dest++ = ds_colormap[px];
++	}
++	else
++	    *dest++ = ds_colormap[ds_source[spot]];
+ 
+ 	// Next step in u,v.
+ 	xfrac += ds_xstep; 
+@@ -676,8 +1404,20 @@
+ 	spot = ((yfrac>>(16-6))&(63*64)) + ((xfrac>>16)&63);
+ 	// Lowres/blocky mode does it twice,
+ 	//  while scale is adjusted appropriately.
+-	*dest++ = ds_colormap[ds_source[spot]]; 
+-	*dest++ = ds_colormap[ds_source[spot]];
++	if (doomperf_cpu_floor_display)
++	{
++	    byte	bg = ds_source[spot];
++	    byte	cpu_pixel = R_DoomPerfCpuFloorPixel (xfrac, yfrac, bg);
++	    byte	out = (doomperf_cpu_floor_display == 4 && cpu_pixel != bg)
++			      ? colormaps[cpu_pixel] : ds_colormap[cpu_pixel];
++	    *dest++ = out;
++	    *dest++ = out;
++	}
++	else
++	{
++	    *dest++ = ds_colormap[ds_source[spot]];
++	    *dest++ = ds_colormap[ds_source[spot]];
++	}
+ 	
+ 	xfrac += ds_xstep; 
+ 	yfrac += ds_ystep; 

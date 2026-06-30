@@ -1,0 +1,46 @@
+# Doom Perf engine patch: hu_stuff.c
+#
+# Cumulative Doom Perf changes to hu_stuff.c, consolidated from the original
+# per-feature patch series. Bundles (original patch -> feature):
+#   0036  automap-scenario-title
+#
+# Order-independent: this is the only Doom Perf patch that touches hu_stuff.c.
+# Regenerate by diffing a clean tree against the staged build tree;
+# see scripts/build-doom-wasm.sh.
+
+--- a/hu_stuff.c
++++ b/hu_stuff.c
+@@ -443,29 +443,11 @@
+ 		       hu_font,
+ 		       HU_FONTSTART);
+     
+-    switch ( gamemode )
+-    {
+-      case shareware:
+-      case registered:
+-      case retail:
+-	s = HU_TITLE;
+-	break;
++    // Doom Perf: the lab has a single map, so the Doom level name ("E1M1:
++    // HANGAR") is meaningless. Title the automap with the active data-source
++    // scenario instead (e.g. "LIVE STATS", "HIGH CPU UTILIZATION").
++    s = M_DoomPerfModeTitle(doomperf_sim_mode);
+ 
+-/* FIXME
+-      case pack_plut:
+-	s = HU_TITLEP;
+-	break;
+-      case pack_tnt:
+-	s = HU_TITLET;
+-	break;
+-*/
+-	
+-      case commercial:
+-      default:
+-	 s = HU_TITLE2;
+-	 break;
+-    }
+-    
+     while (*s)
+ 	HUlib_addCharToTextLine(&w_title, *(s++));
+ 

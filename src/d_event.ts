@@ -27,10 +27,6 @@ export const D_PostEvent = (event: Event) => {
   eventQueue.push(event);
 };
 
-export const D_ClearEvents = () => {
-  eventQueue.length = 0;
-};
-
 export const D_ProcessEvents = () => {
   while (eventQueue.length > 0) {
     const event = eventQueue.shift();

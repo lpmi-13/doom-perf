@@ -1,6 +1,5 @@
 import type { WadFile } from "./w_wad";
 
-export const NUMCOLORMAPS = 32;
 const PALETTE_SIZE = 256 * 3;
 
 let colormaps: Uint8Array | null = null;

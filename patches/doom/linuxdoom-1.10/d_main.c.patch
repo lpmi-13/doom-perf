@@ -1,0 +1,103 @@
+# Doom Perf engine patch: d_main.c
+#
+# Cumulative Doom Perf changes to d_main.c, consolidated from the original
+# per-feature patch series. Bundles (original patch -> feature):
+#   0008  allow-project-pwads
+#   0011  title-page-only
+#   0031  uncapped-render-loop
+#   0038  title-oo-load-pulse
+#
+# Order-independent: this is the only Doom Perf patch that touches d_main.c.
+# Regenerate by diffing a clean tree against the staged build tree;
+# see scripts/build-doom-wasm.sh.
+
+--- a/d_main.c
++++ b/d_main.c
+@@ -391,8 +391,31 @@
+ 		
+ 	S_UpdateSounds (players[consoleplayer].mo);// move positional sounds
+ 
+-	// Update display, next frame, with current state.
+-	D_Display ();
++	// Doom Perf: render interpolated frames until the next 35 Hz tic is due,
++	// instead of one frame per tic. Game logic still advances at TICRATE (via
++	// TryRunTics above); R_CaptureViewpoint snapshots the new viewpoint and
++	// R_SetupFrame lerps old->new by dp_interpfrac, so camera motion is smooth
++	// on sample-and-hold displays (no torch "ghosting"). The per-frame yield in
++	// I_FinishUpdate caps the render rate; I_GetTimeMS gives sub-tic timing.
++	{
++	    extern void		R_CaptureViewpoint (void);
++	    extern fixed_t	dp_interpfrac;
++	    extern int		I_GetTimeMS (void);
++	    int			ms_per_tic = 1000 / TICRATE;
++	    int			frame_base = I_GetTimeMS ();
++	    int			dt;
++
++	    R_CaptureViewpoint ();
++	    do
++	    {
++		dt = I_GetTimeMS () - frame_base;
++		dp_interpfrac = (dt >= ms_per_tic)
++		    ? FRACUNIT
++		    : (((fixed_t) dt << FRACBITS) / ms_per_tic);
++		// Update display, next frame, with the interpolated viewpoint.
++		D_Display ();
++	    } while (I_GetTimeMS () - frame_base < ms_per_tic);
++	}
+ 
+ #ifndef SNDSERV
+ 	// Sound mixing for the buffer is snychronous.
+@@ -422,8 +445,9 @@
+ //
+ void D_PageTicker (void)
+ {
+-    if (--pagetic < 0)
+-	D_AdvanceDemo ();
++    // Doom Perf keeps a single opening page. Do not advance TITLEPIC into
++    // Doom's attract-loop demos, credits, or shareware ordering screen.
++    return;
+ }
+ 
+ 
+@@ -433,7 +457,10 @@
+ //
+ void D_PageDrawer (void)
+ {
++    int titleremap = pagename && !strcmp(pagename, "TITLEPIC");
++    if (titleremap) { DoomPerf_UpdateTitleLut(); doomperf_title_remap = 1; }
+     V_DrawPatch (0,0, 0, W_CacheLumpName(pagename, PU_CACHE));
++    doomperf_title_remap = 0;
+ }
+ 
+ 
+@@ -1020,8 +1047,8 @@
+     printf ("W_Init: Init WADfiles.\n");
+     W_InitMultipleFiles (wadfiles);
+     
+-
+-    // Check for -file in shareware
++    // Doom Perf supplies its authored diagnostic map as a project PWAD, so
++    // keep the normal fake-registered IWAD check but allow -file in shareware.
+     if (modifiedgame)
+     {
+ 	// These are the lumps that will be checked in IWAD,
+@@ -1034,10 +1061,6 @@
+ 	};
+ 	int i;
+ 	
+-	if ( gamemode == shareware)
+-	    I_Error("\nYou cannot -file with the shareware "
+-		    "version. Register!");
+-
+ 	// Check for fake IWAD with right name,
+ 	// but w/o all the lumps of the registered version. 
+ 	if (gamemode == registered)
+@@ -1057,7 +1080,7 @@
+ 	    "                      press enter to continue\n"
+ 	    "===========================================================================\n"
+ 	    );
+-	getchar ();
++	// Doom Perf: do not turn the modified-game pause into a browser input prompt.
+     }
+ 	
+ 

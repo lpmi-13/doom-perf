@@ -26,10 +26,6 @@ export const V_Init = (canvas: HTMLCanvasElement) => {
   imageData = nextContext.createImageData(SCREENWIDTH, SCREENHEIGHT);
 };
 
-export const V_GetScreen = (index = 0): Uint8Array => {
-  return screens[index];
-};
-
 export const V_ClearScreen = (index = 0, color = 0) => {
   screens[index].fill(color);
 };

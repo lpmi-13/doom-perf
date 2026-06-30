@@ -1,0 +1,85 @@
+# Doom Perf engine patch: r_things.c
+#
+# Cumulative Doom Perf changes to r_things.c, consolidated from the original
+# per-feature patch series. Bundles (original patch -> feature):
+#   0001  hide-player-psprites
+#   0009  allow-pwad-sprite-overrides
+#   0032  hide-viewplayer-body-sprite
+#
+# Order-independent: this is the only Doom Perf patch that touches r_things.c.
+# Regenerate by diffing a clean tree against the staged build tree;
+# see scripts/build-doom-wasm.sh.
+
+--- a/r_things.c
++++ b/r_things.c
+@@ -102,6 +102,30 @@
+ // R_InstallSpriteLump
+ // Local function for R_InitSprites.
+ //
++static void R_DoomPerfInitPatchedSpriteLump (int lump)
++{
++    int		index;
++    patch_t	*patch;
++
++    if (lump >= firstspritelump && lump <= lastspritelump)
++	return;
++
++    index = lump - firstspritelump;
++    if (index < 0 || index >= numspritelumps)
++	I_Error ("R_DoomPerfInitPatchedSpriteLump: "
++		 "sprite lump %i is outside metadata range", lump);
++
++    patch = W_CacheLumpNum (lump, PU_CACHE);
++    spritewidth[index] = SHORT(patch->width)<<FRACBITS;
++    spriteoffset[index] = SHORT(patch->leftoffset)<<FRACBITS;
++    spritetopoffset[index] = SHORT(patch->topoffset)<<FRACBITS;
++}
++
++
++//
++// R_InstallSpriteLump
++// Local function for R_InitSprites.
++//
+ void
+ R_InstallSpriteLump
+ ( int		lump,
+@@ -115,6 +139,8 @@
+ 	I_Error("R_InstallSpriteLump: "
+ 		"Bad frame characters in lump %i", lump);
+ 	
++    R_DoomPerfInitPatchedSpriteLump (lump);
++
+     if ((int)frame > maxframe)
+ 	maxframe = frame;
+ 		
+@@ -478,7 +504,15 @@
+     
+     angle_t		ang;
+     fixed_t		iscale;
+-    
++
++    // Doom Perf: never draw the viewing player's own body sprite. Vanilla relies
++    // on the camera coinciding with the player mobj so the sprite is culled by
++    // the MINZ near-clip; with view interpolation (see R_SetupFrame) the camera
++    // lags the mobj by a fraction of a tic, so the body would pop into view
++    // huge right in front of the camera. Skip it explicitly.
++    if (thing->player == &players[displayplayer])
++	return;
++
+     // transform the origin point
+     tr_x = thing->x - viewx;
+     tr_y = thing->y - viewy;
+@@ -979,11 +1013,8 @@
+ 	if (ds->maskedtexturecol)
+ 	    R_RenderMaskedSegRange (ds, ds->x1, ds->x2);
+     
+-    // draw the psprites on top of everything
+-    //  but does not draw on side views
+-    if (!viewangleoffset)		
+-	R_DrawPlayerSprites ();
++    // Keep the player view clear for Doom Perf overlays.
++    //  First-person weapon and muzzle flash psprites are presentation only.
+ }
+ 
+ 
+-

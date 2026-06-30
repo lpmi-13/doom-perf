@@ -26,9 +26,6 @@ const sfxRegistry = new Map<number, SfxInfo>();
 const activeSounds = new Map<number, ActiveSound>();
 
 let musicElement: HTMLAudioElement | null = null;
-let nextSongHandle = 1;
-const songRegistry = new Map<number, { url: string }>();
-let musicUnlockAttached = false;
 
 const clamp = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, value));
@@ -46,21 +43,6 @@ const attachAudioUnlock = () => {
   };
   window.addEventListener("pointerdown", resume, { once: true });
   window.addEventListener("keydown", resume, { once: true });
-};
-
-const attachMusicUnlock = (element: HTMLAudioElement) => {
-  if (musicUnlockAttached) {
-    return;
-  }
-  musicUnlockAttached = true;
-  const retry = () => {
-    musicUnlockAttached = false;
-    window.removeEventListener("pointerdown", retry);
-    window.removeEventListener("keydown", retry);
-    void element.play().catch(() => undefined);
-  };
-  window.addEventListener("pointerdown", retry, { once: true });
-  window.addEventListener("keydown", retry, { once: true });
 };
 
 const ensureAudioContext = () => {
@@ -95,26 +77,12 @@ export const I_InitSound = () => {
   ensureAudioContext();
 };
 
-export const I_UpdateSound = () => {
-  // Web Audio handles mixing internally.
-};
-
-export const I_SubmitSound = () => {
-  // No explicit submit step required for Web Audio.
-};
-
 export const I_ShutdownSound = () => {
   for (const handle of activeSounds.keys()) {
     I_StopSound(handle);
   }
   activeSounds.clear();
 };
-
-export const I_SetChannels = () => {
-  // Channel count is managed by Web Audio.
-};
-
-export const I_GetSfxLumpNum = (sfxinfo: SfxInfo) => sfxinfo.id;
 
 export const I_StartSound = (
   id: number,
@@ -240,39 +208,8 @@ export const I_ResumeSong = (_handle: number) => {
     .catch(() => undefined);
 };
 
-export const I_RegisterSong = (data: ArrayBuffer | string) => {
-  const url =
-    typeof data === "string"
-      ? data
-      : URL.createObjectURL(new Blob([data], { type: "audio/mpeg" }));
-  const handle = nextSongHandle++;
-  songRegistry.set(handle, { url });
-  return handle;
-};
-
-export const I_PlaySong = (handle: number, looping: number) => {
-  const song = songRegistry.get(handle);
-  if (!song) {
-    return;
-  }
-  const element = getMusicElement();
-  element.loop = Boolean(looping);
-  element.src = song.url;
-  void element.play().catch(() => attachMusicUnlock(element));
-};
-
 export const I_StopSong = (_handle: number) => {
   const element = getMusicElement();
   element.pause();
   element.currentTime = 0;
-};
-
-export const I_UnRegisterSong = (handle: number) => {
-  const song = songRegistry.get(handle);
-  if (song) {
-    if (song.url.startsWith("blob:")) {
-      URL.revokeObjectURL(song.url);
-    }
-    songRegistry.delete(handle);
-  }
 };

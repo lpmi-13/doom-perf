@@ -20,8 +20,6 @@ const soundRegistry: SoundRegistry = {
 
 const normalizeName = (name: string) => name.trim().toUpperCase();
 
-export const S_GetSoundRegistry = (): SoundRegistry => soundRegistry;
-
 type WadSoundSource =
   | WadFile
   | {

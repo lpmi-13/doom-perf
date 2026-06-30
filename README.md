@@ -265,7 +265,7 @@ Local telemetry service
 Build inputs
   src/                 TypeScript browser host, telemetry, and UI
   wasm/                Emscripten platform adapters
-  patches/             Ordered linuxdoom-1.10 patches
+  patches/             Per-file linuxdoom-1.10 engine patches
   scripts/             map and engine build scripts
 ```
 
@@ -275,40 +275,37 @@ script expects a clean external `linuxdoom-1.10` tree and stages it into
 
 ## Doom Perf Engine Patches
 
-The ordered patches under `patches/doom/linuxdoom-1.10/` are the source of
-truth for changes to the Doom C engine:
+The patches under `patches/doom/linuxdoom-1.10/` are the source of truth for
+changes to the Doom C engine. There is exactly **one patch per modified engine
+file**: each `<file>.patch` holds the complete cumulative Doom Perf delta for
+that source file. Because every patch touches a distinct file, the set is
+**order-independent** — the build applies them in lexical order purely for
+deterministic output, not because any patch depends on another. Each patch
+begins with a header comment listing the original per-feature changes it
+bundles. To revise an engine feature, edit the one patch for the file it lives
+in (or regenerate it by diffing a clean tree against the staged build tree).
 
-| Patch | Purpose |
+| Patch (file) | Bundled Doom Perf changes |
 | --- | --- |
-| `0001-hide-player-psprites.patch` | Hide first-person weapon sprites and muzzle flash. |
-| `0002-hide-status-bar-hud.patch` | Use the full 320x200 view and suppress the original status bar. |
-| `0003-disable-player-damage.patch` | Make the observer immune to damage. |
-| `0004-suppress-monsters.patch` | Suppress monster and lost-soul spawning. |
-| `0005-strip-map-items.patch` | Strip normal gameplay items while keeping selected lab props. |
-| `0006-unlock-all-doors.patch` | Remove key requirements from locked doors. |
-| `0007-cpu-core-floor-display.patch` | Add CPU floor instruments for cores and pressure. |
-| `0008-allow-project-pwads.patch` | Allow the project PWAD with the base IWAD. |
-| `0009-allow-pwad-sprite-overrides.patch` | Allow project sprite replacements for lab signs. |
-| `0010-disable-combat-controls.patch` | Ignore fire and weapon-selection controls. |
-| `0011-title-page-only.patch` | Hold the opening title page instead of cycling demos. |
-| `0012-simplify-title-menus.patch` | Simplify the title menu for Doom Perf. |
-| `0013-cpu-core-column-streaks.patch` | Add telemetry-driven rising streaks to CPU pillars. |
-| `0014-sim-modes-and-level-select.patch` | Add live/utilization/saturation data-source selection. |
-| `0015-cpu-pillar-sink.patch` | Raise or sink CPU pillars based on available logical CPUs. |
-| `0016-cpu-core-pads.patch` | Add per-core colored pads under CPU pillars. |
-| `0017-cpu-load-gauges.patch` | Add load average gauges for 1m, 5m, and 15m pressure. |
-| `0018-run-queue-particles.patch` | Add animated runnable-task and blocked I/O-wait orbs in the CPU run-queue room. |
-| `0019-remove-use-grunt.patch` | Suppress the original USE wall-bump grunt around terminal screens. |
-| `0020-disk-sim-modes.patch` | Add disk utilization and saturation simulation menu modes. |
-| `0021-disk-latency-gauges.patch` | Add storage service-latency wall gauges driven by `await`. |
-| `0022-disk-platter-pulse.patch` | Pulse storage platter rings from disk utilization. |
-| `0023-disk-queue-channel.patch` | Add storage queue-depth floor blocks driven by `aqu-sz`. |
-| `0024-memory-sim-modes.patch` | Add memory utilization and saturation simulation menu modes. |
-| `0025-memory-page-bank.patch` | Animate memory page cells, swap channels, PSI pads, and the OOM alcove. |
-| `0026-network-sim-modes.patch` | Add paged data-source menu support and network simulation modes. |
-| `0027-disk-metrics-dashboard.patch` | Add the storage metrics dashboard with scrolling latency, IOPS, and read graphs. |
-| `0028-cpu-load-gauge-single-band.patch` | Restrict CPU load gauge rendering to the intended wall surface. |
-| `0029-cpu-load-gauge-redesign.patch` | Redesign CPU load gauges as full-height, sim-aware utilization/saturation bars. |
+| `d_main.c.patch` | Allow the project PWAD with the base IWAD; hold the opening title page instead of cycling demos; uncapped render loop; title `oo` load-pulse wiring. |
+| `g_game.c.patch` | Ignore fire and weapon-selection controls. |
+| `hu_stuff.c.patch` | Show the active scenario title on the automap. |
+| `info.c.patch` | Run-queue and blocked I/O-wait orb actor states; dim tall red torches; orb spawn/despawn polish. |
+| `info.h.patch` | Declarations for the orb actor states. |
+| `m_menu.c.patch` | Simplified Doom Perf title menu; paged data-source selection (live plus CPU/disk/memory/network sim modes); automap scenario title; title `oo` load pulse; trimmed options menu. |
+| `p_doors.c.patch` | Remove key requirements from locked doors. |
+| `p_inter.c.patch` | Make the observer immune to damage. |
+| `p_map.c.patch` | Suppress the original USE wall-bump grunt around terminal screens. |
+| `p_mobj.c.patch` | Suppress monster and lost-soul spawning; strip normal gameplay items while keeping selected lab props. |
+| `p_tick.c.patch` | Per-tick instrument drivers: CPU pillar sink, run-queue orbs, disk platter pulse, memory page bank, disk metrics dashboard, disk platter spindle, orb spawn/despawn polish. |
+| `r_data.c.patch` | Allow project sprite replacements for lab signs. |
+| `r_draw.c.patch` | CPU floor instruments (cores, column streaks, pads, load gauges) and disk floor instruments (latency, queue channel, metrics dashboard, platter spindle); sim-mode level select. |
+| `r_main.c.patch` | Full 320x200 view (suppress the status bar); camera viewpoint interpolation; flattened light diminishing. |
+| `r_plane.c.patch` | CPU core floor display; disk queue channel; disk platter spindle plane rendering. |
+| `r_segs.c.patch` | Wall-surface instruments: CPU core streaks/floor, CPU load gauge band, disk latency gauges, disk metrics dashboard, disk platter spindle; flattened light diminishing. |
+| `r_things.c.patch` | Hide first-person weapon sprites and muzzle flash; allow PWAD sprite overrides; hide the viewplayer body sprite. |
+| `st_stuff.c.patch` | Suppress the original status bar HUD. |
+| `v_video.c.patch` | Title `oo` load-pulse palette remap in `V_DrawPatch`. |
 
 Rebuild the engine from a clean Doom source checkout:
 
@@ -376,7 +373,7 @@ npm run build:map
 | `scripts/lib/wings/` | Self-contained CPU, memory, storage, and network wing builders. |
 | `scripts/build-doom-wasm.sh` | Patch and compile pipeline for the Doom C engine. |
 | `wasm/` | Emscripten adapters and Doom Perf bridge globals. |
-| `patches/doom/linuxdoom-1.10/` | Ordered engine patches. |
+| `patches/doom/linuxdoom-1.10/` | Per-file engine patches (one per modified source file). |
 | `public/engine/` | Generated patched engine artifacts. |
 | `public/maps/` | Generated Doom Perf PWAD. |
 | `public/wads/` | Runtime IWAD files and Freedoom license notice. |

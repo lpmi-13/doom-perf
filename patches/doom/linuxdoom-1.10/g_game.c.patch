@@ -1,3 +1,13 @@
+# Doom Perf engine patch: g_game.c
+#
+# Cumulative Doom Perf changes to g_game.c, consolidated from the original
+# per-feature patch series. Bundles (original patch -> feature):
+#   0010  disable-combat-controls
+#
+# Order-independent: this is the only Doom Perf patch that touches g_game.c.
+# Regenerate by diffing a clean tree against the staged build tree;
+# see scripts/build-doom-wasm.sh.
+
 --- a/g_game.c
 +++ b/g_game.c
 @@ -236,7 +236,6 @@
@@ -22,7 +32,7 @@
      if (gamekeydown[key_use] || joybuttons[joybuse] ) 
      { 
  	cmd->buttons |= BT_USE;
-@@ -339,15 +336,6 @@
+@@ -338,15 +336,6 @@
  	dclicks = 0;                   
      } 
  

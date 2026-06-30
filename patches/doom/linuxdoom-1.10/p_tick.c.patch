@@ -1,0 +1,884 @@
+# Doom Perf engine patch: p_tick.c
+#
+# Cumulative Doom Perf changes to p_tick.c, consolidated from the original
+# per-feature patch series. Bundles (original patch -> feature):
+#   0015  cpu-pillar-sink
+#   0018  run-queue-particles
+#   0022  disk-platter-pulse
+#   0025  memory-page-bank
+#   0027  disk-metrics-dashboard
+#   0037  orb-spawn-despawn-polish
+#
+# Order-independent: this is the only Doom Perf patch that touches p_tick.c.
+# Regenerate by diffing a clean tree against the staged build tree;
+# see scripts/build-doom-wasm.sh.
+
+--- a/p_tick.c
++++ b/p_tick.c
+@@ -1,4 +1,4 @@
+-// Emacs style mode select   -*- C++ -*- 
++// Emacs style mode select   -*- C++ -*-
+ //-----------------------------------------------------------------------------
+ //
+ // $Id:$
+@@ -30,9 +30,819 @@
+ 
+ #include "doomstat.h"
+ 
++#include "m_fixed.h"
++#include "m_random.h"
++#include "p_mobj.h"
++#include "r_state.h"
++
+ 
+ int	leveltime;
+ 
++// Doom Perf: the CPU core ring has 8 physical pillars (sector tags 201..208).
++// Each tic we raise a pillar into a solid column if its core exists and sink
++// it flush with the walkway otherwise, so exactly N pillars are visible (one
++// per logical CPU in live mode, or 8 in the simulations). The heights match
++// the pillar/walkway floors emitted by build-doomperf-map.mjs.
++#define DOOMPERF_PILLAR_TAG_BASE	201
++#define DOOMPERF_PILLAR_COUNT		8
++#define DOOMPERF_PILLAR_TOP		(288 * FRACUNIT)
++#define DOOMPERF_PILLAR_BASE		(0 * FRACUNIT)
++
++void DoomPerf_UpdatePillars (void)
++{
++    int		effective;
++    int		i;
++    int		idx;
++
++    if (doomperf_sim_mode != 0)
++	effective = DOOMPERF_PILLAR_COUNT;
++    else
++    {
++	effective = doomperf_cpu_core_count;
++	if (effective > DOOMPERF_PILLAR_COUNT)
++	    effective = DOOMPERF_PILLAR_COUNT;
++    }
++
++    for (i = 0; i < numsectors; i++)
++    {
++	idx = sectors[i].tag - DOOMPERF_PILLAR_TAG_BASE;
++	if (idx < 0 || idx >= DOOMPERF_PILLAR_COUNT)
++	    continue;
++	sectors[i].floorheight =
++	    (idx < effective) ? DOOMPERF_PILLAR_TOP : DOOMPERF_PILLAR_BASE;
++    }
++}
++
++// Doom Perf: the media-pit PLATTER (storage wing). Its three concentric rings
++// carry sector tags 620 (centre spindle), 621, 622. Each tic we set the rings'
++// light as an outward-rippling pulse whose brightness and speed scale with disk
++// %util, so an idle disk barely glimmers while a busy one strobes -- the
++// utilization counterpart to the media-pit latency gauges. The light stays in
++// [169,241], clear of the floor-display sentinels 144/160, so it never trips the
++// CPU floor renderer.
++#define DOOMPERF_PLATTER_TAG_BASE	620
++#define DOOMPERF_PLATTER_RINGS		3
++
++void DoomPerf_UpdatePlatter (void)
++{
++    int		util;
++    int		base;
++    int		amp;
++    int		speed;
++    int		i;
++    int		ring;
++    int		phase;
++    int		tri;
++    int		light;
++
++    // Sim-aware utilization: both disk sims pin the platter busy (mode 4 a touch
++    // harder); the CPU sims and live mode use the browser-pushed value.
++    if (doomperf_sim_mode == 3)
++	util = 910 + (leveltime % 50);
++    else if (doomperf_sim_mode == 4)
++	util = 975 + (leveltime % 20);
++    else
++	util = doomperf_storage_util;
++    if (util < 0)
++	util = 0;
++    if (util > 1000)
++	util = 1000;
++
++    base = 175 + (util * 40) / 1000;	// 175 (idle) .. 215 (busy)
++    amp = 6 + (util * 20) / 1000;	// 6 .. 26: a stronger pulse when busy
++    speed = 2 + (util * 8) / 1000;	// phase units/tic: ~3.7s .. ~0.7s period
++
++    for (i = 0; i < numsectors; i++)
++    {
++	ring = sectors[i].tag - DOOMPERF_PLATTER_TAG_BASE;
++	if (ring < 0 || ring >= DOOMPERF_PLATTER_RINGS)
++	    continue;
++	// Outward ripple: each ring out from the spindle lags a third of a cycle.
++	phase = leveltime * speed - ring * 85;
++	tri = (phase & 255) - 128;	// sawtooth -128..127
++	if (tri < 0)
++	    tri = -tri;
++	tri -= 64;			// triangle -64..63, period 256
++	light = base + (tri * amp) / 64;
++	sectors[i].lightlevel = (short)light;
++    }
++}
++
++// Doom Perf: the media-pit METRICS DASHBOARD (storage wing). A wall panel of
++// three scrolling graphs -- LATENCY (disk await), IOPS (queue depth), READ/S
++// (utilization) -- repainted by R_DoomPerfDiskDashboardPixel from this sample
++// ring. We advance the ring a few tics apart so the scroll reads at a calm pace,
++// and decay the easter-egg IOPS spike every tic. Samples are permille (0..1000).
++#define DOOMPERF_DASH_SECTIONS		3
++#define DOOMPERF_DASH_ADVANCE_TICS	24	// ~0.69s/sample: a slow, calm drift left
++// DOOMPERF_DASH_SPIKE_TICS lives in doom_emscripten_compat.h (shared with the
++// browser's DoomPerf_TriggerStorageIopsSpike setter).
++
++int	doomperf_disk_dashboard[DOOMPERF_DASH_SECTIONS][DOOMPERF_DASH_SAMPLES];
++
++static int DoomPerf_DashClamp (int v)
++{
++    if (v < 0)
++	return 0;
++    if (v > 1000)
++	return 1000;
++    return v;
++}
++
++void DoomPerf_UpdateDiskDashboard (void)
++{
++    static int	seeded = 0;
++    int		await;
++    int		queue;
++    int		util;
++    int		wob;
++    int		latency;
++    int		iops;
++    int		read;
++    int		s;
++    int		i;
++
++    // Seed with a gentle baseline so the panel reads as a live dashboard from the
++    // first frame rather than an empty plot that fills in over the first seconds.
++    if (!seeded)
++    {
++	for (s = 0; s < DOOMPERF_DASH_SECTIONS; s++)
++	    for (i = 0; i < DOOMPERF_DASH_SAMPLES; i++)
++		doomperf_disk_dashboard[s][i] = 170 + ((i * 7 + s * 23) % 60);
++	seeded = 1;
++    }
++
++    if (doomperf_storage_iops_spike > 0)
++	doomperf_storage_iops_spike--;
++
++    if (leveltime % DOOMPERF_DASH_ADVANCE_TICS != 0)
++	return;
++
++    // Sim-aware effective signals, mirroring the platter/gauge/queue helpers: the
++    // disk sims synthesize their own values; live and the CPU/memory sims use the
++    // browser-pushed telemetry.
++    if (doomperf_sim_mode == 3)
++    {
++	await = 60;
++	queue = 80;
++	util = 910;
++    }
++    else if (doomperf_sim_mode == 4)
++    {
++	await = 720;
++	queue = 640;
++	util = 975;
++    }
++    else
++    {
++	await = doomperf_storage_await;
++	queue = doomperf_storage_queue;
++	util = doomperf_storage_util;
++    }
++
++    // A small wobble keeps an idle signal breathing instead of flatlining.
++    wob = (leveltime / DOOMPERF_DASH_ADVANCE_TICS) & 3;
++
++    latency = 150 + (await * 3) / 4 + wob * 12;
++    iops    = 150 + (queue * 3) / 5 + util / 8 + wob * 14;
++    read    = 140 + (util * 3) / 5 + wob * 12;
++
++    // Easter egg: while a spike is live, slam the freshest IOPS samples to the
++    // top of the chart (a tall, near-flat cap that only eases off as the spike
++    // ends), so each yell paints one unmistakable spike that then drifts left.
++    if (doomperf_storage_iops_spike > 0)
++	iops += 500 + (450 * doomperf_storage_iops_spike) / DOOMPERF_DASH_SPIKE_TICS;
++
++    latency = DoomPerf_DashClamp(latency);
++    iops = DoomPerf_DashClamp(iops);
++    read = DoomPerf_DashClamp(read);
++
++    // Scroll left; append the newest sample at the right edge.
++    for (s = 0; s < DOOMPERF_DASH_SECTIONS; s++)
++	for (i = 0; i < DOOMPERF_DASH_SAMPLES - 1; i++)
++	    doomperf_disk_dashboard[s][i] = doomperf_disk_dashboard[s][i + 1];
++    doomperf_disk_dashboard[0][DOOMPERF_DASH_SAMPLES - 1] = latency;
++    doomperf_disk_dashboard[1][DOOMPERF_DASH_SAMPLES - 1] = iops;
++    doomperf_disk_dashboard[2][DOOMPERF_DASH_SAMPLES - 1] = read;
++}
++
++// Doom Perf: MEMORY page-bank instruments. Tags 500..544 are the 9x5 page
++// cells, 546/547 are swap-in/out channels, 548 is the OOM bay, and 549/550 are
++// PSI some/full pads. Sunken page cells = a shelf; count+colour = composition. Saturation
++// lifts/pulses the swap channels and PSI pads. Errors wake only the OOM alcove.
++#define DOOMPERF_MEMORY_PAGE_TAG_BASE	500
++#define DOOMPERF_MEMORY_PAGE_COUNT	45
++#define DOOMPERF_MEMORY_SWAP_IN_TAG	546
++#define DOOMPERF_MEMORY_SWAP_OUT_TAG	547
++#define DOOMPERF_MEMORY_OOM_TAG		548
++#define DOOMPERF_MEMORY_PSI_SOME_TAG	549
++#define DOOMPERF_MEMORY_PSI_FULL_TAG	550
++#define DOOMPERF_MEMORY_PAGE_LOW	(-48 * FRACUNIT)
++#define DOOMPERF_MEMORY_PAGE_HIGH	(-16 * FRACUNIT)
++#define DOOMPERF_MEMORY_PAGE_STEP	(2 * FRACUNIT)
++#define DOOMPERF_MEMORY_SWAP_LOW	(-20 * FRACUNIT)
++#define DOOMPERF_MEMORY_SWAP_HIGH	(12 * FRACUNIT)
++#define DOOMPERF_MEMORY_PSI_LOW		(20 * FRACUNIT)
++#define DOOMPERF_MEMORY_PSI_HIGH	(52 * FRACUNIT)
++
++static int DoomPerf_EffectiveMemoryUtil (void)
++{
++    if (doomperf_sim_mode == 5)
++	return 900 + (leveltime % 40);
++    if (doomperf_sim_mode == 6)
++	return 970 + (leveltime % 20);
++    return doomperf_memory_util;
++}
++
++static int DoomPerf_EffectiveMemorySaturation (void)
++{
++    if (doomperf_sim_mode == 5)
++	return 40;
++    if (doomperf_sim_mode == 6)
++	return 760 + ((leveltime * 4) % 180);
++    return doomperf_memory_saturation;
++}
++
++// Reclaimable page cache (Buffers+Cached) in permille of MemTotal. In the memory
++// sims the engine synthesizes the whole free(1) composition (the browser's free
++// terminal scenario agrees): mode 5 keeps a healthy cache being squeezed; mode 6
++// has reclaimed most of it, so the cyan cache band has given way to working set.
++static int DoomPerf_EffectiveMemoryCache (void)
++{
++    if (doomperf_sim_mode == 5)
++	return 105 + (leveltime % 12);
++    if (doomperf_sim_mode == 6)
++	return 30 + (leveltime % 10);
++    return doomperf_memory_cache;
++}
++
++static int DoomPerf_EffectiveMemoryErrors (void)
++{
++    return (doomperf_sim_mode == 0) ? doomperf_memory_errors : 0;
++}
++
++static int DoomPerf_Clamp1000 (int value)
++{
++    if (value < 0)
++	return 0;
++    if (value > 1000)
++	return 1000;
++    return value;
++}
++
++static int DoomPerf_TrianglePulse (int speed)
++{
++    int phase;
++    int tri;
++
++    phase = leveltime * speed;
++    tri = (phase & 127) - 64;
++    if (tri < 0)
++	tri = -tri;
++    return tri;		// 0..64
++}
++
++void DoomPerf_UpdateMemoryWing (void)
++{
++    int		util;
++    int		sat;
++    int		err;
++    int		cache;
++    int		green_cells;
++    int		cyan_cells;
++    int		flatnum;
++    int		pulse;
++    int		i;
++    int		idx;
++    int		tag;
++    int		light;
++    fixed_t	height;
++    fixed_t	target_h;
++    fixed_t	cur;
++    static int	flats_ready = 0;
++    static int	flat_green;
++    static int	flat_cyan;
++    static int	flat_empty;
++
++    util = DoomPerf_Clamp1000(DoomPerf_EffectiveMemoryUtil());
++    cache = DoomPerf_Clamp1000(DoomPerf_EffectiveMemoryCache());
++    sat = DoomPerf_Clamp1000(DoomPerf_EffectiveMemorySaturation());
++    err = DoomPerf_Clamp1000(DoomPerf_EffectiveMemoryErrors());
++    pulse = DoomPerf_TrianglePulse(2 + sat / 180);
++
++    // Split the shelf into page-cache (cyan) + working-set (green) + free
++    // (empty) books, straight from the live `free -m` composition: green tracks
++    // utilization (1 - MemAvailable/MemTotal), cyan tracks reclaimable cache
++    // (Buffers+Cached). Working set takes priority over cache for the cell
++    // budget. Cells fill from index 0, which is the row nearest the entrance, so
++    // the cyan cache band sits at the near end and gives way to green deeper in
++    // as memory tightens -- the reclaim story, no fragmentation.
++    green_cells = (util * DOOMPERF_MEMORY_PAGE_COUNT + 500) / 1000;
++    if (green_cells > DOOMPERF_MEMORY_PAGE_COUNT)
++	green_cells = DOOMPERF_MEMORY_PAGE_COUNT;
++    cyan_cells = (cache * DOOMPERF_MEMORY_PAGE_COUNT + 500) / 1000;
++    if (cyan_cells > DOOMPERF_MEMORY_PAGE_COUNT - green_cells)
++	cyan_cells = DOOMPERF_MEMORY_PAGE_COUNT - green_cells;
++
++    if (!flats_ready)
++    {
++	flat_green = R_FlatNumForName("DPMUSED");
++	flat_cyan = R_FlatNumForName("DPMCACH");
++	flat_empty = R_FlatNumForName("DPMFREE");
++	flats_ready = 1;
++    }
++
++    for (i = 0; i < numsectors; i++)
++    {
++	tag = sectors[i].tag;
++	idx = tag - DOOMPERF_MEMORY_PAGE_TAG_BASE;
++	if (idx >= 0 && idx < DOOMPERF_MEMORY_PAGE_COUNT)
++	{
++	    if (idx < cyan_cells)
++	    {
++		target_h = (DOOMPERF_MEMORY_PAGE_LOW + DOOMPERF_MEMORY_PAGE_HIGH) / 2;
++		flatnum = flat_cyan;
++		sectors[i].lightlevel = 186;
++	    }
++	    else if (idx < cyan_cells + green_cells)
++	    {
++		target_h = DOOMPERF_MEMORY_PAGE_HIGH;
++		flatnum = flat_green;
++		sectors[i].lightlevel = 210;
++	    }
++	    else
++	    {
++		target_h = DOOMPERF_MEMORY_PAGE_LOW;
++		flatnum = flat_empty;
++		sectors[i].lightlevel = 150;
++	    }
++	    // Ease the book up/down toward its target so a slot filling or
++	    // freeing reads as a shelving motion rather than a snap.
++	    cur = sectors[i].floorheight;
++	    if (cur < target_h)
++	    {
++		cur += DOOMPERF_MEMORY_PAGE_STEP;
++		if (cur > target_h)
++		    cur = target_h;
++	    }
++	    else if (cur > target_h)
++	    {
++		cur -= DOOMPERF_MEMORY_PAGE_STEP;
++		if (cur < target_h)
++		    cur = target_h;
++	    }
++	    sectors[i].floorheight = cur;
++	    sectors[i].floorpic = (short)flatnum;
++	    continue;
++	}
++
++	if (tag == DOOMPERF_MEMORY_SWAP_IN_TAG || tag == DOOMPERF_MEMORY_SWAP_OUT_TAG)
++	{
++	    height = DOOMPERF_MEMORY_SWAP_LOW
++		+ ((DOOMPERF_MEMORY_SWAP_HIGH - DOOMPERF_MEMORY_SWAP_LOW) * sat) / 1000;
++	    light = 166 + (sat * 48) / 1000 + (pulse * sat) / 4000;
++	    sectors[i].floorheight = height;
++	    sectors[i].lightlevel = (short)light;
++	    continue;
++	}
++
++	if (tag == DOOMPERF_MEMORY_PSI_SOME_TAG)
++	{
++	    sectors[i].floorheight = DOOMPERF_MEMORY_PSI_LOW
++		+ ((DOOMPERF_MEMORY_PSI_HIGH - DOOMPERF_MEMORY_PSI_LOW) * sat) / 1000;
++	    sectors[i].lightlevel = (short)(170 + (sat * 50) / 1000);
++	    continue;
++	}
++
++	if (tag == DOOMPERF_MEMORY_PSI_FULL_TAG)
++	{
++	    int severe = sat > 600 ? sat - 600 : 0;
++	    sectors[i].floorheight = DOOMPERF_MEMORY_PSI_LOW
++		+ ((DOOMPERF_MEMORY_PSI_HIGH - DOOMPERF_MEMORY_PSI_LOW) * severe) / 400;
++	    sectors[i].lightlevel = (short)(150 + (severe * 90) / 400);
++	    continue;
++	}
++
++	if (tag == DOOMPERF_MEMORY_OOM_TAG)
++	{
++	    sectors[i].floorheight = err ? 8 * FRACUNIT : -16 * FRACUNIT;
++	    sectors[i].lightlevel = (short)(err ? 190 + pulse : 112);
++	}
++    }
++}
++
++// Doom Perf: RUN QUEUE "subway". CPU task-orbs (MT_DP_CPUTASK) are runnable
++// threads. They appear under the QUEUE sign (the player's left / south end of the
++// trench) and glide NORTH up the lanes toward the constriction gates (sector tags
++// 230..233). `cores` gates open; the rest raise into short pedestals. Up to
++// `cores` threads "run": they pass through an open gate and stream on north to
++// despawn under the RUNNING sign (the player's right). The overflow -- exactly
++// (runnable - cores) of them -- cannot get a core, so they hold STOPPED in tidy
++// per-lane columns just south of the gates: that parked total is the run queue's
++// excess over capacity. The columns rotate -- every so often a lane dispatches its
++// parked front orb through the gate (it "gets the CPU") and a fresh arrival
++// refills the back -- so under sustained saturation an orb is only *temporarily*
++// waylaid before its turn. There is NO collision pile-up: every orb homes to an
++// assigned lane/row slot, so the parked count is deterministic and nothing clumps
++// at the spawn. Each lane fires on its own randomized phase each cycle, so the
++// flow scatters instead of marching across in a fixed cascade. Separately, D-state
++// (I/O-wait) threads are shown as a STACK of motionless green orbs (MT_DP_IOTASK)
++// in a single west-wall pen (map sector rq-io-pen, tag 245) just south of the
++// gates: they pile up 2x2 per level, the pile growing with the blocked count
++// (uninterruptible sleep), while the pen light PULSES ~once/sec so the sleeping
++// pile glows. World coords match build-doomperf-map.mjs (CPU/north wing =
++// identity): trench x[-1280,-1024], gates at y~1104, pen at x[-1392,-1280].
++#define DOOMPERF_RQ_GATE_TAG_BASE	230
++#define DOOMPERF_RQ_GATE_COUNT		3		// orb lanes (gates now static map towers; this is just the lane count)
++#define DOOMPERF_RQ_GATE_OPEN_Z		(-56 * FRACUNIT)
++#define DOOMPERF_RQ_GATE_SHUT_Z		(-8 * FRACUNIT)	// short pedestal: 48u (~3x orb height) above the track floor
++#define DOOMPERF_RQ_DEPTH		5		// max queued (stopped) orbs per lane
++#define DOOMPERF_RQ_MAX_RUN		28		// dispatched orbs in flight to the exit
++#define DOOMPERF_RQ_BUDGET		56		// hard cap on live CPU orbs (WASM perf)
++#define DOOMPERF_RQ_LANE_X0		(-1216)		// centre x of orb lane 0 (lanes -1216/-1152/-1088, between the towers)
++#define DOOMPERF_RQ_LANE_PITCH		64		// lane spacing (= tower cell pitch)
++#define DOOMPERF_RQ_SPEED		(6 * FRACUNIT)	// forward glide / run speed
++#define DOOMPERF_RQ_STEER		(3 * FRACUNIT)	// lateral homing toward a lane centre
++#define DOOMPERF_RQ_SPAWN_Y		980		// arrival line, south of the gates (QUEUE side)
++#define DOOMPERF_RQ_SPAWN_JITTER	24		// +/- random on spawn y (break the uniform line)
++#define DOOMPERF_RQ_FRONT_Y		1088		// front (row 0) waiter parks here, just S of gates@1104
++#define DOOMPERF_RQ_ROW_PITCH		24		// south-ward spacing between queued rows
++#define DOOMPERF_RQ_EXIT_Y		(1540 * FRACUNIT)	// north exit (player's right)
++#define DOOMPERF_RQ_DISPATCH		80		// tics per dispatch cycle on one lane (slow rotation)
++// D-state pen: a motionless 2x2 stack of green orbs whose height tracks the
++// blocked count, in the pulsing tag-245 sector (map: rq-io-pen).
++#define DOOMPERF_RQ_MAX_IO		48		// max stacked orbs (12 levels of 2x2)
++#define DOOMPERF_RQ_PEN_TAG		245
++#define DOOMPERF_RQ_PEN_DIM		176		// pulse trough light (avoids sentinels 144/160)
++#define DOOMPERF_RQ_PEN_LIT		255		// pulse peak light
++#define DOOMPERF_RQ_PULSE		35		// pulse period in tics (~1 sec)
++#define DOOMPERF_RQ_STACK_CX		(-1336)		// stack centre x (deep in the pen)
++#define DOOMPERF_RQ_STACK_CY		1030		// stack centre y
++#define DOOMPERF_RQ_STACK_OFF		8		// 2x2 half-spacing (orbs 16 apart)
++#define DOOMPERF_RQ_STACK_Z		(-56 * FRACUNIT)	// level-0 base z (pen floor)
++#define DOOMPERF_RQ_STACK_PITCH		(16 * FRACUNIT)	// per-level z step (orb height)
++
++// Per-lane FIFO of waiting orbs (row 0 = front, parked at the gate). Dispatched
++// orbs move to the run pool and stream north to the exit. The phase array gives
++// each lane a random dispatch tic within the cycle (re-rolled each cycle) so the
++// flow never repeats. doomperf_rq_io[] is the D-state stack (index 0 = bottom).
++// All reset on level reload (the menu's sim-mode switch reloads the map, freeing
++// every mobj and leaving these pools full of dangling pointers).
++static mobj_t*	doomperf_rq_q[DOOMPERF_RQ_GATE_COUNT][DOOMPERF_RQ_DEPTH];
++static int	doomperf_rq_qn[DOOMPERF_RQ_GATE_COUNT];
++static int	doomperf_rq_phase[DOOMPERF_RQ_GATE_COUNT];
++static mobj_t*	doomperf_rq_run[DOOMPERF_RQ_MAX_RUN];
++static mobj_t*	doomperf_rq_io[DOOMPERF_RQ_MAX_IO];
++
++// Ease one orb's momentum toward the map-unit target (tx,ty): it decelerates into
++// the slot so P_XYMovement's STOPSPEED parks it cleanly on arrival. `fwd` caps the
++// north/south glide; lateral homing is capped at the steer rate.
++static void DoomPerf_RqHome (mobj_t* mo, int tx, int ty, fixed_t fwd)
++{
++    fixed_t	dx;
++    fixed_t	dy;
++
++    dx = (tx << FRACBITS) - mo->x;
++    dy = (ty << FRACBITS) - mo->y;
++    if (dx > DOOMPERF_RQ_STEER)
++	dx = DOOMPERF_RQ_STEER;
++    else if (dx < -DOOMPERF_RQ_STEER)
++	dx = -DOOMPERF_RQ_STEER;
++    if (dy > fwd)
++	dy = fwd;
++    else if (dy < -fwd)
++	dy = -fwd;
++    mo->momx = dx;
++    mo->momy = dy;
++}
++
++// Doom Perf spawn/despawn polish: instead of vanishing instantly, an orb is
++// handed to a short self-removing animation. Drop the pool reference BEFORE
++// calling this (the update passes must ignore a despawning orb); the orb stops,
++// goes non-blocking, and plays `state` through to S_NULL on its own thinker.
++static void DoomPerf_RqDespawn (mobj_t* mo, statenum_t state)
++{
++    if (!mo)
++	return;
++    mo->momx = mo->momy = mo->momz = 0;
++    mo->flags &= ~MF_SOLID;
++    mo->flags |= MF_NOGRAVITY;
++    P_SetMobjState (mo, state);
++}
++
++// A small "task done" flourish: a few short-lived sparks burst outward from
++// (x,y,z) when a thread completes its run at the RUN QUEUE exit. They are
++// MF_NOCLIP/NOGRAVITY so they fly free and fade out (S_DP_SPARK1 -> S_NULL)
++// without colliding with the towers or the player.
++static void DoomPerf_RqSparks (fixed_t x, fixed_t y, fixed_t z)
++{
++    int		n;
++    mobj_t*	sp;
++
++    for (n = 0; n < 3; n++)
++    {
++	sp = P_SpawnMobj (x, y, z + 8 * FRACUNIT, MT_DP_SPARK);
++	sp->momx = ((P_Random () - 128) * FRACUNIT) / 48;
++	sp->momy = ((P_Random () - 128) * FRACUNIT) / 48;
++	sp->momz = (P_Random () % 160) * (FRACUNIT / 64);
++    }
++}
++
++void DoomPerf_UpdateRunQueueParticles (void)
++{
++    int		cores;
++    int		runnable;
++    int		run_target;
++    int		wait_target;
++    int		total;
++    int		base;
++    int		rem;
++    int		i;
++    int		L;
++    int		r;
++    int		idx;
++    mobj_t*	mo;
++
++    // Level reload frees every mobj; drop the dangling pool refs on the first tic.
++    if (leveltime == 0)
++    {
++	for (L = 0; L < DOOMPERF_RQ_GATE_COUNT; L++)
++	{
++	    doomperf_rq_qn[L] = 0;
++	    doomperf_rq_phase[L] = P_Random() % DOOMPERF_RQ_DISPATCH;
++	    for (r = 0; r < DOOMPERF_RQ_DEPTH; r++)
++		doomperf_rq_q[L][r] = NULL;
++	}
++	for (i = 0; i < DOOMPERF_RQ_MAX_RUN; i++)
++	    doomperf_rq_run[i] = NULL;
++	for (i = 0; i < DOOMPERF_RQ_MAX_IO; i++)
++	    doomperf_rq_io[i] = NULL;
++    }
++
++    // Re-roll each lane's dispatch phase at the start of every cycle, so dispatches
++    // fire at random (per-lane, non-repeating) tics rather than a fixed cascade.
++    if ((leveltime % DOOMPERF_RQ_DISPATCH) == 0)
++	for (L = 0; L < DOOMPERF_RQ_GATE_COUNT; L++)
++	    doomperf_rq_phase[L] = P_Random() % DOOMPERF_RQ_DISPATCH;
++
++    cores = DoomPerf_GetEffectiveCpuCoreCount();
++    if (cores < 1)
++	cores = 1;
++    if (cores > DOOMPERF_RQ_GATE_COUNT)
++	cores = DOOMPERF_RQ_GATE_COUNT;
++    runnable = DoomPerf_EffectiveRunQueueCount();
++    if (runnable < 0)
++	runnable = 0;
++
++    // Up to `cores` threads run; the rest (runnable - cores) wait in the queue.
++    run_target = (runnable < cores) ? runnable : cores;
++    wait_target = runnable - cores;
++    if (wait_target < 0)
++	wait_target = 0;
++    if (wait_target > cores * DOOMPERF_RQ_DEPTH)
++	wait_target = cores * DOOMPERF_RQ_DEPTH;
++
++    // Lane gates: open `cores` lanes, raise the rest into solid blockers.
++    for (i = 0; i < numsectors; i++)
++    {
++	idx = sectors[i].tag - DOOMPERF_RQ_GATE_TAG_BASE;
++	if (idx < 0 || idx >= DOOMPERF_RQ_GATE_COUNT)
++	    continue;
++	sectors[i].floorheight =
++	    (idx < cores) ? DOOMPERF_RQ_GATE_OPEN_Z : DOOMPERF_RQ_GATE_SHUT_Z;
++    }
++
++    // --- CPU run-queue orbs ----------------------------------------------------
++    // Pass 1: advance the dispatched runners (stream north, centred in lane) and
++    // count the live population for the budget.
++    total = 0;
++    for (i = 0; i < DOOMPERF_RQ_MAX_RUN; i++)
++    {
++	int	lane;
++	int	cx;
++	fixed_t	dx;
++
++	mo = doomperf_rq_run[i];
++	if (!mo)
++	    continue;
++	if (mo->thinker.function.acv == (actionf_v)(-1))
++	{
++	    doomperf_rq_run[i] = NULL;
++	    continue;
++	}
++	if (mo->y > DOOMPERF_RQ_EXIT_Y)
++	{
++	    // Completion: the thread finished its run. Drop the pool ref, fling a
++	    // few sparks, and hand the orb to its burst-out animation.
++	    doomperf_rq_run[i] = NULL;
++	    DoomPerf_RqSparks (mo->x, mo->y, mo->z);
++	    DoomPerf_RqDespawn (mo, S_DP_CPUTASK_BURST1);
++	    continue;
++	}
++	lane = ((mo->x >> FRACBITS) - DOOMPERF_RQ_LANE_X0
++		+ DOOMPERF_RQ_LANE_PITCH / 2) / DOOMPERF_RQ_LANE_PITCH;
++	if (lane < 0)
++	    lane = 0;
++	if (lane > cores - 1)
++	    lane = cores - 1;
++	cx = DOOMPERF_RQ_LANE_X0 + lane * DOOMPERF_RQ_LANE_PITCH;
++	dx = (cx << FRACBITS) - mo->x;
++	if (dx > DOOMPERF_RQ_STEER)
++	    dx = DOOMPERF_RQ_STEER;
++	else if (dx < -DOOMPERF_RQ_STEER)
++	    dx = -DOOMPERF_RQ_STEER;
++	mo->momx = dx;
++	mo->momy = DOOMPERF_RQ_SPEED;
++	total++;
++    }
++
++    // Pass 2: compact each per-lane queue (drop any removed orbs) and count it.
++    for (L = 0; L < DOOMPERF_RQ_GATE_COUNT; L++)
++    {
++	int	w = 0;
++
++	for (r = 0; r < doomperf_rq_qn[L]; r++)
++	{
++	    mo = doomperf_rq_q[L][r];
++	    if (!mo || mo->thinker.function.acv == (actionf_v)(-1))
++		continue;
++	    doomperf_rq_q[L][w++] = mo;
++	}
++	for (r = w; r < doomperf_rq_qn[L]; r++)
++	    doomperf_rq_q[L][r] = NULL;
++	doomperf_rq_qn[L] = w;
++	total += w;
++    }
++
++    // Pass 3: per lane -- trim surplus, home the column to its slots, refill from
++    // the south, and dispatch the parked front orb through the gate on its turn.
++    // The waiters are distributed round-robin across the open lanes, so the parked
++    // total is exactly wait_target = (runnable - cores).
++    base = wait_target / cores;
++    rem  = wait_target % cores;
++    for (L = 0; L < DOOMPERF_RQ_GATE_COUNT; L++)
++    {
++	int	depth;
++	int	lanex;
++
++	lanex = DOOMPERF_RQ_LANE_X0 + L * DOOMPERF_RQ_LANE_PITCH;
++	depth = (L < cores) ? base + ((L < rem) ? 1 : 0) : 0;
++	if (depth > DOOMPERF_RQ_DEPTH)
++	    depth = DOOMPERF_RQ_DEPTH;
++
++	// Queue shrank: fade the surplus from the back. This is a queue-length
++	// correction, not a completion, so it gets the quiet fade -- no burst.
++	while (doomperf_rq_qn[L] > depth)
++	{
++	    mo = doomperf_rq_q[L][--doomperf_rq_qn[L]];
++	    doomperf_rq_q[L][doomperf_rq_qn[L]] = NULL;
++	    if (mo)
++		DoomPerf_RqDespawn (mo, S_DP_CPUTASK_FADE1);
++	    total--;
++	}
++
++	// Home each queued orb to its (lane,row) slot; row 0 parks at the gate.
++	for (r = 0; r < doomperf_rq_qn[L]; r++)
++	    DoomPerf_RqHome (doomperf_rq_q[L][r], lanex,
++			     DOOMPERF_RQ_FRONT_Y - r * DOOMPERF_RQ_ROW_PITCH,
++			     DOOMPERF_RQ_SPEED);
++
++	// Refill: queue grew -> add an arrival at the south spawn line, but only
++	// once the previous arrival has cleared the spawn zone, so arrivals stay
++	// spaced (never overlap) and the spawn area never clumps.
++	if (doomperf_rq_qn[L] < depth && total < DOOMPERF_RQ_BUDGET)
++	{
++	    mobj_t*	back = (doomperf_rq_qn[L] > 0)
++		? doomperf_rq_q[L][doomperf_rq_qn[L] - 1] : NULL;
++
++	    if (!back
++		|| (back->y >> FRACBITS) > DOOMPERF_RQ_SPAWN_Y + DOOMPERF_RQ_SPAWN_JITTER + 16)
++	    {
++		fixed_t	sy = (DOOMPERF_RQ_SPAWN_Y
++			       + P_Random() % (2 * DOOMPERF_RQ_SPAWN_JITTER + 1)
++			       - DOOMPERF_RQ_SPAWN_JITTER) << FRACBITS;
++
++		mo = P_SpawnMobj (lanex << FRACBITS, sy, ONFLOORZ, MT_DP_CPUTASK);
++		mo->momy = DOOMPERF_RQ_SPEED;
++		doomperf_rq_q[L][doomperf_rq_qn[L]++] = mo;
++		total++;
++	    }
++	}
++
++	// Dispatch on this lane's randomized phase tic: hand the core its next
++	// thread. The phase is re-rolled each cycle, so the flow never repeats.
++	if (L < cores
++	    && (leveltime % DOOMPERF_RQ_DISPATCH) == doomperf_rq_phase[L])
++	{
++	    int	slot = -1;
++
++	    for (i = 0; i < DOOMPERF_RQ_MAX_RUN; i++)
++		if (!doomperf_rq_run[i])
++		{
++		    slot = i;
++		    break;
++		}
++	    if (slot >= 0)
++	    {
++		mo = NULL;
++		if (doomperf_rq_qn[L] >= 1
++		    && doomperf_rq_q[L][0]
++		    && (doomperf_rq_q[L][0]->y >> FRACBITS)
++			>= DOOMPERF_RQ_FRONT_Y - DOOMPERF_RQ_ROW_PITCH)
++		{
++		    // Saturated lane: promote the parked front orb (rotation). The
++		    // column shifts forward; a fresh arrival refills the back next tic.
++		    mo = doomperf_rq_q[L][0];
++		    for (r = 1; r < doomperf_rq_qn[L]; r++)
++			doomperf_rq_q[L][r - 1] = doomperf_rq_q[L][r];
++		    doomperf_rq_q[L][--doomperf_rq_qn[L]] = NULL;
++		}
++		else if (depth == 0 && L < run_target
++			 && total < DOOMPERF_RQ_BUDGET)
++		{
++		    // Undersaturated lane (no queue): a thread flows straight
++		    // through, spawned south so it visibly travels the whole hall.
++		    fixed_t	sy = (DOOMPERF_RQ_SPAWN_Y
++				      + P_Random() % (2 * DOOMPERF_RQ_SPAWN_JITTER + 1)
++				      - DOOMPERF_RQ_SPAWN_JITTER) << FRACBITS;
++
++		    mo = P_SpawnMobj (lanex << FRACBITS, sy, ONFLOORZ, MT_DP_CPUTASK);
++		    total++;
++		}
++		if (mo)
++		{
++		    mo->momy = DOOMPERF_RQ_SPEED;
++		    doomperf_rq_run[slot] = mo;
++		}
++	    }
++	}
++    }
++
++    // D-state I/O-wait STACK: blocked (uninterruptible-sleep) threads pile up as
++    // motionless green orbs in the pen (tag 245), 2x2 per level, the pile growing
++    // with the blocked count. The orbs never move (sleeping); the pen light PULSES
++    // ~once/sec so the pile glows. The array is a LIFO -- index 0 is the bottom.
++    {
++	int	blocked;
++	int	io_target;
++	int	io_live;
++	int	light;
++	int	phase;
++
++	// Pulse the pen light with a triangle wave (~1 sec) so the pile breathes.
++	// The 176..255 range stays clear of the floor-display sentinels (144/160).
++	phase = leveltime % DOOMPERF_RQ_PULSE;
++	if (phase > DOOMPERF_RQ_PULSE / 2)
++	    phase = DOOMPERF_RQ_PULSE - phase;
++	light = DOOMPERF_RQ_PEN_DIM
++	    + phase * (DOOMPERF_RQ_PEN_LIT - DOOMPERF_RQ_PEN_DIM)
++		/ (DOOMPERF_RQ_PULSE / 2);
++	for (i = 0; i < numsectors; i++)
++	    if (sectors[i].tag == DOOMPERF_RQ_PEN_TAG)
++		sectors[i].lightlevel = (short) light;
++
++	blocked = DoomPerf_EffectiveBlockedCount();
++	if (blocked < 0)
++	    blocked = 0;
++	io_target = (blocked > DOOMPERF_RQ_MAX_IO) ? DOOMPERF_RQ_MAX_IO : blocked;
++
++	// io_live = contiguous live orbs from the bottom (push/pop-only stack).
++	io_live = 0;
++	while (io_live < DOOMPERF_RQ_MAX_IO && doomperf_rq_io[io_live])
++	    io_live++;
++
++	// Pop from the top when the pile shrinks (threads woke up): a soft fade.
++	while (io_live > io_target)
++	{
++	    mo = doomperf_rq_io[--io_live];
++	    doomperf_rq_io[io_live] = NULL;
++	    DoomPerf_RqDespawn (mo, S_DP_IOTASK_FADE1);
++	}
++
++	// Push onto the top when the pile grows: a motionless orb at the next 2x2
++	// slot (level = index / 4, corner = index % 4). NOGRAVITY holds its place;
++	// non-SOLID so the sleeping pile never blocks the player.
++	while (io_live < io_target)
++	{
++	    int		lvl = io_live / 4;
++	    int		corner = io_live % 4;
++	    fixed_t	x = (DOOMPERF_RQ_STACK_CX
++			     + ((corner & 1) ? DOOMPERF_RQ_STACK_OFF
++					     : -DOOMPERF_RQ_STACK_OFF)) << FRACBITS;
++	    fixed_t	y = (DOOMPERF_RQ_STACK_CY
++			     + ((corner & 2) ? DOOMPERF_RQ_STACK_OFF
++					     : -DOOMPERF_RQ_STACK_OFF)) << FRACBITS;
++	    fixed_t	z = DOOMPERF_RQ_STACK_Z + lvl * DOOMPERF_RQ_STACK_PITCH;
++
++	    mo = P_SpawnMobj (x, y, z, MT_DP_IOTASK);
++	    mo->flags &= ~MF_SOLID;
++	    mo->flags |= MF_NOGRAVITY;
++	    mo->momx = mo->momy = mo->momz = 0;
++	    doomperf_rq_io[io_live++] = mo;
++	}
++    }
++}
++
+ //
+ // THINKERS
+ // All thinkers should be allocated by Z_Malloc
+@@ -130,11 +940,11 @@
+ void P_Ticker (void)
+ {
+     int		i;
+-    
++
+     // run the tic
+     if (paused)
+ 	return;
+-		
++
+     // pause if in menu and at least one tic has been run
+     if ( !netgame
+ 	 && menuactive
+@@ -143,16 +953,22 @@
+     {
+ 	return;
+     }
+-    
+-		
++
++
++    DoomPerf_UpdatePillars ();
++    DoomPerf_UpdatePlatter ();
++    DoomPerf_UpdateDiskDashboard ();
++    DoomPerf_UpdateMemoryWing ();
++    DoomPerf_UpdateRunQueueParticles ();
++
+     for (i=0 ; i<MAXPLAYERS ; i++)
+ 	if (playeringame[i])
+ 	    P_PlayerThink (&players[i]);
+-			
++
+     P_RunThinkers ();
+     P_UpdateSpecials ();
+     P_RespawnSpecials ();
+ 
+     // for par times
+-    leveltime++;	
++    leveltime++;
+ }

@@ -1,0 +1,50 @@
+# Doom Perf engine patch: info.h
+#
+# Cumulative Doom Perf changes to info.h, consolidated from the original
+# per-feature patch series. Bundles (original patch -> feature):
+#   0018  run-queue-particles
+#   0037  orb-spawn-despawn-polish
+#
+# Order-independent: this is the only Doom Perf patch that touches info.h.
+# Regenerate by diffing a clean tree against the staged build tree;
+# see scripts/build-doom-wasm.sh.
+
+--- a/info.h
++++ b/info.h
+@@ -1140,6 +1140,26 @@
+     S_TECH2LAMP2,
+     S_TECH2LAMP3,
+     S_TECH2LAMP4,
++    S_DP_CPUTASK,
++    S_DP_IOTASK,
++    // Doom Perf orb spawn/despawn polish (patch 0037). Bloom-in plays on every
++    // orb spawn (-> the static orb state); burst is the "task done" flourish at
++    // the RUN QUEUE exit; fade is the quieter despawn for a queue-length cull or
++    // an I/O wake. Frames live on the BON1 (blue CPU FX) and BON2 (green I/O FX +
++    // blue sparks) sprites, PWAD-replaced in the project map.
++    S_DP_CPUTASK_BLOOM1,
++    S_DP_CPUTASK_BLOOM2,
++    S_DP_CPUTASK_BLOOM3,
++    S_DP_CPUTASK_BURST1,
++    S_DP_CPUTASK_BURST2,
++    S_DP_CPUTASK_FADE1,
++    S_DP_CPUTASK_FADE2,
++    S_DP_IOTASK_BLOOM1,
++    S_DP_IOTASK_BLOOM2,
++    S_DP_IOTASK_FADE1,
++    S_DP_IOTASK_FADE2,
++    S_DP_SPARK1,
++    S_DP_SPARK2,
+     NUMSTATES
+ } statenum_t;
+ 
+@@ -1298,6 +1318,9 @@
+     MT_MISC84,
+     MT_MISC85,
+     MT_MISC86,
++    MT_DP_CPUTASK,
++    MT_DP_IOTASK,
++    MT_DP_SPARK,
+     NUMMOBJTYPES
+ 
+ } mobjtype_t;

@@ -121,7 +121,3 @@ export const I_StartTic = () => {
     }
   }
 };
-
-export const I_Error = (message: string): never => {
-  throw new Error(message);
-};

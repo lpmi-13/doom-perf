@@ -1,0 +1,36 @@
+# Doom Perf engine patch: r_data.c
+#
+# Cumulative Doom Perf changes to r_data.c, consolidated from the original
+# per-feature patch series. Bundles (original patch -> feature):
+#   0009  allow-pwad-sprite-overrides
+#
+# Order-independent: this is the only Doom Perf patch that touches r_data.c.
+# Regenerate by diffing a clean tree against the staged build tree;
+# see scripts/build-doom-wasm.sh.
+
+--- a/r_data.c
++++ b/r_data.c
+@@ -603,17 +603,21 @@
+ void R_InitSpriteLumps (void)
+ {
+     int		i;
++    int		stock_sprite_lumps;
+     patch_t	*patch;
+ 	
+     firstspritelump = W_GetNumForName ("S_START") + 1;
+     lastspritelump = W_GetNumForName ("S_END") - 1;
+     
+-    numspritelumps = lastspritelump - firstspritelump + 1;
++    stock_sprite_lumps = lastspritelump - firstspritelump + 1;
++    // Doom Perf PWAD sign sprites replace IWAD names outside the sprite range.
++    // Reserve metadata slots for those appended replacement lumps too.
++    numspritelumps = numlumps - firstspritelump;
+     spritewidth = Z_Malloc (numspritelumps*4, PU_STATIC, 0);
+     spriteoffset = Z_Malloc (numspritelumps*4, PU_STATIC, 0);
+     spritetopoffset = Z_Malloc (numspritelumps*4, PU_STATIC, 0);
+ 	
+-    for (i=0 ; i< numspritelumps ; i++)
++    for (i=0 ; i< stock_sprite_lumps ; i++)
+     {
+ 	if (!(i&63))
+ 	    printf (".");

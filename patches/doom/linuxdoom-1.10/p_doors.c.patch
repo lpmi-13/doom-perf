@@ -1,8 +1,16 @@
-diff --git a/p_doors.c b/p_doors.c
-index b22dd15..19a8223 100644
+# Doom Perf engine patch: p_doors.c
+#
+# Cumulative Doom Perf changes to p_doors.c, consolidated from the original
+# per-feature patch series. Bundles (original patch -> feature):
+#   0006  unlock-all-doors
+#
+# Order-independent: this is the only Doom Perf patch that touches p_doors.c.
+# Regenerate by diffing a clean tree against the staged build tree;
+# see scripts/build-doom-wasm.sh.
+
 --- a/p_doors.c
 +++ b/p_doors.c
-@@ -215,47 +215,9 @@ EV_DoLockedDoor
+@@ -215,47 +215,9 @@
  	
      if (!p)
  	return 0;
@@ -52,7 +60,7 @@ index b22dd15..19a8223 100644
      return EV_DoDoor(line,type);
  }
  
-@@ -365,47 +327,19 @@ EV_VerticalDoor
+@@ -365,47 +327,19 @@
  
      //	Check for locks
      player = thing->player;

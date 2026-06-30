@@ -1,0 +1,286 @@
+# Doom Perf engine patch: m_menu.c
+#
+# Cumulative Doom Perf changes to m_menu.c, consolidated from the original
+# per-feature patch series. Bundles (original patch -> feature):
+#   0012  simplify-title-menus
+#   0014  sim-modes-and-level-select
+#   0020  disk-sim-modes
+#   0024  memory-sim-modes
+#   0026  network-sim-modes
+#   0036  automap-scenario-title
+#   0038  title-oo-load-pulse
+#   0039  trim-options-menu
+#
+# Order-independent: this is the only Doom Perf patch that touches m_menu.c.
+# Regenerate by diffing a clean tree against the staged build tree;
+# see scripts/build-doom-wasm.sh.
+
+--- a/m_menu.c
++++ b/m_menu.c
+@@ -230,6 +230,10 @@
+ void M_StopMessage(void);
+ void M_ClearMenus (void);
+ 
++// Doom Perf data-source selection ("level select").
++void M_ChooseMode(int choice);
++void M_DrawMode(void);
++
+ 
+ 
+ 
+@@ -240,22 +244,13 @@
+ {
+     newgame = 0,
+     options,
+-    loadgame,
+-    savegame,
+-    readthis,
+-    quitdoom,
+     main_end
+ } main_e;
+ 
+ menuitem_t MainMenu[]=
+ {
+     {1,"M_NGAME",M_NewGame,'n'},
+-    {1,"M_OPTION",M_Options,'o'},
+-    {1,"M_LOADG",M_LoadGame,'l'},
+-    {1,"M_SAVEG",M_SaveGame,'s'},
+-    // Another hickup with Special edition.
+-    {1,"M_RDTHIS",M_ReadThis,'r'},
+-    {1,"M_QUITG",M_QuitDOOM,'q'}
++    {1,"M_OPTION",M_Options,'o'}
+ };
+ 
+ menu_t  MainDef =
+@@ -268,6 +263,49 @@
+     0
+ };
+ 
++//
++// Doom Perf DATA-SOURCE ("LEVEL") SELECT
++// Picking an item sets doomperf_sim_mode (read by the CPU room renderer) and
++// starts the lab map. Item names are empty so M_Drawer skips patch lookups;
++// M_DrawMode paints the labels with the small font instead.
++//
++enum
++{
++    mode_live = 0,
++    mode_simutil,
++    mode_simsat,
++    mode_simdiskutil,
++    mode_simdisksat,
++    mode_simmemutil,
++    mode_simmemsat,
++    mode_simnetutil,
++    mode_simnetsat,
++    mode_end
++} mode_e;
++
++menuitem_t ModeMenu[]=
++{
++    {1,"",M_ChooseMode,'l'},
++    {1,"",M_ChooseMode,'u'},
++    {1,"",M_ChooseMode,'s'},
++    {1,"",M_ChooseMode,'d'},
++    {1,"",M_ChooseMode,'k'},
++    {1,"",M_ChooseMode,'m'},
++    {1,"",M_ChooseMode,'p'},
++    {1,"",M_ChooseMode,'n'},
++    {1,"",M_ChooseMode,'t'}
++};
++
++menu_t  ModeDef =
++{
++    mode_end,
++    &MainDef,
++    ModeMenu,
++    M_DrawMode,
++    60,80,
++    0
++};
++
+ 
+ //
+ // EPISODE SELECT
+@@ -338,11 +376,6 @@
+ //
+ enum
+ {
+-    endgame,
+-    messages,
+-    detail,
+-    scrnsize,
+-    option_empty1,
+     mousesens,
+     option_empty2,
+     soundvol,
+@@ -351,11 +384,6 @@
+ 
+ menuitem_t OptionsMenu[]=
+ {
+-    {1,"M_ENDGAM",	M_EndGame,'e'},
+-    {1,"M_MESSG",	M_ChangeMessages,'m'},
+-    {1,"M_DETAIL",	M_ChangeDetail,'g'},
+-    {2,"M_SCRNSZ",	M_SizeDisplay,'s'},
+-    {-1,"",0},
+     {2,"M_MSENS",	M_ChangeSensitivity,'m'},
+     {-1,"",0},
+     {1,"M_SVOL",	M_Sound,'s'}
+@@ -855,7 +883,10 @@
+ //
+ void M_DrawMainMenu(void)
+ {
++    DoomPerf_UpdateTitleLut();
++    doomperf_title_remap = 1;
+     V_DrawPatchDirect (94,2,0,W_CacheLumpName("M_DOOM",PU_CACHE));
++    doomperf_title_remap = 0;
+ }
+ 
+ 
+@@ -877,11 +908,92 @@
+ 	M_StartMessage(NEWGAME,NULL,false);
+ 	return;
+     }
+-	
+-    if ( gamemode == commercial )
+-	M_SetupNextMenu(&NewDef);
+-    else
+-	M_SetupNextMenu(&EpiDef);
++
++    M_SetupNextMenu(&ModeDef);
++}
++
++//
++// Doom Perf data-source / "level" selection.
++//
++// Doom Perf data-source labels, one per sim mode in mode_e order. The list is
++// paged (MODE_PER_PAGE at a time) so the menu font stays large however many
++// wings are present; the page shown follows the skull cursor (itemOn).
++static char* ModeLabels[] =
++{
++    "LIVE STATS",
++    "SIM: HIGH CPU UTILIZATION",
++    "SIM: HIGH CPU SATURATION",
++    "SIM: HIGH DISK UTILIZATION",
++    "SIM: HIGH DISK SATURATION",
++    "SIM: HIGH MEMORY UTILIZATION",
++    "SIM: HIGH MEMORY SATURATION",
++    "SIM: HIGH NETWORK UTILIZATION",
++    "SIM: HIGH NETWORK SATURATION"
++};
++
++//
++// Doom Perf: scenario title for the automap heads-up, derived from the active
++// data-source label (ModeLabels[doomperf_sim_mode]). The "SIM: " prefix is
++// dropped so the map reads as the condition it is showing ("HIGH CPU
++// UTILIZATION"); live telemetry stays "LIVE STATS". Reusing ModeLabels keeps
++// the scenario names in one place as wings are added.
++//
++char* M_DoomPerfModeTitle(int mode)
++{
++    char* label;
++
++    if (mode < 0 || mode >= mode_end)
++	mode = mode_live;
++    label = ModeLabels[mode];
++    if (!strncmp(label, "SIM: ", 5))
++	label += 5;
++    return label;
++}
++
++#define MODE_TITLE_Y  56
++#define MODE_FIRST_Y  80
++#define MODE_PER_PAGE 5
++
++void M_DrawMode(void)
++{
++    int   page;
++    int   pages;
++    int   start;
++    int   stop;
++    int   i;
++    char  hint[40];
++
++    pages = (mode_end + MODE_PER_PAGE - 1) / MODE_PER_PAGE;
++    page  = itemOn / MODE_PER_PAGE;
++    start = page * MODE_PER_PAGE;
++    stop  = start + MODE_PER_PAGE;
++    if (stop > mode_end)
++        stop = mode_end;
++
++    // Slide ModeDef.y so the shared skull cursor (M_Drawer draws it at
++    // ModeDef.y + itemOn*LINEHEIGHT) lands on the visible slot for itemOn even
++    // though only the current page is painted, starting at MODE_FIRST_Y.
++    ModeDef.y = MODE_FIRST_Y - start * LINEHEIGHT;
++
++    M_WriteText(60, MODE_TITLE_Y, "SELECT DATA SOURCE");
++    for (i = start; i < stop; i++)
++        M_WriteText(ModeDef.x, MODE_FIRST_Y + (i - start) * LINEHEIGHT, ModeLabels[i]);
++
++    if (pages > 1)
++    {
++        sprintf(hint, "PAGE %d/%d - UP/DOWN WRAPS", page + 1, pages);
++        M_WriteText(ModeDef.x, MODE_FIRST_Y + MODE_PER_PAGE * LINEHEIGHT + 4, hint);
++    }
++}
++
++void M_ChooseMode(int choice)
++{
++    // 0 = live telemetry; 1/2 = simulated high CPU utilization/saturation
++    // (read by the CPU room renderer); 3/4 disk, 5/6 memory, 7/8 network
++    // utilization/saturation (read by the browser's USE terminal scenarios).
++    doomperf_sim_mode = choice;
++    G_DeferedInitNew(hurtme,1,1);
++    M_ClearMenus ();
+ }
+ 
+ 
+@@ -945,24 +1057,14 @@
+ // M_Options
+ //
+ char    detailNames[2][9]	= {"M_GDHIGH","M_GDLOW"};
+-char	msgNames[2][9]		= {"M_MSGOFF","M_MSGON"};
+ 
+ 
+ void M_DrawOptions(void)
+ {
+     V_DrawPatchDirect (108,15,0,W_CacheLumpName("M_OPTTTL",PU_CACHE));
+-	
+-    V_DrawPatchDirect (OptionsDef.x + 175,OptionsDef.y+LINEHEIGHT*detail,0,
+-		       W_CacheLumpName(detailNames[detailLevel],PU_CACHE));
+-
+-    V_DrawPatchDirect (OptionsDef.x + 120,OptionsDef.y+LINEHEIGHT*messages,0,
+-		       W_CacheLumpName(msgNames[showMessages],PU_CACHE));
+ 
+     M_DrawThermo(OptionsDef.x,OptionsDef.y+LINEHEIGHT*(mousesens+1),
+ 		 10,mouseSensitivity);
+-	
+-    M_DrawThermo(OptionsDef.x,OptionsDef.y+LINEHEIGHT*(scrnsize+1),
+-		 9,screenSize);
+ }
+ 
+ void M_Options(int choice)
+@@ -1579,10 +1681,6 @@
+ 	    M_EndGame(0);
+ 	    return true;
+ 				
+-	  case KEY_F8:            // Toggle messages
+-	    M_ChangeMessages(0);
+-	    S_StartSound(NULL,sfx_swtchn);
+-	    return true;
+ 				
+ 	  case KEY_F9:            // Quickload
+ 	    S_StartSound(NULL,sfx_swtchn);
+@@ -1864,12 +1962,6 @@
+     switch ( gamemode )
+     {
+       case commercial:
+-	// This is used because DOOM 2 had only one HELP
+-        //  page. I use CREDIT as second page now, but
+-	//  kept this hack for educational purposes.
+-	MainMenu[readthis] = MainMenu[quitdoom];
+-	MainDef.numitems--;
+-	MainDef.y += 8;
+ 	NewDef.prevMenu = &MainDef;
+ 	ReadDef1.routine = M_DrawReadThis1;
+ 	ReadDef1.x = 330;

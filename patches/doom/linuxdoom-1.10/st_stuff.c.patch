@@ -1,0 +1,28 @@
+# Doom Perf engine patch: st_stuff.c
+#
+# Cumulative Doom Perf changes to st_stuff.c, consolidated from the original
+# per-feature patch series. Bundles (original patch -> feature):
+#   0002  hide-status-bar-hud
+#
+# Order-independent: this is the only Doom Perf patch that touches st_stuff.c.
+# Regenerate by diffing a clean tree against the staged build tree;
+# see scripts/build-doom-wasm.sh.
+
+--- a/st_stuff.c
++++ b/st_stuff.c
+@@ -1114,11 +1114,10 @@
+     // Do red-/gold-shifts from damage/items
+     ST_doPaletteStuff();
+ 
+-    // If just after ST_Start(), refresh all
+-    if (st_firsttime) ST_doRefresh();
+-    // Otherwise, update as little as possible
+-    else ST_diffDraw();
+-
++    // Doom Perf: suppress the status bar HUD entirely (health, armor,
++    //  ammo, face, keys, arms). The view is rendered full screen so no
++    //  status bar region needs repainting. Palette shifts above are kept.
++    return;
+ }
+ 
+ void ST_loadGraphics(void)

@@ -1,0 +1,58 @@
+# Doom Perf engine patch: r_plane.c
+#
+# Cumulative Doom Perf changes to r_plane.c, consolidated from the original
+# per-feature patch series. Bundles (original patch -> feature):
+#   0007  cpu-core-floor-display
+#   0023  disk-queue-channel
+#   0035  disk-platter-spindle
+#
+# Order-independent: this is the only Doom Perf patch that touches r_plane.c.
+# Regenerate by diffing a clean tree against the staged build tree;
+# see scripts/build-doom-wasm.sh.
+
+--- a/r_plane.c
++++ b/r_plane.c
+@@ -44,6 +44,16 @@
+ planefunction_t		floorfunc;
+ planefunction_t		ceilingfunc;
+ 
++// Doom Perf: build-doomperf-map.mjs reserves these light levels for the CPU
++// instrument floors in the CPU room.
++#define DOOMPERF_CPU_CORE_DISPLAY_LIGHT		160
++#define DOOMPERF_CPU_RUN_QUEUE_DISPLAY_LIGHT	144
++// Storage (disk) wing: the media-pit queue channel's floor (reserved sentinel).
++#define DOOMPERF_DISK_QUEUE_DISPLAY_LIGHT	134
++// Storage (disk) wing: the summit platter floor (rotating utilization tracks).
++#define DOOMPERF_DISK_PLATTER_DISPLAY_LIGHT	130
++extern int doomperf_cpu_floor_display;
++
+ //
+ // opening
+ //
+@@ -420,6 +430,19 @@
+ 	}
+ 	
+ 	// regular flat
++	if (pl->height < viewz)
++	{
++	    if (pl->lightlevel == DOOMPERF_CPU_CORE_DISPLAY_LIGHT)
++		doomperf_cpu_floor_display = 1;
++	    else if (pl->lightlevel == DOOMPERF_CPU_RUN_QUEUE_DISPLAY_LIGHT)
++		doomperf_cpu_floor_display = 2;
++	    else if (pl->lightlevel == DOOMPERF_DISK_QUEUE_DISPLAY_LIGHT)
++		doomperf_cpu_floor_display = 3;
++	    else if (pl->lightlevel == DOOMPERF_DISK_PLATTER_DISPLAY_LIGHT)
++		doomperf_cpu_floor_display = 4;
++	    else
++		doomperf_cpu_floor_display = 0;
++	}
+ 	ds_source = W_CacheLumpNum(firstflat +
+ 				   flattranslation[pl->picnum],
+ 				   PU_STATIC);
+@@ -449,5 +472,6 @@
+ 	}
+ 	
+ 	Z_ChangeTag (ds_source, PU_CACHE);
++	doomperf_cpu_floor_display = 0;
+     }
+ }

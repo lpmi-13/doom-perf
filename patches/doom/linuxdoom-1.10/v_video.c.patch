@@ -1,3 +1,13 @@
+# Doom Perf engine patch: v_video.c
+#
+# Cumulative Doom Perf changes to v_video.c, consolidated from the original
+# per-feature patch series. Bundles (original patch -> feature):
+#   0038  title-oo-load-pulse
+#
+# Order-independent: this is the only Doom Perf patch that touches v_video.c.
+# Regenerate by diffing a clean tree against the staged build tree;
+# see scripts/build-doom-wasm.sh.
+
 --- a/v_video.c
 +++ b/v_video.c
 @@ -253,7 +253,7 @@
@@ -27,29 +37,3 @@
  		dest += SCREENWIDTH/4; 
  	    } 
  	    column = (column_t *)(  (byte *)column + column->length 
---- a/d_main.c
-+++ b/d_main.c
-@@ -457,7 +457,10 @@
- //
- void D_PageDrawer (void)
- {
-+    int titleremap = pagename && !strcmp(pagename, "TITLEPIC");
-+    if (titleremap) { DoomPerf_UpdateTitleLut(); doomperf_title_remap = 1; }
-     V_DrawPatch (0,0, 0, W_CacheLumpName(pagename, PU_CACHE));
-+    doomperf_title_remap = 0;
- }
- 
- 
---- a/m_menu.c
-+++ b/m_menu.c
-@@ -891,7 +891,10 @@
- //
- void M_DrawMainMenu(void)
- {
-+    DoomPerf_UpdateTitleLut();
-+    doomperf_title_remap = 1;
-     V_DrawPatchDirect (94,2,0,W_CacheLumpName("M_DOOM",PU_CACHE));
-+    doomperf_title_remap = 0;
- }
- 
- 

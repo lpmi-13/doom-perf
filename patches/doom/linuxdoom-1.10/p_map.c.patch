@@ -1,8 +1,16 @@
-diff --git a/p_map.c b/p_map.c
-index aba15d8..5f39607 100644
+# Doom Perf engine patch: p_map.c
+#
+# Cumulative Doom Perf changes to p_map.c, consolidated from the original
+# per-feature patch series. Bundles (original patch -> feature):
+#   0019  remove-use-grunt
+#
+# Order-independent: this is the only Doom Perf patch that touches p_map.c.
+# Regenerate by diffing a clean tree against the staged build tree;
+# see scripts/build-doom-wasm.sh.
+
 --- a/p_map.c
 +++ b/p_map.c
-@@ -1101,10 +1101,11 @@ boolean	PTR_UseTraverse (intercept_t* in)
+@@ -1101,10 +1101,11 @@
  	P_LineOpening (in->d.line);
  	if (openrange <= 0)
  	{

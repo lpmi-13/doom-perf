@@ -1,8 +1,18 @@
-diff --git a/r_main.c b/r_main.c
-index 96d702b..7a10c15 100644
+# Doom Perf engine patch: r_main.c
+#
+# Cumulative Doom Perf changes to r_main.c, consolidated from the original
+# per-feature patch series. Bundles (original patch -> feature):
+#   0002  hide-status-bar-hud
+#   0030  camera-viewpoint-interpolation
+#   0034  flatten-light-diminishing
+#
+# Order-independent: this is the only Doom Perf patch that touches r_main.c.
+# Regenerate by diffing a clean tree against the staged build tree;
+# see scripts/build-doom-wasm.sh.
+
 --- a/r_main.c
 +++ b/r_main.c
-@@ -33,6 +33,7 @@ static const char rcsid[] = "$Id: r_main.c,v 1.5 1997/02/03 22:45:12 b1 Exp $";
+@@ -33,6 +33,7 @@
  
  
  #include "doomdef.h"
@@ -10,7 +20,46 @@ index 96d702b..7a10c15 100644
  #include "d_net.h"
  
  #include "m_bbox.h"
-@@ -831,18 +832,90 @@ R_PointInSubsector
+@@ -623,7 +624,12 @@
+     //  for each level / distance combination.
+     for (i=0 ; i< LIGHTLEVELS ; i++)
+     {
+-	startmap = ((LIGHTLEVELS-1-i)*2)*NUMCOLORMAPS/LIGHTLEVELS;
++	// Doom Perf: halve the per-light-level distance-darkening floor (*2 -> *1).
++	// startmap is the colormap a surface fades toward at range; with *2 a dim
++	// sector (e.g. light 168) bottomed out near colormap 20 (almost black) far
++	// away, so high-frequency walls smeared into mush. *1 keeps far/dim walls
++	// readable while bright sectors (startmap 0) are unchanged.
++	startmap = ((LIGHTLEVELS-1-i)*1)*NUMCOLORMAPS/LIGHTLEVELS;
+ 	for (j=0 ; j<MAXLIGHTZ ; j++)
+ 	{
+ 	    scale = FixedDiv ((SCREENWIDTH/2*FRACUNIT), (j+1)<<LIGHTZSHIFT);
+@@ -679,6 +685,10 @@
+ 
+     setsizeneeded = false;
+ 
++    // Doom Perf: always render the full 320x200 view so no status bar
++    //  region remains. The HUD is suppressed in ST_Drawer.
++    setblocks = 11;
++
+     if (setblocks == 11)
+     {
+ 	scaledviewwidth = SCREENWIDTH;
+@@ -744,7 +754,12 @@
+     //  for each level / scale combination.
+     for (i=0 ; i< LIGHTLEVELS ; i++)
+     {
+-	startmap = ((LIGHTLEVELS-1-i)*2)*NUMCOLORMAPS/LIGHTLEVELS;
++	// Doom Perf: halve the per-light-level distance-darkening floor (*2 -> *1).
++	// startmap is the colormap a surface fades toward at range; with *2 a dim
++	// sector (e.g. light 168) bottomed out near colormap 20 (almost black) far
++	// away, so high-frequency walls smeared into mush. *1 keeps far/dim walls
++	// readable while bright sectors (startmap 0) are unchanged.
++	startmap = ((LIGHTLEVELS-1-i)*1)*NUMCOLORMAPS/LIGHTLEVELS;
+ 	for (j=0 ; j<MAXLIGHTSCALE ; j++)
+ 	{
+ 	    level = startmap - j*SCREENWIDTH/(viewwidth<<detailshift)/DISTMAP;
+@@ -827,18 +842,90 @@
  //
  // R_SetupFrame
  //
