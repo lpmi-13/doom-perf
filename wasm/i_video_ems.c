@@ -35,6 +35,8 @@ int doomperf_memory_util = 0;
 int doomperf_memory_saturation = 0;
 int doomperf_memory_errors = 0;
 int doomperf_memory_cache = 0;
+int doomperf_memory_proc_count = 0;
+int doomperf_memory_proc_oom[DOOMPERF_MEMORY_PROC_SLOTS];
 int doomperf_sim_mode = 0;
 
 // Doom Perf: title wordmark "oo" live-load pulse (see doom_emscripten_compat.h).
@@ -215,6 +217,30 @@ EMSCRIPTEN_KEEPALIVE
 void DoomPerf_SetMemoryCacheFraction(int permille)
 {
     doomperf_memory_cache = DoomPerf_ClampPermille(permille);
+}
+
+// How many of the RSS-reliquary barrel slots carry a live process this frame
+// (the browser pushes the top-N from `ps --sort=-rss`, N<=DOOMPERF_MEMORY_PROC_SLOTS).
+// Slots past the count are dimmed to their resting glow.
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_SetMemoryProcessCount(int count)
+{
+    if (count < 0)
+        count = 0;
+    if (count > DOOMPERF_MEMORY_PROC_SLOTS)
+        count = DOOMPERF_MEMORY_PROC_SLOTS;
+    doomperf_memory_proc_count = count;
+}
+
+// OOM badness (/proc/<pid>/oom_score in permille) for barrel slot `index`, slot
+// 0 being the largest resident set. Read by DoomPerf_UpdateMemoryWing, which
+// maps it to the barrel's pedestal light so a near-OOM process glows hot.
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_SetMemoryProcessOom(int index, int permille)
+{
+    if (index < 0 || index >= DOOMPERF_MEMORY_PROC_SLOTS)
+        return;
+    doomperf_memory_proc_oom[index] = DoomPerf_ClampPermille(permille);
 }
 
 static int DoomPerf_EffectiveCoreCountValue(void)

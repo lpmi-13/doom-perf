@@ -40,6 +40,7 @@ const hashOf = (paths) => {
 // sentinel under --watch (esbuild's injected define is fixed for the session,
 // so the bundle expands "dev" to a fresh runtime timestamp instead).
 const wadVersion = watch ? "dev" : hashOf(["public/maps/doomperf-lab.wad"]);
+const iwadVersion = watch ? "dev" : hashOf(["public/wads/freedoom1.wad"]);
 const engineVersion = watch ? "dev" : hashOf(["public/engine/doom.js", "public/engine/doom.wasm"]);
 
 const htmlPath = "public/game/index.html";
@@ -63,7 +64,7 @@ const stampPlugin = {
       if (result.errors.length > 0) return;
       const bundleVersion = stampBundleVersion();
       if (bundleVersion) {
-        console.log(`[build-web] bundle=${bundleVersion} wad=${wadVersion} engine=${engineVersion}`);
+        console.log(`[build-web] bundle=${bundleVersion} wad=${wadVersion} iwad=${iwadVersion} engine=${engineVersion}`);
       }
     });
   },
@@ -76,6 +77,7 @@ const options = {
   outdir: "public/dist",
   define: {
     __WAD_VERSION__: JSON.stringify(wadVersion),
+    __IWAD_VERSION__: JSON.stringify(iwadVersion),
     __ENGINE_VERSION__: JSON.stringify(engineVersion),
   },
   plugins: [stampPlugin],

@@ -72,6 +72,18 @@ extern int doomperf_memory_errors;
 // `free -m` / /proc/meminfo, so it is a true Utilization-composition signal.
 extern int doomperf_memory_cache;
 
+// Doom Perf: the memory wing's RSS "reliquary" — the top processes from
+// `ps -eo pid,rss,comm --sort=-rss` stand as barrels in front of the RSS
+// terminal, slot 0 being the largest resident set. Each barrel glows with its
+// kernel OOM badness (/proc/<pid>/oom_score, here in permille 0..1000): the
+// closer a process is to being the OOM killer's next victim, the brighter it
+// burns. doomperf_memory_proc_count is how many of the slots carry a live
+// process. Set from the browser telemetry stream; read by the barrel-glow pass
+// in p_tick.c (DoomPerf_UpdateMemoryWing).
+#define DOOMPERF_MEMORY_PROC_SLOTS 5
+extern int doomperf_memory_proc_count;
+extern int doomperf_memory_proc_oom[DOOMPERF_MEMORY_PROC_SLOTS];
+
 // Doom Perf data-source mode, chosen on the level-select menu:
 //   0 = live browser telemetry; 1/2 = simulated high CPU utilization/saturation
 //   (CPU room renderer); 3/4 = simulated high disk utilization/saturation

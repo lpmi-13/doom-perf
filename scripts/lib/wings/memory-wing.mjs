@@ -201,6 +201,28 @@ const pageFlats = [
   buildSlotFlat(pageFlatNames.free), // freed/empty slot
 ];
 
+// Pad a reliquary barrel stands on: a dark steel plate with a bevelled rim and
+// an amber hazard frame around the barrel's footprint, so the row reads as a
+// line of marked plinths even before the engine's per-pad glow kicks in. The
+// glow itself is the sector light (driven by p_tick.c), not baked into the flat.
+const barrelPadFlatName = wingName("memory", "BPAD");
+const buildBarrelPadFlat = () => {
+  const size = 64;
+  const px = new Uint8Array(size * size).fill(7); // dark steel base
+  const rect = (x1, y1, x2, y2, color) => flatRect(px, size, x1, y1, x2, y2, color);
+  rect(0, 0, size, 3, 96); // lit top rim
+  rect(0, 0, 3, size, 96); // lit left rim
+  rect(0, size - 3, size, size, 0); // shadow bottom rim
+  rect(size - 3, 0, size, size, 0); // shadow right rim
+  rect(12, 12, size - 12, size - 12, 5); // inner plate
+  // Amber hazard frame around the barrel footprint.
+  rect(12, 12, size - 12, 14, 215);
+  rect(12, size - 14, size - 12, size - 12, 215);
+  rect(12, 12, 14, size - 12, 215);
+  rect(size - 14, 12, size - 12, size - 12, 215);
+  return lump(barrelPadFlatName, Buffer.from(px));
+};
+
 // Bookshelf wall texture for the reading hall. Decor stays neutral per the lab's
 // palette discipline (bright green/cyan is reserved for the metric books), so the
 // spines use muted warm/grey tones. 64x128 tiles along the hall walls; the three
@@ -273,6 +295,12 @@ const memoryTags = {
   psiSome: tagBase + 49,
   psiFull: tagBase + 50,
 };
+// RSS "reliquary" barrels: the top processes from `ps --sort=-rss`, one barrel
+// per pad, each pad an independently-lit sector so the engine can glow a barrel
+// brighter the closer its process is to an OOM kill (p_tick.c, by tag). Tags
+// 551..555 sit inside the memory wing's reserved [500,559] block.
+const barrelCount = 5;
+const barrelTag = (index) => tagBase + 51 + index;
 
 const build = (ctx) => {
   const {
@@ -415,8 +443,25 @@ const build = (ctx) => {
     labelSide: "left",
     labelTexture: memoryWallSigns.pressure.texture,
   });
-  // Terminal plaza at the far (west) end of the arm, with the RSS screen.
-  areaRect(direction, "n-end-walk", { u1: -768, v1: 1024, u2: -704, v2: 1344 }, { ...dimWalkway, kind: "memory-walk" });
+  // Terminal plaza at the far (west) end of the arm, with the RSS screen. The
+  // plaza walkway is tiled into the RSS RELIQUARY: five pads running north->south
+  // (slot 0, the largest resident set, nearest the entrance), each carrying a
+  // barrel that stands for a row of `ps -eo pid,rss,comm --sort=-rss`. Each pad
+  // is its own sector (tag 551..555) so the engine lights it independently —
+  // the closer a process is to being OOM-killed, the brighter its barrel glows.
+  // The pads are flush with the walkway, so the player still strolls the row up
+  // to the RSS terminal on the west wall.
+  for (let slot = 0; slot < barrelCount; slot += 1) {
+    const v1 = 1024 + slot * 64;
+    areaRect(direction, `rss-barrel-pad-${slot}`, { u1: -768, v1, u2: -704, v2: v1 + 64 }, {
+      ...dimWalkway,
+      kind: "memory-walk",
+      floorFlat: barrelPadFlatName,
+      light: 176,
+      tag: barrelTag(slot),
+    });
+    addAreaThing(direction, 2035, -736, v1 + 32); // explosive barrel = a heavy process
+  }
   areaRect(direction, "rss-sign-recess", { u1: mem.rss.u, v1: mem.rss.v1, u2: -768, v2: mem.rss.v2 }, {
     ...bankWall,
     kind: "memory-sign",
@@ -542,6 +587,7 @@ const textures = [
 const flats = [
   ...memoryInscription.flats,
   ...pageFlats,
+  buildBarrelPadFlat(),
 ];
 
 // Memory is fixed to the east cardinal wing. The terminal screen sits on the

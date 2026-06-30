@@ -42,7 +42,9 @@ export async function bootstrapEngine({
   args = [],
   onStatus,
 }: EngineBootstrapOptions): Promise<void> {
-  const wadName = wadUrl.split("/").pop() ?? "doom.wad";
+  // Derive the in-FS filename from the URL, dropping any "?v=" cache-bust query
+  // so it stays a clean ".wad" name (IdentifyVersion keys on doom1.wad etc.).
+  const wadName = (wadUrl.split("/").pop() ?? "doom.wad").split("?")[0];
   const wadNameLower = wadName.toLowerCase();
 
   // Kick every download off at once instead of one-after-another: the engine

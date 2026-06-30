@@ -163,7 +163,8 @@ const readMemory = (payload: Record<string, unknown>): MemoryTelemetry => {
         if (pid === undefined || rssBytes === undefined || typeof command !== "string") {
           return [];
         }
-        return [{ pid: Math.trunc(pid), rssBytes, command }];
+        const oomScore = process ? numberValue(process.oomScore) : undefined;
+        return [{ pid: Math.trunc(pid), rssBytes, command, oomScore }];
       })
     : undefined;
   return {

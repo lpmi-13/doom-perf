@@ -43,10 +43,12 @@ export const reserved = {
     spriteReplacements: ["PINSA0", "SOULA0", "BON1A0", "BON1B0", "BON1C0", "BON1D0", "BON2A0", "BON2B0", "BON2C0", "BON2D0"],
   },
   memory: {
-    sectorTags: [500, 559],
+    sectorTags: [500, 559], // page cells 500-544, cache/swap/oom/psi 545-550, RSS-reliquary barrel pads 551-555
     lineTags: [560, 599],
     lights: [136, 140], // reserved sentinels (unused until live page-bank display)
-    namePrefix: "DPM", // DPMEM (label) + DPM... for banks/cache/swap/oom art
+    namePrefix: "DPM", // DPMEM (label) + DPM... for banks/cache/swap/oom/barrel-pad art
+    // The RSS reliquary places vanilla explosive barrels (thing 2035, IWAD sprite
+    // BAR1) — not a sprite replacement, so nothing is reserved here for them.
     spriteReplacements: [],
   },
   storage: {

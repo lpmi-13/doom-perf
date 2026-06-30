@@ -87,6 +87,10 @@ type rssProcessTelemetry struct {
 	PID      int    `json:"pid"`
 	RSSBytes uint64 `json:"rssBytes"`
 	Command  string `json:"command"`
+	// OOMScore is the kernel's current OOM "badness" for the process
+	// (/proc/<pid>/oom_score, ~0..1000). Higher means the OOM killer is more
+	// likely to pick it next, so it doubles as a "closeness to being killed".
+	OOMScore int `json:"oomScore"`
 }
 
 type pressureLineTelemetry struct {
@@ -588,6 +592,7 @@ func readTopRSSProcesses(limit int) []rssProcessTelemetry {
 			PID:      pid,
 			RSSBytes: rssKB * 1024,
 			Command:  command,
+			OOMScore: readProcOomScore(pid),
 		})
 	}
 
@@ -624,6 +629,22 @@ func readProcStatus(pid int) (rssKB uint64, name string) {
 		}
 	}
 	return rssKB, name
+}
+
+// readProcOomScore reads the kernel's current OOM badness for a process from
+// /proc/<pid>/oom_score (a single integer, ~0..1000). It is the heuristic the
+// OOM killer uses to choose a victim, so a rising value means the process is
+// closer to being killed. Missing/unreadable (e.g. the process exited) -> 0.
+func readProcOomScore(pid int) int {
+	content, err := os.ReadFile(fmt.Sprintf("/proc/%d/oom_score", pid))
+	if err != nil {
+		return 0
+	}
+	score, err := strconv.Atoi(strings.TrimSpace(string(content)))
+	if err != nil || score < 0 {
+		return 0
+	}
+	return score
 }
 
 func readProcCommand(pid int) string {

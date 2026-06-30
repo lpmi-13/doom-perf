@@ -65,6 +65,10 @@ export interface MemoryProcessTelemetry {
   pid: number;
   rssBytes: number;
   command: string;
+  // Kernel OOM "badness" (/proc/<pid>/oom_score, ~0..1000): how likely this
+  // process is to be the OOM killer's next victim. Drives the memory wing's
+  // barrel glow (brighter = closer to being OOM-killed).
+  oomScore?: number;
 }
 
 export interface StorageTelemetry extends ResourceTelemetry {

@@ -222,6 +222,18 @@ const formatMemoryRss = (telemetry: TelemetrySnapshot): string => {
   lines.push("");
   lines.push("RSS is resident RAM. Shared pages can be counted in more than one process.");
   lines.push("For proportional memory, use smem or /proc/<pid>/smaps_rollup.");
+  if (rows.length > 0) {
+    // OOM "badness" per process, the value the in-world barrels glow with: a
+    // brighter barrel is a process closer to being the OOM killer's next pick.
+    // oom_score isn't a `ps -eo` field, so it is read straight from /proc.
+    lines.push("");
+    lines.push("$ for p in <pids>; do cat /proc/$p/oom_score; done   # OOM killer badness");
+    lines.push(padStart("PID", 8) + padStart("OOM", 8) + "   0 .. 1000 (higher = killed sooner)");
+    rows.forEach(({ pid, oomScore }) => {
+      const score = Math.max(0, Math.round(oomScore ?? 0));
+      lines.push(padStart(String(pid), 8) + padStart(String(score), 8) + `   ${bar(score / 1000)}`);
+    });
+  }
   return lines.join("\n");
 };
 

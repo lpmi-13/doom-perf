@@ -14,6 +14,7 @@ import { playAssetSound, preloadAssetSound } from "./asset_sounds";
 // which we expand to a runtime timestamp so dev never serves a stale copy.
 declare const __WAD_VERSION__: string;
 declare const __ENGINE_VERSION__: string;
+declare const __IWAD_VERSION__: string;
 const assetVersion = (version: string): string => (version === "dev" ? String(Date.now()) : version);
 
 // The prebuilt engine calls emscripten_set_window_title at startup, which sets
@@ -160,11 +161,12 @@ const attachAudioUnlock = () => {
 
 const wadParam = new URLSearchParams(window.location.search).get("wad")?.toLowerCase();
 const wadMap: Record<string, string> = {
-  doom1: "/wads/freedoom1.wad",
   freedoom1: "/wads/freedoom1.wad",
-  doom2: "/wads/Doom2.wad",
 };
-const wadUrl = wadParam && wadMap[wadParam] ? wadMap[wadParam] : "/wads/freedoom1.wad";
+// Content-hash the IWAD like the map WAD so a slimmed/updated freedoom1.wad is
+// fetched fresh instead of served from a stale browser cache.
+const iwadPath = wadParam && wadMap[wadParam] ? wadMap[wadParam] : "/wads/freedoom1.wad";
+const wadUrl = `${iwadPath}?v=${assetVersion(__IWAD_VERSION__)}`;
 const telemetrySource = resolveTelemetrySource();
 const doomPerfMapWad = {
   url: `/maps/doomperf-lab.wad?v=${assetVersion(__WAD_VERSION__)}`,
@@ -208,6 +210,8 @@ type DoomPerfEngine = {
   _DoomPerf_SetMemorySaturation?: (permille: number) => void;
   _DoomPerf_SetMemoryErrors?: (permille: number) => void;
   _DoomPerf_SetMemoryCacheFraction?: (permille: number) => void;
+  _DoomPerf_SetMemoryProcessCount?: (count: number) => void;
+  _DoomPerf_SetMemoryProcessOom?: (index: number, permille: number) => void;
   _DoomPerf_GetSimMode?: () => number;
   _DoomPerf_GetEffectiveCpuCoreCount?: () => number;
   _DoomPerf_GetEffectiveCpuCore?: (id: number) => number;
@@ -265,6 +269,22 @@ const pushTelemetryToEngine = (engine: DoomPerfEngine | undefined, telemetry: Te
     ? ((cachedBytes ?? 0) + (buffersBytes ?? 0)) / totalBytes
     : 0;
   engine?._DoomPerf_SetMemoryCacheFraction?.(Math.round(clampRatio(cacheFraction) * 1000));
+  // RSS "reliquary": the top processes from `ps -eo pid,rss,comm --sort=-rss`
+  // stand as barrels in front of the RSS terminal, slot 0 being the largest
+  // resident set. Push each one's kernel OOM badness (/proc/<pid>/oom_score) so
+  // the engine can glow a barrel brighter the closer that process is to being
+  // the OOM killer's next victim. Live values only — the memory sims (modes 5/6)
+  // synthesize their own glow engine-side.
+  const topRss = telemetry.memory.topRss ?? [];
+  const barrelSlots = 5;
+  engine?._DoomPerf_SetMemoryProcessCount?.(Math.min(topRss.length, barrelSlots));
+  for (let slot = 0; slot < barrelSlots; slot += 1) {
+    const proc = topRss[slot];
+    engine?._DoomPerf_SetMemoryProcessOom?.(
+      slot,
+      proc ? Math.round(clampRatio((proc.oomScore ?? 0) / 1000) * 1000) : 0
+    );
+  }
 };
 
 const scenarioTelemetry = (
@@ -352,18 +372,21 @@ const scenarioTelemetry = (
         pressureFullTotal: memorySaturated ? 144000 + Math.round(2600 * memoryWave) : 0,
         oomKills: 0,
         oomKillsPerSecond: 0,
+        // oomScore mirrors the engine's barrel-glow synthesis for modes 5/6
+        // (DoomPerf_EffectiveMemoryProcOom), so the terminal's OOM readout and
+        // the in-world barrels tell the same story in the demo.
         topRss: memorySaturated
           ? [
-              { pid: 4210, rssBytes: 11264 * 1024 ** 2, command: "mem-pressure-worker" },
-              { pid: 4217, rssBytes: 1870 * 1024 ** 2, command: "allocator-churn" },
-              { pid: 2891, rssBytes: 780 * 1024 ** 2, command: "doomperf" },
-              { pid: 1773, rssBytes: 460 * 1024 ** 2, command: "browser" },
+              { pid: 4210, rssBytes: 11264 * 1024 ** 2, command: "mem-pressure-worker", oomScore: 950 },
+              { pid: 4217, rssBytes: 1870 * 1024 ** 2, command: "allocator-churn", oomScore: 880 },
+              { pid: 2891, rssBytes: 780 * 1024 ** 2, command: "doomperf", oomScore: 800 },
+              { pid: 1773, rssBytes: 460 * 1024 ** 2, command: "browser", oomScore: 720 },
             ]
           : [
-              { pid: 4210, rssBytes: 9728 * 1024 ** 2, command: "mem-resident-worker" },
-              { pid: 2891, rssBytes: 820 * 1024 ** 2, command: "doomperf" },
-              { pid: 1773, rssBytes: 440 * 1024 ** 2, command: "browser" },
-              { pid: 914, rssBytes: 180 * 1024 ** 2, command: "journald" },
+              { pid: 4210, rssBytes: 9728 * 1024 ** 2, command: "mem-resident-worker", oomScore: 520 },
+              { pid: 2891, rssBytes: 820 * 1024 ** 2, command: "doomperf", oomScore: 430 },
+              { pid: 1773, rssBytes: 440 * 1024 ** 2, command: "browser", oomScore: 360 },
+              { pid: 914, rssBytes: 180 * 1024 ** 2, command: "journald", oomScore: 300 },
             ],
       }
     : {
@@ -392,9 +415,9 @@ const scenarioTelemetry = (
         oomKills: 0,
         oomKillsPerSecond: 0,
         topRss: [
-          { pid: 2891, rssBytes: 520 * 1024 ** 2, command: "doomperf" },
-          { pid: 1773, rssBytes: 310 * 1024 ** 2, command: "browser" },
-          { pid: 914, rssBytes: 140 * 1024 ** 2, command: "journald" },
+          { pid: 2891, rssBytes: 520 * 1024 ** 2, command: "doomperf", oomScore: 180 },
+          { pid: 1773, rssBytes: 310 * 1024 ** 2, command: "browser", oomScore: 120 },
+          { pid: 914, rssBytes: 140 * 1024 ** 2, command: "journald", oomScore: 70 },
         ],
       };
   const ioBeat = 1 + Math.abs(Math.sin(now / 1300));

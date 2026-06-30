@@ -8,6 +8,7 @@
 #   0025  memory-page-bank
 #   0027  disk-metrics-dashboard
 #   0037  orb-spawn-despawn-polish
+#   (+)   memory-rss-barrels (RSS reliquary: per-process OOM-glow barrel pads)
 #
 # Order-independent: this is the only Doom Perf patch that touches p_tick.c.
 # Regenerate by diffing a clean tree against the staged build tree;
@@ -21,7 +22,7 @@
  //-----------------------------------------------------------------------------
  //
  // $Id:$
-@@ -30,9 +30,819 @@
+@@ -30,9 +30,896 @@
  
  #include "doomstat.h"
  
@@ -239,6 +240,16 @@
 +#define DOOMPERF_MEMORY_SWAP_HIGH	(12 * FRACUNIT)
 +#define DOOMPERF_MEMORY_PSI_LOW		(20 * FRACUNIT)
 +#define DOOMPERF_MEMORY_PSI_HIGH	(52 * FRACUNIT)
++// RSS "reliquary" barrels (sector tags 551..555): one barrel per top-RSS
++// process (the rows of `ps -eo pid,rss,comm --sort=-rss`), each standing on its
++// own pad sector in front of the RSS terminal. We light each pad by that
++// process's OOM badness so a barrel glows brighter the closer its process is to
++// being the OOM killer's next victim. The light stays in [168,248] (capped 252
++// at the flicker peak), clear of the floor-display sentinels 144/160.
++#define DOOMPERF_MEMORY_BARREL_TAG_BASE	551
++#define DOOMPERF_MEMORY_BARREL_COUNT	5
++#define DOOMPERF_MEMORY_BARREL_LIGHT_LO	168
++#define DOOMPERF_MEMORY_BARREL_LIGHT_HI	248
 +
 +static int DoomPerf_EffectiveMemoryUtil (void)
 +{
@@ -274,6 +285,27 @@
 +static int DoomPerf_EffectiveMemoryErrors (void)
 +{
 +    return (doomperf_sim_mode == 0) ? doomperf_memory_errors : 0;
++}
++
++// OOM badness (permille) for reliquary barrel `slot` (0 = largest resident set).
++// The memory sims synthesize a descending profile so the demo visibly heats the
++// front-runners (mode 6 = OOM imminent, mode 5 = pressure building); every other
++// mode reads the live per-process value pushed from `ps --sort=-rss`. Slots past
++// the live process count rest dark.
++static int DoomPerf_EffectiveMemoryProcOom (int slot)
++{
++    static const int demo_full[DOOMPERF_MEMORY_BARREL_COUNT] = { 950, 880, 800, 720, 640 };
++    static const int demo_some[DOOMPERF_MEMORY_BARREL_COUNT] = { 520, 430, 360, 300, 250 };
++
++    if (slot < 0 || slot >= DOOMPERF_MEMORY_BARREL_COUNT)
++	return 0;
++    if (doomperf_sim_mode == 6)
++	return demo_full[slot];
++    if (doomperf_sim_mode == 5)
++	return demo_some[slot];
++    if (slot >= doomperf_memory_proc_count)
++	return 0;
++    return doomperf_memory_proc_oom[slot];
 +}
 +
 +static int DoomPerf_Clamp1000 (int value)
@@ -314,10 +346,12 @@
 +    fixed_t	height;
 +    fixed_t	target_h;
 +    fixed_t	cur;
++    mobj_t*	mo;
 +    static int	flats_ready = 0;
 +    static int	flat_green;
 +    static int	flat_cyan;
 +    static int	flat_empty;
++    static int	barrels_ready = 0;
 +
 +    util = DoomPerf_Clamp1000(DoomPerf_EffectiveMemoryUtil());
 +    cache = DoomPerf_Clamp1000(DoomPerf_EffectiveMemoryCache());
@@ -345,6 +379,32 @@
 +	flat_cyan = R_FlatNumForName("DPMCACH");
 +	flat_empty = R_FlatNumForName("DPMFREE");
 +	flats_ready = 1;
++    }
++
++    // First tic after a level (re)load: turn the reliquary's map barrels into
++    // pure instruments -- non-solid and non-shootable so they neither block the
++    // player in the narrow plaza nor explode, and fixed in place (no gravity, no
++    // momentum). The per-pad glow below does the rest. A level reload re-spawns
++    // the things and resets leveltime to 0, so re-run the fix-up then.
++    if (leveltime == 0)
++	barrels_ready = 0;
++    if (!barrels_ready)
++    {
++	for (i = 0; i < numsectors; i++)
++	{
++	    idx = sectors[i].tag - DOOMPERF_MEMORY_BARREL_TAG_BASE;
++	    if (idx < 0 || idx >= DOOMPERF_MEMORY_BARREL_COUNT)
++		continue;
++	    for (mo = sectors[i].thinglist; mo; mo = mo->snext)
++	    {
++		if (mo->type != MT_BARREL)
++		    continue;
++		mo->flags &= ~(MF_SOLID | MF_SHOOTABLE);
++		mo->flags |= MF_NOGRAVITY;
++		mo->momx = mo->momy = mo->momz = 0;
++	    }
++	}
++	barrels_ready = 1;
 +    }
 +
 +    for (i = 0; i < numsectors; i++)
@@ -422,6 +482,24 @@
 +	{
 +	    sectors[i].floorheight = err ? 8 * FRACUNIT : -16 * FRACUNIT;
 +	    sectors[i].lightlevel = (short)(err ? 190 + pulse : 112);
++	    continue;
++	}
++
++	// RSS reliquary barrels: glow each pad by its process's OOM badness, so a
++	// barrel burns brighter the closer that process is to being OOM-killed.
++	idx = tag - DOOMPERF_MEMORY_BARREL_TAG_BASE;
++	if (idx >= 0 && idx < DOOMPERF_MEMORY_BARREL_COUNT)
++	{
++	    int oom = DoomPerf_Clamp1000(DoomPerf_EffectiveMemoryProcOom(idx));
++	    light = DOOMPERF_MEMORY_BARREL_LIGHT_LO
++		+ ((DOOMPERF_MEMORY_BARREL_LIGHT_HI - DOOMPERF_MEMORY_BARREL_LIGHT_LO) * oom) / 1000;
++	    // The hottest barrels (a process on the brink of an OOM kill) also
++	    // flicker, so they read as "in danger" rather than merely bright.
++	    if (oom > 700)
++		light += (pulse * (oom - 700)) / 2400;
++	    if (light > 252)
++		light = 252;
++	    sectors[i].lightlevel = (short)light;
 +	}
 +    }
 +}
@@ -841,7 +919,7 @@
  //
  // THINKERS
  // All thinkers should be allocated by Z_Malloc
-@@ -130,11 +940,11 @@
+@@ -130,11 +1017,11 @@
  void P_Ticker (void)
  {
      int		i;
@@ -855,7 +933,7 @@
      // pause if in menu and at least one tic has been run
      if ( !netgame
  	 && menuactive
-@@ -143,16 +953,22 @@
+@@ -143,16 +1030,22 @@
      {
  	return;
      }
