@@ -781,9 +781,9 @@ const start = async () => {
 
     let lastEasterEggAt = 0;
     const easterEggCooldownMs = 7000;
-    // Onset (ms) of each audible yell in the 7s interaction sting. The dashboard
+    // Onset (ms) of each audible yell in the 5.2s interaction sting. The dashboard
     // fires one IOPS spike at each so the two spikes land on the two yells.
-    const interactionSpikeOffsetsMs = [1900, 4900];
+    const interactionSpikeOffsetsMs = [100, 3100];
     // Play the sting and drive the dashboard's two IOPS spikes, once per cooldown.
     // Shared by the desktop space-bar path and the mobile tap-on-rack path.
     const fireEasterEgg = () => {
