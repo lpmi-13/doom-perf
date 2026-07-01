@@ -256,6 +256,12 @@ const equipmentTextureForSide = (equipment, side) =>
     ? (equipment.sideWall ?? equipment.wall)
     : equipment.wall;
 
+// A wall-terminal recess wears the keyboard/control panel on its step riser (the
+// "server details" strip below the screen). This is signalled by labelSide "top"
+// -- the north/CPU wing's back wall -- or, for wings whose back wall rotates to
+// another world side, an explicit `controlPanel` flag on the terminal sector.
+const isControlPanelRecess = (s) => !!(s && s.labelTexture && (s.controlPanel || s.labelSide === "top"));
+
 const sideTextures = (sector, other, overrideTexture, edge) => {
   if (!other) {
     // An atrium perimeter wall wears its wing's wall texture, chosen by which
@@ -297,7 +303,7 @@ const sideTextures = (sector, other, overrideTexture, edge) => {
     else if (equipmentKinds.has(sector.kind)) bottom = equipmentTextureForSide(sector, edge?.side);
     // The step up into a wall-terminal recess (the wall just below the screen)
     // gets a keyboard/control panel rather than a plain step riser.
-    else if (other.labelSide === "top" && other.labelTexture) bottom = controlPanelTexture;
+    else if (isControlPanelRecess(other)) bottom = controlPanelTexture;
     else if (sector.kind === "outside" || other.kind === "outside") bottom = "STONE2";
     else bottom = "STEP1";
   }
@@ -354,7 +360,7 @@ const textureOffsetFor = (edge, sector, other, overrideTexture) => {
   if (sector.kind === "sign") return edgeIsLongFace(edge, sector) ? overrideTextureOffsetFor(edge, sector) : 0;
   if (other && other.kind === "sign") return edgeIsLongFace(edge, other) ? overrideTextureOffsetFor(edge, other) : 0;
   // Terminal control-panel riser: flow the tiling panel across its cut segments.
-  if (other && other.labelSide === "top" && other.labelTexture && sector.floor < other.floor) return flowOffsetFor(edge, sector);
+  if (other && isControlPanelRecess(other) && sector.floor < other.floor) return flowOffsetFor(edge, sector);
   if (
     sector.kind === "server-rack" ||
     sector.kind === "metric-display" ||

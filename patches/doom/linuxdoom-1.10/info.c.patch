@@ -5,6 +5,7 @@
 #   0018  run-queue-particles
 #   0033  dim-tall-red-torches
 #   0037  orb-spawn-despawn-polish
+#   (+)   network-packets (cyan RX / violet TX packet orbs)
 #
 # Order-independent: this is the only Doom Perf patch that touches info.c.
 # Regenerate by diffing a clean tree against the staged build tree;
@@ -38,7 +39,7 @@
      {SPR_SMBT,32768,4,{NULL},S_BTORCHSHRT2,0,0},	// S_BTORCHSHRT
      {SPR_SMBT,32769,4,{NULL},S_BTORCHSHRT3,0,0},	// S_BTORCHSHRT2
      {SPR_SMBT,32770,4,{NULL},S_BTORCHSHRT4,0,0},	// S_BTORCHSHRT3
-@@ -1099,7 +1110,37 @@
+@@ -1099,7 +1110,53 @@
      {SPR_TLP2,32768,4,{NULL},S_TECH2LAMP2,0,0},	// S_TECH2LAMP
      {SPR_TLP2,32769,4,{NULL},S_TECH2LAMP3,0,0},	// S_TECH2LAMP2
      {SPR_TLP2,32770,4,{NULL},S_TECH2LAMP4,0,0},	// S_TECH2LAMP3
@@ -73,11 +74,27 @@
 +    {SPR_BON2,32769,3,{NULL},S_DP_IOTASK_FADE2,0,0},	// S_DP_IOTASK_FADE1
 +    {SPR_BON2,32768,3,{NULL},S_NULL,0,0},		// S_DP_IOTASK_FADE2
 +    {SPR_BON2,32770,4,{NULL},S_DP_SPARK2,0,0},		// S_DP_SPARK1
-+    {SPR_BON2,32771,4,{NULL},S_NULL,0,0}		// S_DP_SPARK2
++    {SPR_BON2,32771,4,{NULL},S_NULL,0,0},		// S_DP_SPARK2
++    // Doom Perf network packet orbs. RX rides SPR_PINV (cyan), TX rides SPR_PMAP
++    // (violet); frame A (32768) is the static fullbright orb, B/C/D are FX frames
++    // (D=ring, C=flash, B=settle disc), all PWAD-replaced in the project map.
++    // Bloom: ring -> flash -> settle -> static orb. Fade: flash -> ring -> gone.
++    {SPR_PINV,32768,-1,{NULL},S_NULL,0,0},		// S_DP_NETRX (static cyan orb)
++    {SPR_PINV,32771,3,{NULL},S_DP_NETRX_BLOOM2,0,0},	// S_DP_NETRX_BLOOM1 (ring in)
++    {SPR_PINV,32770,3,{NULL},S_DP_NETRX_BLOOM3,0,0},	// S_DP_NETRX_BLOOM2 (flash)
++    {SPR_PINV,32769,2,{NULL},S_DP_NETRX,0,0},		// S_DP_NETRX_BLOOM3 (settle -> orb)
++    {SPR_PINV,32770,3,{NULL},S_DP_NETRX_FADE2,0,0},	// S_DP_NETRX_FADE1 (flash)
++    {SPR_PINV,32771,4,{NULL},S_NULL,0,0},		// S_DP_NETRX_FADE2 (ring out)
++    {SPR_PMAP,32768,-1,{NULL},S_NULL,0,0},		// S_DP_NETTX (static violet orb)
++    {SPR_PMAP,32771,3,{NULL},S_DP_NETTX_BLOOM2,0,0},	// S_DP_NETTX_BLOOM1 (ring in)
++    {SPR_PMAP,32770,3,{NULL},S_DP_NETTX_BLOOM3,0,0},	// S_DP_NETTX_BLOOM2 (flash)
++    {SPR_PMAP,32769,2,{NULL},S_DP_NETTX,0,0},		// S_DP_NETTX_BLOOM3 (settle -> orb)
++    {SPR_PMAP,32770,3,{NULL},S_DP_NETTX_FADE2,0,0},	// S_DP_NETTX_FADE1 (flash)
++    {SPR_PMAP,32771,4,{NULL},S_NULL,0,0}		// S_DP_NETTX_FADE2 (ring out)
  };
  
  
-@@ -4665,6 +4706,84 @@
+@@ -4665,6 +4722,138 @@
  	sfx_None,		// activesound
  	MF_NOBLOCKMAP,		// flags
  	S_NULL		// raisestate
@@ -154,6 +171,60 @@
 +	0,		// speed
 +	2*FRACUNIT,		// radius
 +	2*FRACUNIT,		// height
++	100,		// mass
++	0,		// damage
++	sfx_None,		// activesound
++	MF_NOGRAVITY|MF_NOBLOCKMAP|MF_NOCLIP,		// flags
++	S_NULL		// raisestate
++    },
++
++    {		// MT_DP_NETRX -- cyan RX packet orb (scripted glide, non-blocking)
++	-1,		// doomednum (runtime-spawned only)
++	S_DP_NETRX_BLOOM1,	// spawnstate (bloom-in, then -> static S_DP_NETRX)
++	1000,		// spawnhealth
++	S_NULL,		// seestate
++	sfx_None,		// seesound
++	8,		// reactiontime
++	sfx_None,		// attacksound
++	S_NULL,		// painstate
++	0,		// painchance
++	sfx_None,		// painsound
++	S_NULL,		// meleestate
++	S_NULL,		// missilestate
++	S_NULL,		// deathstate
++	S_NULL,		// xdeathstate
++	sfx_None,		// deathsound
++	0,		// speed
++	6*FRACUNIT,		// radius
++	16*FRACUNIT,		// height
++	100,		// mass
++	0,		// damage
++	sfx_None,		// activesound
++	// Non-blocking + no clipping: the packets ride a scripted lane path (p_tick.c)
++	// and the player walks freely through the trough where they stream.
++	MF_NOGRAVITY|MF_NOBLOCKMAP|MF_NOCLIP,		// flags
++	S_NULL		// raisestate
++    },
++
++    {		// MT_DP_NETTX -- violet TX packet orb (scripted glide, non-blocking)
++	-1,		// doomednum (runtime-spawned only)
++	S_DP_NETTX_BLOOM1,	// spawnstate (bloom-in, then -> static S_DP_NETTX)
++	1000,		// spawnhealth
++	S_NULL,		// seestate
++	sfx_None,		// seesound
++	8,		// reactiontime
++	sfx_None,		// attacksound
++	S_NULL,		// painstate
++	0,		// painchance
++	sfx_None,		// painsound
++	S_NULL,		// meleestate
++	S_NULL,		// missilestate
++	S_NULL,		// deathstate
++	S_NULL,		// xdeathstate
++	sfx_None,		// deathsound
++	0,		// speed
++	6*FRACUNIT,		// radius
++	16*FRACUNIT,		// height
 +	100,		// mass
 +	0,		// damage
 +	sfx_None,		// activesound

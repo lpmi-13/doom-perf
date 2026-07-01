@@ -4,9 +4,12 @@
 import type {
   CpuTelemetry,
   MemoryTelemetry,
+  NetworkInterfaceTelemetry,
   NetworkTelemetry,
   ResourceTelemetry,
+  SocketTelemetry,
   StorageTelemetry,
+  TcpStateTelemetry,
   TelemetrySnapshot,
   TelemetryStatus,
 } from "./types";
@@ -209,6 +212,60 @@ const readStorage = (payload: Record<string, unknown>): StorageTelemetry => {
   };
 };
 
+const readNetworkInterfaces = (value: unknown): NetworkInterfaceTelemetry[] | undefined =>
+  Array.isArray(value)
+    ? value.flatMap((entry) => {
+        const iface = objectValue(entry);
+        const name = iface?.name;
+        if (typeof name !== "string") {
+          return [];
+        }
+        return [{
+          name,
+          rxBytesPerSecond: numberValue(iface?.rxBytesPerSecond) ?? 0,
+          txBytesPerSecond: numberValue(iface?.txBytesPerSecond) ?? 0,
+        }];
+      })
+    : undefined;
+
+const readTopSockets = (value: unknown): SocketTelemetry[] | undefined =>
+  Array.isArray(value)
+    ? value.flatMap((entry) => {
+        const socket = objectValue(entry);
+        if (!socket) {
+          return [];
+        }
+        return [{
+          local: typeof socket.local === "string" ? socket.local : "",
+          remote: typeof socket.remote === "string" ? socket.remote : "",
+          state: typeof socket.state === "string" ? socket.state : "",
+          sendQueueBytes: numberValue(socket.sendQueueBytes) ?? 0,
+          recvQueueBytes: numberValue(socket.recvQueueBytes) ?? 0,
+        }];
+      })
+    : undefined;
+
+const readTcpStates = (value: unknown): TcpStateTelemetry | undefined => {
+  const tcp = objectValue(value);
+  if (!tcp) {
+    return undefined;
+  }
+  return {
+    established: numberValue(tcp.established),
+    synSent: numberValue(tcp.synSent),
+    synRecv: numberValue(tcp.synRecv),
+    finWait1: numberValue(tcp.finWait1),
+    finWait2: numberValue(tcp.finWait2),
+    timeWait: numberValue(tcp.timeWait),
+    close: numberValue(tcp.close),
+    closeWait: numberValue(tcp.closeWait),
+    lastAck: numberValue(tcp.lastAck),
+    listen: numberValue(tcp.listen),
+    closing: numberValue(tcp.closing),
+    total: numberValue(tcp.total),
+  };
+};
+
 const readNetwork = (payload: Record<string, unknown>): NetworkTelemetry => {
   const base = readResource(payload, "network");
   const source = objectValue(findResourceSource(payload, "network"));
@@ -221,6 +278,13 @@ const readNetwork = (payload: Record<string, unknown>): NetworkTelemetry => {
     txBytesPerSecond: numberValue(source.txBytesPerSecond),
     dropsPerSecond: numberValue(source.dropsPerSecond),
     errorsPerSecond: numberValue(source.errorsPerSecond),
+    primaryInterface: typeof source.primaryInterface === "string" ? source.primaryInterface : undefined,
+    interfaces: readNetworkInterfaces(source.interfaces),
+    tcp: readTcpStates(source.tcp),
+    sendQueueBytes: numberValue(source.sendQueueBytes),
+    recvQueueBytes: numberValue(source.recvQueueBytes),
+    backloggedSockets: numberValue(source.backloggedSockets),
+    topSockets: readTopSockets(source.topSockets),
   };
 };
 

@@ -84,11 +84,22 @@ extern int doomperf_memory_cache;
 extern int doomperf_memory_proc_count;
 extern int doomperf_memory_proc_oom[DOOMPERF_MEMORY_PROC_SLOTS];
 
+// Network RX/TX throughput, each as a permille of a full-scale link (the browser
+// scales bytes/sec; see src/index.ts). Sets the packet-orb density in the network
+// wing's grove. DoomPerf_EffectiveNetworkRx/Tx are the sim-aware values read by
+// the packet tick in p_tick.c (live = the pushed value; the network sims drive a
+// high synthetic throughput).
+extern int doomperf_net_rx;
+extern int doomperf_net_tx;
+int DoomPerf_EffectiveNetworkRx(void);
+int DoomPerf_EffectiveNetworkTx(void);
+
 // Doom Perf data-source mode, chosen on the level-select menu:
 //   0 = live browser telemetry; 1/2 = simulated high CPU utilization/saturation
 //   (CPU room renderer); 3/4 = simulated high disk utilization/saturation
 //   (iostat terminal + media-pit latency gauges); 5/6 = simulated high memory
-//   utilization/saturation (free/vmstat/PSI terminal scenarios).
+//   utilization/saturation (free/vmstat/PSI terminal scenarios); 7/8 = simulated
+//   high network utilization/saturation (packet-grove density + net dev terminal).
 extern int doomperf_sim_mode;
 
 // Doom Perf: human-readable scenario title for the active doomperf_sim_mode,

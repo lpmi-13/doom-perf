@@ -9,9 +9,11 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -114,6 +116,53 @@ type networkTelemetry struct {
 	TXBytesPerSecond float64 `json:"txBytesPerSecond"`
 	DropsPerSecond   float64 `json:"dropsPerSecond"`
 	ErrorsPerSecond  float64 `json:"errorsPerSecond"`
+	// PrimaryInterface is the noisiest real NIC this sample (highest rx+tx); the
+	// packet grove binds to it so the in-world lanes track the main interface
+	// rather than the aggregate. Interfaces carries the per-NIC breakdown (busiest
+	// first) that feeds the `sar -n DEV`-style interface terminal.
+	PrimaryInterface string                  `json:"primaryInterface,omitempty"`
+	Interfaces       []netInterfaceTelemetry `json:"interfaces,omitempty"`
+	// TCP socket census + send/recv-queue backlog from /proc/net/tcp{,6}: the
+	// socket-state patch panel and the SendQ/RecvQ standpipe instruments.
+	TCP               tcpStateTelemetry `json:"tcp"`
+	SendQueueBytes    uint64            `json:"sendQueueBytes"`
+	RecvQueueBytes    uint64            `json:"recvQueueBytes"`
+	BackloggedSockets int               `json:"backloggedSockets"`
+	TopSockets        []socketTelemetry `json:"topSockets,omitempty"`
+}
+
+type netInterfaceTelemetry struct {
+	Name             string  `json:"name"`
+	RXBytesPerSecond float64 `json:"rxBytesPerSecond"`
+	TXBytesPerSecond float64 `json:"txBytesPerSecond"`
+}
+
+// tcpStateTelemetry counts sockets by TCP state (the `ss -tan state ...` /
+// `ss -s` census). The USE read is connection load: a healthy server holds many
+// ESTABLISHED; a pile of TIME-WAIT / SYN-RECV / CLOSE-WAIT is a leak or backlog.
+type tcpStateTelemetry struct {
+	Established uint64 `json:"established"`
+	SynSent     uint64 `json:"synSent"`
+	SynRecv     uint64 `json:"synRecv"`
+	FinWait1    uint64 `json:"finWait1"`
+	FinWait2    uint64 `json:"finWait2"`
+	TimeWait    uint64 `json:"timeWait"`
+	Close       uint64 `json:"close"`
+	CloseWait   uint64 `json:"closeWait"`
+	LastAck     uint64 `json:"lastAck"`
+	Listen      uint64 `json:"listen"`
+	Closing     uint64 `json:"closing"`
+	Total       uint64 `json:"total"`
+}
+
+// socketTelemetry is one backlogged socket for the SendQ/RecvQ terminal's
+// `ss -tmn`-style top list (only sockets with a non-empty queue are kept).
+type socketTelemetry struct {
+	Local          string `json:"local"`
+	Remote         string `json:"remote"`
+	State          string `json:"state"`
+	SendQueueBytes uint64 `json:"sendQueueBytes"`
+	RecvQueueBytes uint64 `json:"recvQueueBytes"`
 }
 
 type telemetry struct {
@@ -450,6 +499,12 @@ func (s *sampler) sample(now time.Time) (telemetry, error) {
 	if err != nil {
 		return telemetry{}, err
 	}
+	tcp := readTCPSockets(5)
+	network.TCP = tcp.states
+	network.SendQueueBytes = tcp.sendQueue
+	network.RecvQueueBytes = tcp.recvQueue
+	network.BackloggedSockets = tcp.backlogged
+	network.TopSockets = tcp.top
 
 	s.lastAt = now
 	s.cpu = cpu
@@ -915,10 +970,20 @@ func sampleNetwork(previous map[string]netCounter, elapsed float64) (networkTele
 	if err != nil {
 		return networkTelemetry{}, nil, err
 	}
+	result, current := reduceNetwork(nets, previous, elapsed)
+	return result, current, nil
+}
 
+// reduceNetwork folds per-interface counter deltas into aggregate throughput, a
+// per-NIC breakdown (busiest first), and the noisiest interface as primary. Pure
+// (no /proc read) so it is unit-testable with fixture counters.
+func reduceNetwork(nets []netCounter, previous map[string]netCounter, elapsed float64) (networkTelemetry, map[string]netCounter) {
 	current := make(map[string]netCounter, len(nets))
 	var result networkTelemetry
 	var capacity float64
+	// Track the noisiest interface (highest rx+tx) as the primary; init below -1
+	// so the first NIC always wins even when every interface is idle.
+	busiest := -1.0
 	for _, net := range nets {
 		current[net.name] = net
 		capacity += net.speedBps
@@ -927,17 +992,34 @@ func sampleNetwork(previous map[string]netCounter, elapsed float64) (networkTele
 			continue
 		}
 
-		result.RXBytesPerSecond += counterRate(net.rxBytes, old.rxBytes, elapsed)
-		result.TXBytesPerSecond += counterRate(net.txBytes, old.txBytes, elapsed)
+		rx := counterRate(net.rxBytes, old.rxBytes, elapsed)
+		tx := counterRate(net.txBytes, old.txBytes, elapsed)
+		result.RXBytesPerSecond += rx
+		result.TXBytesPerSecond += tx
 		result.DropsPerSecond += counterRate(net.rxDrops+net.txDrops, old.rxDrops+old.txDrops, elapsed)
 		result.ErrorsPerSecond += counterRate(net.rxErrors+net.txErrors, old.rxErrors+old.txErrors, elapsed)
+		result.Interfaces = append(result.Interfaces, netInterfaceTelemetry{
+			Name:             net.name,
+			RXBytesPerSecond: rx,
+			TXBytesPerSecond: tx,
+		})
+		if rx+tx > busiest {
+			busiest = rx + tx
+			result.PrimaryInterface = net.name
+		}
 	}
+	// Busiest first, so the interface terminal leads with the primary NIC.
+	sort.SliceStable(result.Interfaces, func(i, j int) bool {
+		a := result.Interfaces[i]
+		b := result.Interfaces[j]
+		return a.RXBytesPerSecond+a.TXBytesPerSecond > b.RXBytesPerSecond+b.TXBytesPerSecond
+	})
 	if capacity > 0 {
 		result.Utilization = clamp((result.RXBytesPerSecond + result.TXBytesPerSecond) * 8 / capacity)
 	}
 	result.Saturation = clamp(result.DropsPerSecond / 100)
 	result.Errors = clamp(result.ErrorsPerSecond / 50)
-	return result, current, nil
+	return result, current
 }
 
 func readNetCounters() ([]netCounter, error) {
@@ -998,6 +1080,161 @@ func interfaceSpeed(name string) float64 {
 		}
 	}
 	return 1_000_000_000
+}
+
+// tcpStateNames maps the hex `st` column of /proc/net/tcp to a short label. The
+// values are the kernel's TCP states (include/net/tcp_states.h).
+var tcpStateNames = map[uint64]string{
+	1:  "ESTAB",
+	2:  "SYN-SENT",
+	3:  "SYN-RECV",
+	4:  "FIN-WAIT1",
+	5:  "FIN-WAIT2",
+	6:  "TIME-WAIT",
+	7:  "CLOSE",
+	8:  "CLOSE-WAIT",
+	9:  "LAST-ACK",
+	10: "LISTEN",
+	11: "CLOSING",
+	12: "NEW-SYN-RECV",
+}
+
+// tcpSocketStats accumulates the /proc/net/tcp{,6} census across both address
+// families before it is finalized into the network telemetry fields.
+type tcpSocketStats struct {
+	states     tcpStateTelemetry
+	sendQueue  uint64
+	recvQueue  uint64
+	backlogged int
+	top        []socketTelemetry
+}
+
+// readTCPSockets reads both /proc/net/tcp and /proc/net/tcp6, returning the TCP
+// state census, aggregate send/recv-queue backlog, and the `limit` most
+// backlogged sockets (by max queue). Missing files (no IPv6, restricted proc)
+// are skipped rather than fatal.
+func readTCPSockets(limit int) tcpSocketStats {
+	var stats tcpSocketStats
+	for _, path := range []string{"/proc/net/tcp", "/proc/net/tcp6"} {
+		file, err := os.Open(path)
+		if err != nil {
+			continue
+		}
+		parseTCPSockets(file, &stats)
+		file.Close()
+	}
+	stats.top = finalizeTopSockets(stats.top, limit)
+	return stats
+}
+
+// parseTCPSockets scans one /proc/net/tcp-format stream, folding each socket's
+// state and tx_queue:rx_queue into stats. The header row and malformed lines are
+// skipped. Exposed (unexported) for unit tests with fixture data.
+func parseTCPSockets(r io.Reader, stats *tcpSocketStats) {
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		// sl local_address rem_address st tx_queue:rx_queue ...
+		if len(fields) < 5 {
+			continue
+		}
+		state, err := strconv.ParseUint(fields[3], 16, 16)
+		if err != nil {
+			continue // header ("st") or malformed
+		}
+		txHex, rxHex, ok := strings.Cut(fields[4], ":")
+		if !ok {
+			continue
+		}
+		sendQ, err := strconv.ParseUint(txHex, 16, 64)
+		if err != nil {
+			continue
+		}
+		recvQ, err := strconv.ParseUint(rxHex, 16, 64)
+		if err != nil {
+			continue
+		}
+
+		stats.states.Total++
+		switch state {
+		case 1:
+			stats.states.Established++
+		case 2:
+			stats.states.SynSent++
+		case 3:
+			stats.states.SynRecv++
+		case 4:
+			stats.states.FinWait1++
+		case 5:
+			stats.states.FinWait2++
+		case 6:
+			stats.states.TimeWait++
+		case 7:
+			stats.states.Close++
+		case 8:
+			stats.states.CloseWait++
+		case 9:
+			stats.states.LastAck++
+		case 10:
+			stats.states.Listen++
+		case 11:
+			stats.states.Closing++
+		}
+		stats.sendQueue += sendQ
+		stats.recvQueue += recvQ
+		if sendQ > 0 || recvQ > 0 {
+			stats.backlogged++
+			stats.top = append(stats.top, socketTelemetry{
+				Local:          parseSocketEndpoint(fields[1]),
+				Remote:         parseSocketEndpoint(fields[2]),
+				State:          tcpStateNames[state],
+				SendQueueBytes: sendQ,
+				RecvQueueBytes: recvQ,
+			})
+		}
+	}
+}
+
+// finalizeTopSockets sorts the backlogged sockets by their largest queue
+// (send or recv) and keeps at most limit of them.
+func finalizeTopSockets(top []socketTelemetry, limit int) []socketTelemetry {
+	maxQueue := func(s socketTelemetry) uint64 {
+		if s.SendQueueBytes > s.RecvQueueBytes {
+			return s.SendQueueBytes
+		}
+		return s.RecvQueueBytes
+	}
+	sort.SliceStable(top, func(i, j int) bool { return maxQueue(top[i]) > maxQueue(top[j]) })
+	if limit >= 0 && len(top) > limit {
+		top = top[:limit]
+	}
+	return top
+}
+
+// parseSocketEndpoint decodes a /proc/net/tcp "ADDR:PORT" token (hex, host byte
+// order) into a readable endpoint. IPv4 (8 hex chars) is rendered dotted-quad;
+// IPv6 (32 hex chars) is abbreviated to "[v6]" since only the port carries
+// signal for the queue readout. The port is always decoded to decimal.
+func parseSocketEndpoint(token string) string {
+	addrHex, portHex, ok := strings.Cut(token, ":")
+	if !ok {
+		return token
+	}
+	port, err := strconv.ParseUint(portHex, 16, 32)
+	if err != nil {
+		return token
+	}
+	switch len(addrHex) {
+	case 8:
+		v, err := strconv.ParseUint(addrHex, 16, 32)
+		if err != nil {
+			break
+		}
+		return fmt.Sprintf("%d.%d.%d.%d:%d", byte(v), byte(v>>8), byte(v>>16), byte(v>>24), port)
+	case 32:
+		return fmt.Sprintf("[v6]:%d", port)
+	}
+	return fmt.Sprintf("%s:%d", addrHex, port)
 }
 
 func counterRate(current, previous uint64, elapsed float64) float64 {

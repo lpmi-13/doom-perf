@@ -10,6 +10,7 @@
 #   0036  automap-scenario-title
 #   0038  title-oo-load-pulse
 #   0039  trim-options-menu
+#   (+)   new-game opens the data-source list on page 1
 #
 # Order-independent: this is the only Doom Perf patch that touches m_menu.c.
 # Regenerate by diffing a clean tree against the staged build tree;
@@ -137,7 +138,7 @@
  }
  
  
-@@ -877,11 +908,92 @@
+@@ -877,11 +908,96 @@
  	M_StartMessage(NEWGAME,NULL,false);
  	return;
      }
@@ -147,6 +148,10 @@
 -    else
 -	M_SetupNextMenu(&EpiDef);
 +
++    // Always open the data-source list on the first page (item 0), regardless of
++    // which scenario was picked last -- M_DrawMode pages off itemOn, and
++    // M_SetupNextMenu restores it from lastOn, which the previous pick left deep.
++    ModeDef.lastOn = 0;
 +    M_SetupNextMenu(&ModeDef);
 +}
 +
@@ -235,7 +240,7 @@
  }
  
  
-@@ -945,24 +1057,14 @@
+@@ -945,24 +1061,14 @@
  // M_Options
  //
  char    detailNames[2][9]	= {"M_GDHIGH","M_GDLOW"};
@@ -260,7 +265,7 @@
  }
  
  void M_Options(int choice)
-@@ -1579,10 +1681,6 @@
+@@ -1579,10 +1685,6 @@
  	    M_EndGame(0);
  	    return true;
  				
@@ -271,7 +276,7 @@
  				
  	  case KEY_F9:            // Quickload
  	    S_StartSound(NULL,sfx_swtchn);
-@@ -1864,12 +1962,6 @@
+@@ -1864,12 +1966,6 @@
      switch ( gamemode )
      {
        case commercial:

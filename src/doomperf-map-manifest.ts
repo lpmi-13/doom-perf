@@ -113,6 +113,28 @@ export const mapManifest = {
           "by": 128
         }
       ]
+    },
+    {
+      "sign": "network-queues",
+      "segments": [
+        {
+          "ax": -1232,
+          "ay": -456,
+          "bx": -1360,
+          "by": -456
+        }
+      ]
+    },
+    {
+      "sign": "network-sockets",
+      "segments": [
+        {
+          "ax": -1184,
+          "ay": 456,
+          "bx": -1312,
+          "by": 456
+        }
+      ]
     }
   ],
   "easterEggs": [

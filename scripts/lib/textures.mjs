@@ -32,9 +32,11 @@ export const signTextColor = 112;
 const glyphs = {
   " ": ["00000", "00000", "00000", "00000", "00000", "00000", "00000"],
   A: ["01110", "10001", "10001", "11111", "10001", "10001", "10001"],
+  B: ["11110", "10001", "10001", "11110", "10001", "10001", "11110"],
   C: ["01111", "10000", "10000", "10000", "10000", "10000", "01111"],
   D: ["11110", "10001", "10001", "10001", "10001", "10001", "11110"],
   E: ["11111", "10000", "10000", "11110", "10000", "10000", "11111"],
+  F: ["11111", "10000", "10000", "11110", "10000", "10000", "10000"],
   G: ["01111", "10000", "10000", "10111", "10001", "10001", "01110"],
   I: ["11111", "00100", "00100", "00100", "00100", "00100", "11111"],
   K: ["10001", "10010", "10100", "11000", "10100", "10010", "10001"],
@@ -666,6 +668,89 @@ export const buildDiskGaugePatch = () => {
     const y = top + Math.round((bottom - top) * (t / 8));
     drawRect(pixels, width, height, x0, y, x1, y + 1, 96);
   }
+  return buildPatch(pixels, width, height);
+};
+
+// Network wing — TCP socket-state "patch panel": a datacenter switchboard face,
+// one band per TCP state (ESTABLISHED / TIME-WAIT / LISTEN / CLOSE-WAIT), each a
+// left label + a row of small ports, lit or dark, colour-coded by state. Drawn at
+// the wall-sign width (256) so the central label-centering offset maps it once,
+// centred, on the ~192-wide gallery panel face; content is kept in the central
+// window (x 32..224) so nothing is clipped. Static, representative occupancy this
+// pass; a later engine hook can light the ports live from the state census via the
+// panel sector's reserved tag.
+export const netPatchPanelSize = wallSignSize; // 256 x 128
+export const buildNetPatchPanelPatch = () => {
+  const { width, height } = netPatchPanelSize;
+  const px = new Uint8Array(width * height);
+  px.fill(96); // rack metal
+  const R = (x, y, w, h, c) => drawRect(px, width, height, x, y, x + w, y + h, c);
+  // Recessed dark faceplate.
+  R(34, 8, width - 68, height - 16, 8);
+  R(38, 12, width - 76, height - 24, 0);
+  // Four state bands: [label, lit-colour, dim-colour, lit-count out of 10].
+  const bands = [
+    ["ESTAB", 112, 116, 8],
+    ["TIMEW", 160, 164, 5],
+    ["LISTN", 200, 204, 2],
+    ["CLOSE", 231, 176, 1],
+  ];
+  const bandTop = 16;
+  const bandH = Math.floor((height - 32) / bands.length);
+  const ports = 10;
+  const portX0 = 96;
+  const portPitch = 12;
+  bands.forEach(([label, lit, dim, count], row) => {
+    const y = bandTop + row * bandH;
+    const cy = y + Math.floor(bandH / 2) - 3;
+    // Left label in the band's lit hue.
+    drawCenteredText(px, width, height, label, cy, 1, lit, 42, 92, stampFlat);
+    // Row of ports: the first `count` lit, the rest dark seats.
+    for (let p = 0; p < ports; p += 1) {
+      const x = portX0 + p * portPitch;
+      R(x, cy - 1, 8, 8, 88); // seat
+      R(x + 1, cy, 6, 6, p < count ? (p % 2 === 0 ? lit : dim) : 4);
+    }
+  });
+  return buildPatch(px, width, height);
+};
+
+// Network wing — a vertical fill "standpipe" gauge for the SendQ / RecvQ backlog.
+// Modelled on buildDiskGaugePatch: a slim column (visible through the narrow
+// niche window) with a coloured fill rising from the base and a red overflow band
+// capping the scale (backpressure territory). A short state label sits above the
+// column. Cyan = RecvQ (inbound), violet = SendQ (outbound), matching the grove
+// lane hues. Static representative fill this pass; a later engine hook can drive
+// the fill height from live queue bytes via the niche's reserved line tag, the
+// same way the CPU load gauges fill.
+export const netGaugeSize = { width: 256, height: 128 };
+export const buildNetGaugePatch = ({ label, loColor, hiColor, frameColor, fillFrac = 0.32 }) => {
+  const { width, height } = netGaugeSize;
+  const pixels = new Uint8Array(width * height);
+  pixels.fill(8); // dark backing (clipped away on the narrow niche wall)
+  const x0 = 110;
+  const x1 = 146; // slim column, centred on the visible window (~72)
+  const top = 22;
+  const bottom = height - 10;
+  // Frame around a dark track.
+  drawRect(pixels, width, height, x0 - 3, top - 3, x1 + 3, bottom + 3, frameColor);
+  drawRect(pixels, width, height, x0, top, x1, bottom, 0);
+  // Red overflow band caps the top of the scale (backpressure / drain lag).
+  const overflow = top + Math.round((bottom - top) * 0.16);
+  drawRect(pixels, width, height, x0, top, x1, overflow, 231);
+  // Fill rising from the base.
+  const fillTop = bottom - Math.round((bottom - top) * fillFrac);
+  for (let y = fillTop; y < bottom; y += 1) {
+    const k = (y - fillTop) / Math.max(1, bottom - fillTop);
+    drawRect(pixels, width, height, x0, y, x1, y + 1, k < 0.5 ? hiColor : loColor);
+  }
+  // Recessed tick marks at each eighth of the scale.
+  for (let t = 1; t < 8; t += 1) {
+    const y = top + Math.round((bottom - top) * (t / 8));
+    drawRect(pixels, width, height, x0, y, x1, y + 1, 96);
+  }
+  // Short label above the column (fits the central niche window at scale 1).
+  drawCenteredText(pixels, width, height, label, 8, 1, hiColor, x0 - 30, x1 + 30, stampFlat);
   return buildPatch(pixels, width, height);
 };
 

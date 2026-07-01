@@ -4,6 +4,7 @@
 # per-feature patch series. Bundles (original patch -> feature):
 #   0018  run-queue-particles
 #   0037  orb-spawn-despawn-polish
+#   (+)   network-packets (cyan RX / violet TX packet orbs)
 #
 # Order-independent: this is the only Doom Perf patch that touches info.h.
 # Regenerate by diffing a clean tree against the staged build tree;
@@ -11,7 +12,7 @@
 
 --- a/info.h
 +++ b/info.h
-@@ -1140,6 +1140,26 @@
+@@ -1140,6 +1140,42 @@
      S_TECH2LAMP2,
      S_TECH2LAMP3,
      S_TECH2LAMP4,
@@ -35,16 +36,34 @@
 +    S_DP_IOTASK_FADE2,
 +    S_DP_SPARK1,
 +    S_DP_SPARK2,
++    // Doom Perf network packet orbs (network-packets patch). RX = cyan (SPR_PINV),
++    // TX = violet (SPR_PMAP); each has a static orb state plus a 3-frame spawn
++    // bloom (ring -> flash -> settle) and a 2-frame despawn fade, all riding the
++    // sprite's B/C/D frames -- the same idiom as the CPU/I-O orbs above.
++    S_DP_NETRX,
++    S_DP_NETRX_BLOOM1,
++    S_DP_NETRX_BLOOM2,
++    S_DP_NETRX_BLOOM3,
++    S_DP_NETRX_FADE1,
++    S_DP_NETRX_FADE2,
++    S_DP_NETTX,
++    S_DP_NETTX_BLOOM1,
++    S_DP_NETTX_BLOOM2,
++    S_DP_NETTX_BLOOM3,
++    S_DP_NETTX_FADE1,
++    S_DP_NETTX_FADE2,
      NUMSTATES
  } statenum_t;
  
-@@ -1298,6 +1318,9 @@
+@@ -1298,6 +1334,11 @@
      MT_MISC84,
      MT_MISC85,
      MT_MISC86,
 +    MT_DP_CPUTASK,
 +    MT_DP_IOTASK,
 +    MT_DP_SPARK,
++    MT_DP_NETRX,
++    MT_DP_NETTX,
      NUMMOBJTYPES
  
  } mobjtype_t;

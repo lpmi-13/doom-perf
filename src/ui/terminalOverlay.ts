@@ -333,28 +333,110 @@ const formatStorage = (telemetry: TelemetrySnapshot): string => {
   return lines.join("\n");
 };
 
-// NETWORK wing — `/proc/net/dev` aggregate throughput plus drop/error rates, the
-// inputs to the wing's lane, choke and drop-basin instruments.
+// NETWORK wing — per-interface throughput (`sar -n DEV`) with the noisiest NIC
+// marked as primary, the input to the wing's packet-grove lanes. USE utilization
+// is throughput vs link speed; saturation is drops.
 const formatNetwork = (telemetry: TelemetrySnapshot): string => {
   const n = telemetry.network;
   const columns: [string, number][] = [
-    ["", 10], ["rx kB/s", 12], ["tx kB/s", 12], ["drops/s", 10], ["errs/s", 10],
-  ];
-  const cells = [
-    "aggregate",
-    String(kib(n.rxBytesPerSecond)),
-    String(kib(n.txBytesPerSecond)),
-    String(Math.round(rate(n.dropsPerSecond))),
-    String(Math.round(rate(n.errorsPerSecond))),
+    ["", 2], ["IFACE", 10], ["rxkB/s", 12], ["txkB/s", 12],
   ];
   const lines: string[] = [];
-  lines.push("$ cat /proc/net/dev   (aggregate, per second)");
+  lines.push("$ sar -n DEV 1 1   (per interface, per second)");
   lines.push(columns.map(([label, width]) => padStart(label, width)).join(""));
-  lines.push(columns.map(([, width], i) => padStart(cells[i], width)).join(""));
+  const interfaces = n.interfaces ?? [];
+  if (interfaces.length > 0) {
+    interfaces.slice(0, 8).forEach((iface) => {
+      const primary = iface.name === n.primaryInterface;
+      const cells = [primary ? "*" : "", iface.name, String(kib(iface.rxBytesPerSecond)), String(kib(iface.txBytesPerSecond))];
+      lines.push(columns.map(([, width], i) => padStart(cells[i], width)).join(""));
+    });
+    lines.push("");
+    lines.push(`primary interface: ${n.primaryInterface ?? "-"}   (* = noisiest; drives the grove)`);
+  } else {
+    // No per-interface breakdown (older source) — fall back to the aggregate.
+    const cells = ["", "aggregate", String(kib(n.rxBytesPerSecond)), String(kib(n.txBytesPerSecond))];
+    lines.push(columns.map(([, width], i) => padStart(cells[i], width)).join(""));
+  }
   lines.push("");
   lines.push(`utilization  ${bar(n.utilization)} ${pctText(n.utilization)}%   (throughput vs link speed)`);
   lines.push(`saturation   ${bar(n.saturation)} ${pctText(n.saturation)}%   (drops)`);
   lines.push(`errors       ${bar(n.errors)} ${pctText(n.errors)}%`);
+  return lines.join("\n");
+};
+
+// NETWORK wing — TCP socket census by state (`ss -s` / `ss -tan`), the input to
+// the socket-state patch-panel wall. USE read is connection load: many
+// ESTABLISHED is healthy work; a pile of TIME-WAIT / CLOSE-WAIT / SYN-RECV is
+// churn, a leak, or a backlog.
+const formatNetworkSockets = (telemetry: TelemetrySnapshot): string => {
+  const tcp = telemetry.network.tcp;
+  const lines: string[] = [];
+  lines.push("$ ss -s");
+  if (!tcp) {
+    lines.push("no TCP socket census from this source");
+    return lines.join("\n");
+  }
+  const val = (v?: number) => Math.max(0, Math.round(rate(v)));
+  const total = val(tcp.total);
+  const estab = val(tcp.established);
+  lines.push(`Total: ${total}`);
+  lines.push(`TCP:   estab ${estab}, timewait ${val(tcp.timeWait)}, listen ${val(tcp.listen)}, closewait ${val(tcp.closeWait)}`);
+  lines.push("");
+  lines.push("$ ss -tan | awk 'NR>1{print $1}' | sort | uniq -c");
+  // Canonical order; show ESTABLISHED and LISTEN always, other states only when
+  // present, so the panel stays focused on what's actually live.
+  const rows: [string, number, boolean][] = [
+    ["ESTABLISHED", estab, true],
+    ["SYN-SENT", val(tcp.synSent), false],
+    ["SYN-RECV", val(tcp.synRecv), false],
+    ["FIN-WAIT1", val(tcp.finWait1), false],
+    ["FIN-WAIT2", val(tcp.finWait2), false],
+    ["TIME-WAIT", val(tcp.timeWait), false],
+    ["CLOSE-WAIT", val(tcp.closeWait), false],
+    ["LAST-ACK", val(tcp.lastAck), false],
+    ["LISTEN", val(tcp.listen), true],
+    ["CLOSING", val(tcp.closing), false],
+  ];
+  const scale = Math.max(1, total, ...rows.map(([, count]) => count));
+  rows.forEach(([label, count, always]) => {
+    if (count > 0 || always) {
+      lines.push(`${padStart(label, 12)}  ${bar(count / scale)} ${padStart(String(count), 6)}`);
+    }
+  });
+  lines.push("");
+  lines.push("established = active connection load; time-wait/close-wait piles = churn or leak.");
+  return lines.join("\n");
+};
+
+// NETWORK wing — TCP send/recv-queue backlog (`ss -tmn`), the input to the twin
+// SendQ / RecvQ standpipe gauges. USE read is saturation/backpressure: Recv-Q
+// bytes = the app isn't reading fast enough; Send-Q bytes = the peer/network
+// isn't draining. Queue bars are scaled against a 1 MiB socket-buffer full scale.
+const formatNetworkQueues = (telemetry: TelemetrySnapshot): string => {
+  const n = telemetry.network;
+  const lines: string[] = [];
+  const fullScale = 1024 * 1024; // 1 MiB per-queue full scale for the bars
+  const recvBytes = Math.max(0, rate(n.recvQueueBytes));
+  const sendBytes = Math.max(0, rate(n.sendQueueBytes));
+  lines.push("$ ss -tmn   (send-q / recv-q backlog)");
+  lines.push(`aggregate Recv-Q  ${kib(recvBytes)} KiB`);
+  lines.push(`aggregate Send-Q  ${kib(sendBytes)} KiB`);
+  lines.push(`backlogged sockets  ${Math.max(0, Math.round(rate(n.backloggedSockets)))}`);
+  lines.push("");
+  lines.push(`Recv-Q  ${bar(clamp(recvBytes / fullScale))} ${padStart(String(kib(recvBytes)), 7)} KiB   inbound (app read lag)`);
+  lines.push(`Send-Q  ${bar(clamp(sendBytes / fullScale))} ${padStart(String(kib(sendBytes)), 7)} KiB   outbound (drain lag)`);
+  const top = n.topSockets ?? [];
+  if (top.length > 0) {
+    lines.push("");
+    const columns: [string, number][] = [["Recv-Q", 9], ["Send-Q", 9], ["State", 11], ["Peer", 24]];
+    lines.push(columns.map(([label, width]) => padStart(label, width)).join(""));
+    top.slice(0, 6).forEach((socket) => {
+      const peer = socket.remote.length > 23 ? `${socket.remote.slice(0, 20)}...` : socket.remote;
+      const cells = [String(kib(socket.recvQueueBytes)), String(kib(socket.sendQueueBytes)), socket.state, peer];
+      lines.push(columns.map(([, width], i) => padStart(cells[i], width)).join(""));
+    });
+  }
   return lines.join("\n");
 };
 
@@ -373,7 +455,9 @@ const terminals: Record<TerminalSign, { title: string; render: (telemetry: Telem
   "memory-pressure": { title: "MEMORY — PSI reclaim stalls", render: formatMemoryPressure },
   "memory-oom": { title: "MEMORY — OOM errors", render: formatMemoryOom },
   storage: { title: "STORAGE — iostat service & queue", render: formatStorage },
-  network: { title: "NETWORK — interface throughput & drops", render: formatNetwork },
+  network: { title: "NETWORK — per-interface throughput", render: formatNetwork },
+  "network-sockets": { title: "NETWORK — TCP socket state census", render: formatNetworkSockets },
+  "network-queues": { title: "NETWORK — SendQ / RecvQ backlog", render: formatNetworkQueues },
 };
 
 const renderTerminal = (sign: TerminalSign, telemetry: TelemetrySnapshot): string =>

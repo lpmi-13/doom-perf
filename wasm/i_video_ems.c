@@ -37,6 +37,8 @@ int doomperf_memory_errors = 0;
 int doomperf_memory_cache = 0;
 int doomperf_memory_proc_count = 0;
 int doomperf_memory_proc_oom[DOOMPERF_MEMORY_PROC_SLOTS];
+int doomperf_net_rx = 0;
+int doomperf_net_tx = 0;
 int doomperf_sim_mode = 0;
 
 // Doom Perf: title wordmark "oo" live-load pulse (see doom_emscripten_compat.h).
@@ -243,6 +245,21 @@ void DoomPerf_SetMemoryProcessOom(int index, int permille)
     doomperf_memory_proc_oom[index] = DoomPerf_ClampPermille(permille);
 }
 
+// Network receive/transmit throughput, each as a permille of a full-scale link
+// (the browser scales bytes/sec to a 1 Gbit reference; see src/index.ts). Drives
+// the density of the packet-orb streams in the network wing's grove.
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_SetNetworkRx(int permille)
+{
+    doomperf_net_rx = DoomPerf_ClampPermille(permille);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_SetNetworkTx(int permille)
+{
+    doomperf_net_tx = DoomPerf_ClampPermille(permille);
+}
+
 static int DoomPerf_EffectiveCoreCountValue(void)
 {
     if (doomperf_sim_mode != 0)
@@ -416,6 +433,76 @@ EMSCRIPTEN_KEEPALIVE
 int DoomPerf_GetEffectiveCpuLoadPressure(void)
 {
     return DoomPerf_EffectiveLoadPressureValue();
+}
+
+// Bursty synthetic throughput for the network sims: each channel random-walks with
+// occasional surges and lulls (a "real traffic" feel) rather than a smooth ramp,
+// so the grove fills and empties in waves. Advanced once per tic (gated on
+// leveltime) so the two reads per tic (rx, tx) and any repeats are stable. `bias`
+// lifts the saturation sim above the utilization sim. Channel 0 = rx, 1 = tx.
+static int DoomPerf_NetSimThroughput(int channel, int bias)
+{
+    static int  level[2] = {520, 470};
+    static int  last_tic = -1;
+
+    if (leveltime != last_tic)
+    {
+        last_tic = leveltime;
+        if (leveltime == 0)
+        {
+            level[0] = 520;
+            level[1] = 470;
+        }
+        else if ((leveltime % 6) == 0) // ~6/sec: re-roll the wander
+        {
+            int c;
+            for (c = 0; c < 2; c++)
+            {
+                int r = P_Random();
+                if (r < 22)             // ~9%: a surge
+                    level[c] += 260;
+                else if (r < 58)        // ~14%: a lull
+                    level[c] -= 230;
+                else                    // small drift
+                    level[c] += (r & 31) - 15;
+                if (level[c] < 90)
+                    level[c] = 90;
+                if (level[c] > 900)
+                    level[c] = 900;
+            }
+        }
+    }
+    return level[channel] + bias;
+}
+
+// Sim-aware network throughput (permille) for the packet-grove tick (p_tick.c).
+// Live mode returns the value pushed from the browser (the grove's own bursty
+// spawn cadence keeps even steady live traffic from reading as a uniform train);
+// the network sims (7/8) drive a bursty high synthetic throughput; the other
+// wings' sims keep a gentle ambient flow so the grove is never dead.
+static int DoomPerf_EffectiveNetworkValue(int live, int channel)
+{
+    switch (doomperf_sim_mode)
+    {
+    case 0: // live telemetry
+        return live;
+    case 7: // SIM: HIGH NETWORK UTILIZATION (bursty mid-high)
+        return DoomPerf_NetSimThroughput(channel, 0);
+    case 8: // SIM: HIGH NETWORK SATURATION (bursty, biased higher)
+        return DoomPerf_NetSimThroughput(channel, 200);
+    default: // other wings' sims: a calm ambient stream
+        return 110 + ((leveltime + channel * 90) % 40);
+    }
+}
+
+int DoomPerf_EffectiveNetworkRx(void)
+{
+    return DoomPerf_ClampPermille(DoomPerf_EffectiveNetworkValue(doomperf_net_rx, 0));
+}
+
+int DoomPerf_EffectiveNetworkTx(void)
+{
+    return DoomPerf_ClampPermille(DoomPerf_EffectiveNetworkValue(doomperf_net_tx, 1));
 }
 
 EMSCRIPTEN_KEEPALIVE

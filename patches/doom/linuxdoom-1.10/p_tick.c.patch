@@ -9,6 +9,7 @@
 #   0027  disk-metrics-dashboard
 #   0037  orb-spawn-despawn-polish
 #   (+)   memory-rss-barrels (RSS reliquary: per-process OOM-glow barrel pads)
+#   (+)   network-packets (RX/TX packet grove streams)
 #
 # Order-independent: this is the only Doom Perf patch that touches p_tick.c.
 # Regenerate by diffing a clean tree against the staged build tree;
@@ -22,7 +23,7 @@
  //-----------------------------------------------------------------------------
  //
  // $Id:$
-@@ -30,9 +30,896 @@
+@@ -30,9 +30,1068 @@
  
  #include "doomstat.h"
  
@@ -916,10 +917,182 @@
 +    }
 +}
 +
++// Doom Perf: NETWORK PACKET GROVE. Two opposed packet streams glide through the
++// central trough of the network wing (build-doomperf-map.mjs, west wing): cyan RX
++// orbs (MT_DP_NETRX) flow hub-ward in the left lane, violet TX orbs (MT_DP_NETTX)
++// flow back-wall-ward in the right lane. The orbs are non-blocking and NOCLIP --
++// they ride a scripted lane path and the player walks freely through them. Each
++// lane's population is a REPRESENTATIVE abstraction of throughput (not 1:1): a
++// gentle sqrt gradient over the 0..1000 permille RX/TX value (DoomPerf_Effective-
++// NetworkRx/Tx), so light traffic still shows a few packets and the stream fills
++// in smoothly toward the cap under load. World coords match the wing geometry
++// (lanes at y=-/+48, trough floor z=-48, travelling along x over [-1560,-940]).
++#define DOOMPERF_NET_LANE_Y	48			// |world y| of each lane
++#define DOOMPERF_NET_Z		(-48 * FRACUNIT)	// trough floor the orbs ride
++#define DOOMPERF_NET_RX_SPAWN_X	(-1560)			// RX spawns far (back wall side)
++#define DOOMPERF_NET_RX_EXIT_X	(-940)			// RX exits near the foyer (+x)
++#define DOOMPERF_NET_TX_SPAWN_X	(-940)			// TX spawns near the foyer
++#define DOOMPERF_NET_TX_EXIT_X	(-1560)			// TX exits at the back wall (-x)
++#define DOOMPERF_NET_LEN	620			// |spawn - exit| in map units
++#define DOOMPERF_NET_CAP	14			// max orbs per lane (also a perf cap)
++#define DOOMPERF_NET_SPEED	(4 * FRACUNIT)		// forward glide / tic
++#define DOOMPERF_NET_STEER	(2 * FRACUNIT)		// lateral homing toward lane centre
++
++static mobj_t*	doomperf_netpkt_rx[DOOMPERF_NET_CAP];
++static mobj_t*	doomperf_netpkt_tx[DOOMPERF_NET_CAP];
++// Per-lane "distance until the next spawn is allowed" (map units), re-rolled
++// bursty after each spawn so packets travel in clumps rather than an even train.
++static int	doomperf_netpkt_rxgap;
++static int	doomperf_netpkt_txgap;
++
++// Integer square root (no libm in the WASM build; the rest of the tick is integer
++// too). Returns floor(sqrt(v)) for v >= 0.
++static int DoomPerf_ISqrt (int v)
++{
++    int		r = 0;
++    int		bit = 1 << 30;
++
++    if (v <= 0)
++	return 0;
++    while (bit > v)
++	bit >>= 2;
++    while (bit != 0)
++    {
++	if (v >= r + bit)
++	{
++	    v -= r + bit;
++	    r = (r >> 1) + bit;
++	}
++	else
++	    r >>= 1;
++	bit >>= 2;
++    }
++    return r;
++}
++
++// A bursty inter-spawn gap (map units) around `mean`: ~60% of the time a tight
++// gap (clumping) and ~40% a wide one (a lull). The two outcomes are mean-
++// preserving, so average density still tracks `mean`, but the stream now travels
++// in clumps instead of an even train. Floored so orbs never fully overlap.
++static int DoomPerf_NetGap (int mean)
++{
++    int	g = (P_Random () < 154) ? (mean * 3) / 10 : (mean * 41) / 20;
++    return (g < 32) ? 32 : g;
++}
++
++// One lane: compact the pool, re-drive the live orbs (constant glide + gentle
++// homing to the lane centre; momentum is re-applied each tic so friction can't
++// bleed it off), fade any that crossed the exit, then spawn at most one fresh orb.
++// `target` is the AVERAGE packet count for this density; the bursty per-spawn gap
++// (*nextGap) lets clumps briefly overshoot it and lulls fall below. `dir` is +1
++// (toward +x) or -1.
++static void DoomPerf_NetLane (mobj_t** pool, int* nextGap, mobjtype_t type,
++			      statenum_t fade, int laneY, int spawnX, int exitX,
++			      int dir, int target)
++{
++    int		i;
++    int		w;
++    int		alive;
++    int		spacing;
++    int		min_prog;
++    mobj_t*	mo;
++
++    w = 0;
++    for (i = 0; i < DOOMPERF_NET_CAP; i++)
++    {
++	fixed_t	dy;
++
++	mo = pool[i];
++	if (!mo)
++	    continue;
++	if (mo->thinker.function.acv == (actionf_v)(-1))
++	    continue;	// already freed elsewhere
++	// Crossed the exit line (dir * (x - exitX) >= 0): hand to the fade animation.
++	if (dir * ((mo->x >> FRACBITS) - exitX) >= 0)
++	{
++	    DoomPerf_RqDespawn (mo, fade);
++	    continue;
++	}
++	dy = (laneY << FRACBITS) - mo->y;
++	if (dy > DOOMPERF_NET_STEER)
++	    dy = DOOMPERF_NET_STEER;
++	else if (dy < -DOOMPERF_NET_STEER)
++	    dy = -DOOMPERF_NET_STEER;
++	mo->momx = dir * DOOMPERF_NET_SPEED;
++	mo->momy = dy;
++	pool[w++] = mo;
++    }
++    for (i = w; i < DOOMPERF_NET_CAP; i++)
++	pool[i] = NULL;
++    alive = w;
++
++    if (target > DOOMPERF_NET_CAP)
++	target = DOOMPERF_NET_CAP;
++    if (target <= 0)
++	return;
++
++    // Mean inter-packet gap for this density (the average the bursts vary around).
++    spacing = DOOMPERF_NET_LEN / target;
++
++    // Distance the closest-to-spawn live orb has travelled from the spawn line.
++    min_prog = DOOMPERF_NET_LEN;
++    for (i = 0; i < alive; i++)
++    {
++	int prog = dir * ((pool[i]->x >> FRACBITS) - spawnX);
++	if (prog < min_prog)
++	    min_prog = prog;
++    }
++
++    // Bursty emission: spawn once the newest has cleared a randomized (clumpy) gap,
++    // then re-roll the gap. Capped at NET_CAP for perf; the mean gap keeps the
++    // average near `target` while clumps overshoot and lulls drop below it.
++    if (alive < DOOMPERF_NET_CAP && (alive == 0 || min_prog >= *nextGap))
++    {
++	mo = P_SpawnMobj (spawnX << FRACBITS, laneY << FRACBITS, DOOMPERF_NET_Z, type);
++	mo->momx = dir * DOOMPERF_NET_SPEED;
++	pool[alive] = mo;
++	*nextGap = DoomPerf_NetGap (spacing);
++    }
++}
++
++void DoomPerf_UpdateNetworkPackets (void)
++{
++    int		rx;
++    int		tx;
++    int		i;
++
++    // Level reload frees every mobj; drop the dangling pool refs on the first tic.
++    if (leveltime == 0)
++    {
++	for (i = 0; i < DOOMPERF_NET_CAP; i++)
++	{
++	    doomperf_netpkt_rx[i] = NULL;
++	    doomperf_netpkt_tx[i] = NULL;
++	}
++	doomperf_netpkt_rxgap = 0;
++	doomperf_netpkt_txgap = 0;
++    }
++
++    rx = DoomPerf_EffectiveNetworkRx();
++    tx = DoomPerf_EffectiveNetworkTx();
++    if (rx < 0) rx = 0; else if (rx > 1000) rx = 1000;
++    if (tx < 0) tx = 0; else if (tx > 1000) tx = 1000;
++
++    // Representative sqrt gradient: target = CAP * sqrt(permille/1000).
++    DoomPerf_NetLane (doomperf_netpkt_rx, &doomperf_netpkt_rxgap, MT_DP_NETRX,
++		      S_DP_NETRX_FADE1, -DOOMPERF_NET_LANE_Y, DOOMPERF_NET_RX_SPAWN_X,
++		      DOOMPERF_NET_RX_EXIT_X, +1,
++		      (DOOMPERF_NET_CAP * DoomPerf_ISqrt (rx * 1000)) / 1000);
++    DoomPerf_NetLane (doomperf_netpkt_tx, &doomperf_netpkt_txgap, MT_DP_NETTX,
++		      S_DP_NETTX_FADE1, DOOMPERF_NET_LANE_Y, DOOMPERF_NET_TX_SPAWN_X,
++		      DOOMPERF_NET_TX_EXIT_X, -1,
++		      (DOOMPERF_NET_CAP * DoomPerf_ISqrt (tx * 1000)) / 1000);
++}
++
  //
  // THINKERS
  // All thinkers should be allocated by Z_Malloc
-@@ -130,11 +1017,11 @@
+@@ -130,11 +1189,11 @@
  void P_Ticker (void)
  {
      int		i;
@@ -933,7 +1106,7 @@
      // pause if in menu and at least one tic has been run
      if ( !netgame
  	 && menuactive
-@@ -143,16 +1030,22 @@
+@@ -143,16 +1202,23 @@
      {
  	return;
      }
@@ -946,6 +1119,7 @@
 +    DoomPerf_UpdateDiskDashboard ();
 +    DoomPerf_UpdateMemoryWing ();
 +    DoomPerf_UpdateRunQueueParticles ();
++    DoomPerf_UpdateNetworkPackets ();
 +
      for (i=0 ; i<MAXPLAYERS ; i++)
  	if (playeringame[i])

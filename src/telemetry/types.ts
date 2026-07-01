@@ -78,11 +78,53 @@ export interface StorageTelemetry extends ResourceTelemetry {
   writeBytesPerSecond?: number;
 }
 
+export interface NetworkInterfaceTelemetry {
+  name: string;
+  rxBytesPerSecond: number;
+  txBytesPerSecond: number;
+}
+
+// TCP socket census by state (from /proc/net/tcp{,6}). Drives the socket-state
+// patch-panel wall and the `ss -s`-style sockets terminal.
+export interface TcpStateTelemetry {
+  established?: number;
+  synSent?: number;
+  synRecv?: number;
+  finWait1?: number;
+  finWait2?: number;
+  timeWait?: number;
+  close?: number;
+  closeWait?: number;
+  lastAck?: number;
+  listen?: number;
+  closing?: number;
+  total?: number;
+}
+
+// One backlogged socket for the SendQ/RecvQ terminal's top list.
+export interface SocketTelemetry {
+  local: string;
+  remote: string;
+  state: string;
+  sendQueueBytes: number;
+  recvQueueBytes: number;
+}
+
 export interface NetworkTelemetry extends ResourceTelemetry {
   rxBytesPerSecond?: number;
   txBytesPerSecond?: number;
   dropsPerSecond?: number;
   errorsPerSecond?: number;
+  // Noisiest real NIC this sample + the per-interface breakdown (busiest first);
+  // the packet grove binds to the primary interface rather than the aggregate.
+  primaryInterface?: string;
+  interfaces?: NetworkInterfaceTelemetry[];
+  // TCP socket state census + send/recv-queue backlog from /proc/net/tcp{,6}.
+  tcp?: TcpStateTelemetry;
+  sendQueueBytes?: number;
+  recvQueueBytes?: number;
+  backloggedSockets?: number;
+  topSockets?: SocketTelemetry[];
 }
 
 export interface TelemetrySnapshot {
@@ -118,4 +160,6 @@ export type TerminalSign =
   | "memory-pressure"
   | "memory-oom"
   | "storage"
-  | "network";
+  | "network"
+  | "network-sockets"
+  | "network-queues";

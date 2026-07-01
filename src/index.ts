@@ -212,6 +212,10 @@ type DoomPerfEngine = {
   _DoomPerf_SetMemoryCacheFraction?: (permille: number) => void;
   _DoomPerf_SetMemoryProcessCount?: (count: number) => void;
   _DoomPerf_SetMemoryProcessOom?: (index: number, permille: number) => void;
+  // Network RX/TX throughput as permille of a 1 Gbit reference link, driving the
+  // density of the two packet-orb streams in the network wing's grove.
+  _DoomPerf_SetNetworkRx?: (permille: number) => void;
+  _DoomPerf_SetNetworkTx?: (permille: number) => void;
   _DoomPerf_GetSimMode?: () => number;
   _DoomPerf_GetEffectiveCpuCoreCount?: () => number;
   _DoomPerf_GetEffectiveCpuCore?: (id: number) => number;
@@ -285,6 +289,25 @@ const pushTelemetryToEngine = (engine: DoomPerfEngine | undefined, telemetry: Te
       proc ? Math.round(clampRatio((proc.oomScore ?? 0) / 1000) * 1000) : 0
     );
   }
+  // Network RX/TX throughput as a fraction of a 1 Gbit reference link, pushed as
+  // permille. The engine maps it through a sqrt gradient to the packet-orb density
+  // in the grove's two lanes — a representative abstraction, not one orb per
+  // packet. The grove tracks the PRIMARY (noisiest) interface, matching the
+  // interface terminal's marked NIC, and falls back to the aggregate when no
+  // per-interface breakdown is available. The network sims (modes 7/8) synthesize
+  // their own throughput.
+  const networkFullScaleBytes = 125_000_000; // 1 Gbit/s
+  const primary = telemetry.network.interfaces?.find(
+    (iface) => iface.name === telemetry.network.primaryInterface
+  );
+  const groveRx = primary?.rxBytesPerSecond ?? telemetry.network.rxBytesPerSecond ?? 0;
+  const groveTx = primary?.txBytesPerSecond ?? telemetry.network.txBytesPerSecond ?? 0;
+  engine?._DoomPerf_SetNetworkRx?.(
+    Math.round(clampRatio(groveRx / networkFullScaleBytes) * 1000)
+  );
+  engine?._DoomPerf_SetNetworkTx?.(
+    Math.round(clampRatio(groveTx / networkFullScaleBytes) * 1000)
+  );
 };
 
 const scenarioTelemetry = (
@@ -464,6 +487,33 @@ const scenarioTelemetry = (
   // fields map straight onto the /proc/net/dev terminal's columns (rx/tx kB/s,
   // drops/s, errs/s) and its util/saturation/errors bars.
   const linkBeat = 0.85 + 0.3 * Math.abs(Math.sin(now / 1000));
+  const netWave = Math.abs(Math.sin(now / 1700));
+  const netRx = (networkSaturated ? 116 : 108) * mib * linkBeat;
+  const netTx = (networkSaturated ? 92 : 84) * mib * linkBeat;
+  // TCP census: high-utilization is a busy-but-healthy server (many ESTABLISHED,
+  // modest TIME-WAIT); saturation adds the pathology the patch-panel wall reads —
+  // a SYN-RECV accept backlog, a TIME-WAIT/CLOSE-WAIT pile from churn, established
+  // plateauing. Counts feed both the sockets terminal and (later) the wall glow.
+  const netEstab = networkSaturated ? 1500 + Math.round(80 * netWave) : 1800 + Math.round(120 * netWave);
+  const netTimeWait = networkSaturated ? 2400 + Math.round(300 * netWave) : 380 + Math.round(60 * netWave);
+  const netSynRecv = networkSaturated ? 160 + Math.round(60 * netWave) : 6;
+  const netCloseWait = networkSaturated ? 120 + Math.round(30 * netWave) : 4;
+  const netListen = 12;
+  const netClosing = networkSaturated ? 8 : 0;
+  const netTcp = {
+    established: netEstab,
+    synRecv: netSynRecv,
+    timeWait: netTimeWait,
+    closeWait: netCloseWait,
+    listen: netListen,
+    closing: netClosing,
+    total: netEstab + netTimeWait + netSynRecv + netCloseWait + netListen + netClosing,
+  };
+  // Send/Recv-Q backlog: near-zero under high-utilization (throughput pinned but
+  // draining fine), blows out under saturation — inbound app-read lag + outbound
+  // peer-drain lag. Drives the twin RecvQ/SendQ standpipe gauges.
+  const netRecvQ = networkSaturated ? (2.4 + 0.6 * netWave) * mib : 12 * 1024;
+  const netSendQ = networkSaturated ? (3.4 + 0.8 * netWave) * mib : 48 * 1024;
   const simNetwork = networkMode
     ? {
         utilization: networkSaturated
@@ -477,12 +527,32 @@ const scenarioTelemetry = (
         errors: 0,
         // ~1 GbE link (≈125 MB/s each way); the saturated link carries a little
         // less than the merely-busy one as contention caps goodput.
-        rxBytesPerSecond: (networkSaturated ? 116 : 108) * mib * linkBeat,
-        txBytesPerSecond: (networkSaturated ? 92 : 84) * mib * linkBeat,
+        rxBytesPerSecond: netRx,
+        txBytesPerSecond: netTx,
         // drops/s blow out only under saturation; NIC errors are a separate
         // signal kept at zero here.
         dropsPerSecond: networkSaturated ? 900 + 600 * Math.abs(Math.sin(now / 1500)) : 0,
         errorsPerSecond: 0,
+        // eth0 is the primary (noisiest) NIC the grove tracks; eth1 idles alongside
+        // so the interface terminal shows a real breakdown with a marked primary.
+        primaryInterface: "eth0",
+        interfaces: [
+          { name: "eth0", rxBytesPerSecond: netRx, txBytesPerSecond: netTx },
+          { name: "eth1", rxBytesPerSecond: (2 + 3 * netWave) * mib, txBytesPerSecond: (1 + 2 * netWave) * mib },
+        ],
+        tcp: netTcp,
+        recvQueueBytes: netRecvQ,
+        sendQueueBytes: netSendQ,
+        backloggedSockets: networkSaturated ? 130 + Math.round(30 * netWave) : 2,
+        topSockets: networkSaturated
+          ? [
+              { local: "10.0.0.5:443", remote: "203.0.113.9:52344", state: "ESTAB", recvQueueBytes: 0.2 * mib, sendQueueBytes: (1.4 + 0.3 * netWave) * mib },
+              { local: "10.0.0.5:443", remote: "198.51.100.7:41022", state: "ESTAB", recvQueueBytes: (0.9 + 0.2 * netWave) * mib, sendQueueBytes: 0.1 * mib },
+              { local: "10.0.0.5:8080", remote: "192.0.2.44:33900", state: "CLOSE-WAIT", recvQueueBytes: (0.5 + 0.1 * netWave) * mib, sendQueueBytes: 0 },
+            ]
+          : [
+              { local: "10.0.0.5:443", remote: "203.0.113.9:52344", state: "ESTAB", recvQueueBytes: 0, sendQueueBytes: 24 * 1024 },
+            ],
       }
     : (liveTelemetry?.network ?? quietResource);
 

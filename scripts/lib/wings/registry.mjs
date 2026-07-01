@@ -63,7 +63,13 @@ export const reserved = {
     lineTags: [760, 799],
     lights: [124, 128], // reserved sentinels (unused until live lane display)
     namePrefix: "DPN", // DPNET (label) + DPN... for lanes/choke/drop/error art
-    spriteReplacements: [],
+    // Packet-orb sprites streaming the two grove lanes (engine network-packets
+    // patch). Unlike textures/flats, sprite LUMPS must reuse existing IWAD sprite
+    // NAMES + frame letters (the DPN prefix can't apply) — see
+    // [[pwad-sprite-override-constraint]]. PINV (A–D) -> cyan RX packet + bloom/
+    // fade FX; PMAP (A–D) -> violet TX packet + FX. Both unused by CPU (PINS/
+    // SOUL/BON1/BON2).
+    spriteReplacements: ["PINVA0", "PINVB0", "PINVC0", "PINVD0", "PMAPA0", "PMAPB0", "PMAPC0", "PMAPD0"],
   },
 };
 
