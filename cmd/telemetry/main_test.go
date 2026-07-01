@@ -121,9 +121,10 @@ func TestReduceNetworkPicksNoisiestPrimary(t *testing.T) {
 		"eth0":  {name: "eth0", rxBytes: 1000, txBytes: 1000, speedBps: 1e9},
 		"wlan0": {name: "wlan0", rxBytes: 1000, txBytes: 1000, speedBps: 1e9},
 	}
-	// Over 1s: eth0 gains 200 B/s total; wlan0 gains 5020 B/s total -> wlan0 wins.
+	// Over 1s: eth0 gains 1200 B/s total; wlan0 gains 5020 B/s total -> wlan0 wins
+	// (both above the active floor, so both are listed).
 	nets := []netCounter{
-		{name: "eth0", rxBytes: 1100, txBytes: 1100, speedBps: 1e9},
+		{name: "eth0", rxBytes: 2000, txBytes: 1200, speedBps: 1e9},
 		{name: "wlan0", rxBytes: 6000, txBytes: 1020, speedBps: 1e9},
 	}
 	result, _ := reduceNetwork(nets, previous, 1.0)
@@ -138,7 +139,40 @@ func TestReduceNetworkPicksNoisiestPrimary(t *testing.T) {
 	if result.Interfaces[0].Name != "wlan0" {
 		t.Fatalf("Interfaces[0] = %q, want wlan0 (busiest first)", result.Interfaces[0].Name)
 	}
-	if result.RXBytesPerSecond != 5100 {
-		t.Fatalf("RXBytesPerSecond = %v, want 5100", result.RXBytesPerSecond)
+	if result.RXBytesPerSecond != 6000 {
+		t.Fatalf("RXBytesPerSecond = %v, want 6000", result.RXBytesPerSecond)
+	}
+}
+
+func TestReduceNetworkHidesIdleInterfaces(t *testing.T) {
+	previous := map[string]netCounter{
+		"eth0":        {name: "eth0", rxBytes: 1000, txBytes: 1000, speedBps: 1e9},
+		"veth-busy":   {name: "veth-busy", rxBytes: 1000, txBytes: 1000, speedBps: 1e9},
+		"veth-idle":   {name: "veth-idle", rxBytes: 1000, txBytes: 1000, speedBps: 1e9},
+		"veth-silent": {name: "veth-silent", rxBytes: 1000, txBytes: 1000, speedBps: 1e9},
+	}
+	// Over 1s: eth0 +9000 B/s (primary), veth-busy +4000 B/s (above the 1 KiB floor,
+	// kept), veth-idle +100 B/s and veth-silent +0 (both below the floor, hidden).
+	nets := []netCounter{
+		{name: "eth0", rxBytes: 6000, txBytes: 5000, speedBps: 1e9},
+		{name: "veth-busy", rxBytes: 4000, txBytes: 2000, speedBps: 1e9},
+		{name: "veth-idle", rxBytes: 1100, txBytes: 1000, speedBps: 1e9},
+		{name: "veth-silent", rxBytes: 1000, txBytes: 1000, speedBps: 1e9},
+	}
+	result, _ := reduceNetwork(nets, previous, 1.0)
+
+	if result.PrimaryInterface != "eth0" {
+		t.Fatalf("PrimaryInterface = %q, want eth0", result.PrimaryInterface)
+	}
+	names := make([]string, 0, len(result.Interfaces))
+	for _, iface := range result.Interfaces {
+		names = append(names, iface.Name)
+	}
+	if len(names) != 2 || names[0] != "eth0" || names[1] != "veth-busy" {
+		t.Fatalf("kept interfaces = %v, want [eth0 veth-busy]", names)
+	}
+	// The hidden interfaces still count toward the aggregate throughput.
+	if result.RXBytesPerSecond != 8100 {
+		t.Fatalf("aggregate RXBytesPerSecond = %v, want 8100 (all interfaces)", result.RXBytesPerSecond)
 	}
 }

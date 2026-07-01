@@ -292,21 +292,15 @@ const pushTelemetryToEngine = (engine: DoomPerfEngine | undefined, telemetry: Te
   // Network RX/TX throughput as a fraction of a 1 Gbit reference link, pushed as
   // permille. The engine maps it through a sqrt gradient to the packet-orb density
   // in the grove's two lanes — a representative abstraction, not one orb per
-  // packet. The grove tracks the PRIMARY (noisiest) interface, matching the
-  // interface terminal's marked NIC, and falls back to the aggregate when no
-  // per-interface breakdown is available. The network sims (modes 7/8) synthesize
-  // their own throughput.
+  // packet. The grove shows AGGREGATE throughput across all interfaces (the same
+  // rx/tx totals that feed utilization), not any single NIC. The network sims
+  // (modes 7/8) synthesize their own throughput.
   const networkFullScaleBytes = 125_000_000; // 1 Gbit/s
-  const primary = telemetry.network.interfaces?.find(
-    (iface) => iface.name === telemetry.network.primaryInterface
-  );
-  const groveRx = primary?.rxBytesPerSecond ?? telemetry.network.rxBytesPerSecond ?? 0;
-  const groveTx = primary?.txBytesPerSecond ?? telemetry.network.txBytesPerSecond ?? 0;
   engine?._DoomPerf_SetNetworkRx?.(
-    Math.round(clampRatio(groveRx / networkFullScaleBytes) * 1000)
+    Math.round(clampRatio((telemetry.network.rxBytesPerSecond ?? 0) / networkFullScaleBytes) * 1000)
   );
   engine?._DoomPerf_SetNetworkTx?.(
-    Math.round(clampRatio(groveTx / networkFullScaleBytes) * 1000)
+    Math.round(clampRatio((telemetry.network.txBytesPerSecond ?? 0) / networkFullScaleBytes) * 1000)
   );
 };
 
@@ -488,8 +482,15 @@ const scenarioTelemetry = (
   // drops/s, errs/s) and its util/saturation/errors bars.
   const linkBeat = 0.85 + 0.3 * Math.abs(Math.sin(now / 1000));
   const netWave = Math.abs(Math.sin(now / 1700));
-  const netRx = (networkSaturated ? 116 : 108) * mib * linkBeat;
-  const netTx = (networkSaturated ? 92 : 84) * mib * linkBeat;
+  // Two interfaces: eth0 carries the bulk, eth1 idles alongside. The grove reflects
+  // the AGGREGATE, so the top-level rx/tx below is their sum (as the real collector
+  // reports it).
+  const eth0Rx = (networkSaturated ? 116 : 108) * mib * linkBeat;
+  const eth0Tx = (networkSaturated ? 92 : 84) * mib * linkBeat;
+  const eth1Rx = (2 + 3 * netWave) * mib;
+  const eth1Tx = (1 + 2 * netWave) * mib;
+  const netRx = eth0Rx + eth1Rx; // aggregate rx (drives the grove)
+  const netTx = eth0Tx + eth1Tx; // aggregate tx
   // TCP census: high-utilization is a busy-but-healthy server (many ESTABLISHED,
   // modest TIME-WAIT); saturation adds the pathology the patch-panel wall reads —
   // a SYN-RECV accept backlog, a TIME-WAIT/CLOSE-WAIT pile from churn, established
@@ -533,12 +534,13 @@ const scenarioTelemetry = (
         // signal kept at zero here.
         dropsPerSecond: networkSaturated ? 900 + 600 * Math.abs(Math.sin(now / 1500)) : 0,
         errorsPerSecond: 0,
-        // eth0 is the primary (noisiest) NIC the grove tracks; eth1 idles alongside
-        // so the interface terminal shows a real breakdown with a marked primary.
+        // eth0 is the primary (noisiest) NIC, eth1 idles alongside, so the interface
+        // terminal shows a real breakdown with a marked primary; their rx/tx sum to
+        // the aggregate (netRx/netTx) the grove shows.
         primaryInterface: "eth0",
         interfaces: [
-          { name: "eth0", rxBytesPerSecond: netRx, txBytesPerSecond: netTx },
-          { name: "eth1", rxBytesPerSecond: (2 + 3 * netWave) * mib, txBytesPerSecond: (1 + 2 * netWave) * mib },
+          { name: "eth0", rxBytesPerSecond: eth0Rx, txBytesPerSecond: eth0Tx },
+          { name: "eth1", rxBytesPerSecond: eth1Rx, txBytesPerSecond: eth1Tx },
         ],
         tcp: netTcp,
         recvQueueBytes: netRecvQ,

@@ -6,10 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"net/http"
-	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -22,6 +22,13 @@ import (
 
 const sampleInterval = time.Second
 const defaultMaxTelemetryStreams = 64
+
+// netIfaceActiveBytesPerSecond is the rx+tx floor for an interface to appear in
+// the per-interface list. It hides the swarm of idle virtual interfaces (veth*,
+// etc.) a container host carries, keeping the network terminal short and
+// meaningful. The aggregate totals and primary-interface pick still see every
+// interface; the primary is always shown even when quiet.
+const netIfaceActiveBytesPerSecond = 1024.0
 
 type resourceUSE struct {
 	Utilization float64 `json:"utilization"`
@@ -1014,6 +1021,15 @@ func reduceNetwork(nets []netCounter, previous map[string]netCounter, elapsed fl
 		b := result.Interfaces[j]
 		return a.RXBytesPerSecond+a.TXBytesPerSecond > b.RXBytesPerSecond+b.TXBytesPerSecond
 	})
+	// Hide interfaces that aren't moving data (idle veths and the like); always keep
+	// the primary so the list is never empty.
+	kept := result.Interfaces[:0]
+	for _, iface := range result.Interfaces {
+		if iface.Name == result.PrimaryInterface || iface.RXBytesPerSecond+iface.TXBytesPerSecond >= netIfaceActiveBytesPerSecond {
+			kept = append(kept, iface)
+		}
+	}
+	result.Interfaces = kept
 	if capacity > 0 {
 		result.Utilization = clamp((result.RXBytesPerSecond + result.TXBytesPerSecond) * 8 / capacity)
 	}

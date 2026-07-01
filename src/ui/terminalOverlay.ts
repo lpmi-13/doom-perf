@@ -336,28 +336,37 @@ const formatStorage = (telemetry: TelemetrySnapshot): string => {
 // NETWORK wing — per-interface throughput (`sar -n DEV`) with the noisiest NIC
 // marked as primary, the input to the wing's packet-grove lanes. USE utilization
 // is throughput vs link speed; saturation is drops.
+//
+// The interface list is rendered at a FIXED row count (netInterfaceRows), padding
+// with blank lines, so the "primary interface" line and the bars below never
+// reflow as interfaces enter or leave the (collector-filtered) list. Columns:
+// a 2-wide primary marker, the interface name LEFT-aligned in a fixed field, then
+// rxkB/s and txkB/s RIGHT-aligned — so names of any length stay aligned and the
+// numbers line up under their headers.
+const netInterfaceRows = 6; // most interfaces ever listed; also the pinned height
+const netRow = (marker: string, name: string, rx: string, tx: string): string =>
+  `${marker.padStart(2)}${name.slice(0, 15).padEnd(16)}${rx.padStart(9)}${tx.padStart(9)}`;
 const formatNetwork = (telemetry: TelemetrySnapshot): string => {
   const n = telemetry.network;
-  const columns: [string, number][] = [
-    ["", 2], ["IFACE", 10], ["rxkB/s", 12], ["txkB/s", 12],
-  ];
+  const interfaces = n.interfaces ?? [];
+  const rows = interfaces.length > 0
+    ? interfaces.slice(0, netInterfaceRows).map((iface) =>
+        netRow(
+          iface.name === n.primaryInterface ? "*" : "",
+          iface.name,
+          String(kib(iface.rxBytesPerSecond)),
+          String(kib(iface.txBytesPerSecond))
+        )
+      )
+    : [netRow("", "aggregate", String(kib(n.rxBytesPerSecond)), String(kib(n.txBytesPerSecond)))];
+  // Pin the block height: pad up to netInterfaceRows so nothing below shifts.
+  while (rows.length < netInterfaceRows) rows.push("");
   const lines: string[] = [];
   lines.push("$ sar -n DEV 1 1   (per interface, per second)");
-  lines.push(columns.map(([label, width]) => padStart(label, width)).join(""));
-  const interfaces = n.interfaces ?? [];
-  if (interfaces.length > 0) {
-    interfaces.slice(0, 8).forEach((iface) => {
-      const primary = iface.name === n.primaryInterface;
-      const cells = [primary ? "*" : "", iface.name, String(kib(iface.rxBytesPerSecond)), String(kib(iface.txBytesPerSecond))];
-      lines.push(columns.map(([, width], i) => padStart(cells[i], width)).join(""));
-    });
-    lines.push("");
-    lines.push(`primary interface: ${n.primaryInterface ?? "-"}   (* = noisiest; drives the grove)`);
-  } else {
-    // No per-interface breakdown (older source) — fall back to the aggregate.
-    const cells = ["", "aggregate", String(kib(n.rxBytesPerSecond)), String(kib(n.txBytesPerSecond))];
-    lines.push(columns.map(([, width], i) => padStart(cells[i], width)).join(""));
-  }
+  lines.push(netRow("", "IFACE", "rxkB/s", "txkB/s"));
+  lines.push(...rows);
+  lines.push("");
+  lines.push(`primary interface: ${n.primaryInterface ?? "-"}   (* = noisiest; grove shows all)`);
   lines.push("");
   lines.push(`utilization  ${bar(n.utilization)} ${pctText(n.utilization)}%   (throughput vs link speed)`);
   lines.push(`saturation   ${bar(n.saturation)} ${pctText(n.saturation)}%   (drops)`);
