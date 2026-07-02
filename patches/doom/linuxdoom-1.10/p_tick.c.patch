@@ -10,6 +10,7 @@
 #   0037  orb-spawn-despawn-polish
 #   (+)   memory-rss-barrels (RSS reliquary: per-process OOM-glow barrel pads)
 #   (+)   network-packets (RX/TX packet grove streams)
+#   (+)   memory-wing-rework (paging minor/major fault meters + OOM-killer Baron)
 #
 # Order-independent: this is the only Doom Perf patch that touches p_tick.c.
 # Regenerate by diffing a clean tree against the staged build tree;
@@ -23,7 +24,7 @@
  //-----------------------------------------------------------------------------
  //
  // $Id:$
-@@ -30,9 +30,1068 @@
+@@ -30,9 +30,1377 @@ rcsid[] = "$Id: p_tick.c,v 1.4 1997/02/03 16:47:55 b1 Exp $";
  
  #include "doomstat.h"
  
@@ -31,6 +32,8 @@
 +#include "m_random.h"
 +#include "p_mobj.h"
 +#include "r_state.h"
++#include "sounds.h"
++#include "s_sound.h"
 +
  
  int	leveltime;
@@ -223,24 +226,28 @@
 +    doomperf_disk_dashboard[2][DOOMPERF_DASH_SAMPLES - 1] = read;
 +}
 +
-+// Doom Perf: MEMORY page-bank instruments. Tags 500..544 are the 9x5 page
-+// cells, 546/547 are swap-in/out channels, 548 is the OOM bay, and 549/550 are
-+// PSI some/full pads. Sunken page cells = a shelf; count+colour = composition. Saturation
-+// lifts/pulses the swap channels and PSI pads. Errors wake only the OOM alcove.
++// Doom Perf: MEMORY page-bank instruments, one independent station per USE
++// signal. Tags 500..544 are the 9x5 page cells (Station A: `free -m`
++// composition, the junction book-shelf), 546/547 are the swap-in/out channels
++// (Station B), 549/550 are the minor/major page-fault meters (Station C), 548 is
++// the OOM-killer BARON's pen (Station D, driven by DoomPerf_UpdateOomBaron), and
++// 551..555 are the RSS-reliquary barrel pads. Sunken page cells = a shelf;
++// count+colour = composition. Saturation lifts/pulses the swap channels and the
++// major-fault meter.
 +#define DOOMPERF_MEMORY_PAGE_TAG_BASE	500
 +#define DOOMPERF_MEMORY_PAGE_COUNT	45
 +#define DOOMPERF_MEMORY_SWAP_IN_TAG	546
 +#define DOOMPERF_MEMORY_SWAP_OUT_TAG	547
-+#define DOOMPERF_MEMORY_OOM_TAG		548
-+#define DOOMPERF_MEMORY_PSI_SOME_TAG	549
-+#define DOOMPERF_MEMORY_PSI_FULL_TAG	550
++#define DOOMPERF_MEMORY_OOM_PEN_TAG	548
++#define DOOMPERF_MEMORY_MINFLT_TAG	549
++#define DOOMPERF_MEMORY_MAJFLT_TAG	550
 +#define DOOMPERF_MEMORY_PAGE_LOW	(-48 * FRACUNIT)
 +#define DOOMPERF_MEMORY_PAGE_HIGH	(-16 * FRACUNIT)
 +#define DOOMPERF_MEMORY_PAGE_STEP	(2 * FRACUNIT)
 +#define DOOMPERF_MEMORY_SWAP_LOW	(-20 * FRACUNIT)
 +#define DOOMPERF_MEMORY_SWAP_HIGH	(12 * FRACUNIT)
-+#define DOOMPERF_MEMORY_PSI_LOW		(20 * FRACUNIT)
-+#define DOOMPERF_MEMORY_PSI_HIGH	(52 * FRACUNIT)
++#define DOOMPERF_MEMORY_FLT_LOW		(-24 * FRACUNIT)
++#define DOOMPERF_MEMORY_FLT_HIGH	(16 * FRACUNIT)
 +// RSS "reliquary" barrels (sector tags 551..555): one barrel per top-RSS
 +// process (the rows of `ps -eo pid,rss,comm --sort=-rss`), each standing on its
 +// own pad sector in front of the RSS terminal. We light each pad by that
@@ -268,6 +275,28 @@
 +    if (doomperf_sim_mode == 6)
 +	return 760 + ((leveltime * 4) % 180);
 +    return doomperf_memory_saturation;
++}
++
++// Page-fault rates (permille of a reference) for the paging bay's two meters.
++// Minor faults are mostly workload; major faults are the disk/swap-refault
++// saturation signal. The memory sims synthesize them: mode 5 (utilization) has
++// light minor churn only; mode 6 (saturation) thrashes on major faults.
++static int DoomPerf_EffectiveMemoryMinFlt (void)
++{
++    if (doomperf_sim_mode == 5)
++	return 120 + (leveltime % 40);
++    if (doomperf_sim_mode == 6)
++	return 800 + ((leveltime * 3) % 160);
++    return doomperf_memory_minflt;
++}
++
++static int DoomPerf_EffectiveMemoryMajFlt (void)
++{
++    if (doomperf_sim_mode == 5)
++	return 15 + (leveltime % 10);
++    if (doomperf_sim_mode == 6)
++	return 820 + ((leveltime * 5) % 150);
++    return doomperf_memory_majflt;
 +}
 +
 +// Reclaimable page cache (Buffers+Cached) in permille of MemTotal. In the memory
@@ -334,7 +363,6 @@
 +{
 +    int		util;
 +    int		sat;
-+    int		err;
 +    int		cache;
 +    int		green_cells;
 +    int		cyan_cells;
@@ -357,7 +385,6 @@
 +    util = DoomPerf_Clamp1000(DoomPerf_EffectiveMemoryUtil());
 +    cache = DoomPerf_Clamp1000(DoomPerf_EffectiveMemoryCache());
 +    sat = DoomPerf_Clamp1000(DoomPerf_EffectiveMemorySaturation());
-+    err = DoomPerf_Clamp1000(DoomPerf_EffectiveMemoryErrors());
 +    pulse = DoomPerf_TrianglePulse(2 + sat / 180);
 +
 +    // Split the shelf into page-cache (cyan) + working-set (green) + free
@@ -462,27 +489,27 @@
 +	    continue;
 +	}
 +
-+	if (tag == DOOMPERF_MEMORY_PSI_SOME_TAG)
++	// Paging bay minor-fault meter (Station C): a low, dim column that rises
++	// with the minor-fault rate. Minor faults are mostly workload, so this
++	// reads as steady activity rather than danger.
++	if (tag == DOOMPERF_MEMORY_MINFLT_TAG)
 +	{
-+	    sectors[i].floorheight = DOOMPERF_MEMORY_PSI_LOW
-+		+ ((DOOMPERF_MEMORY_PSI_HIGH - DOOMPERF_MEMORY_PSI_LOW) * sat) / 1000;
-+	    sectors[i].lightlevel = (short)(170 + (sat * 50) / 1000);
++	    int mf = DoomPerf_Clamp1000(DoomPerf_EffectiveMemoryMinFlt());
++	    sectors[i].floorheight = DOOMPERF_MEMORY_FLT_LOW
++		+ ((DOOMPERF_MEMORY_FLT_HIGH - DOOMPERF_MEMORY_FLT_LOW) * mf) / 1000;
++	    sectors[i].lightlevel = (short)(148 + (mf * 56) / 1000);
 +	    continue;
 +	}
 +
-+	if (tag == DOOMPERF_MEMORY_PSI_FULL_TAG)
++	// Paging bay major-fault meter (Station C): the disk/swap-refault
++	// saturation signal, so it climbs higher, burns hotter, and pulses as it
++	// rises -- the thrash warning next to the swap channels.
++	if (tag == DOOMPERF_MEMORY_MAJFLT_TAG)
 +	{
-+	    int severe = sat > 600 ? sat - 600 : 0;
-+	    sectors[i].floorheight = DOOMPERF_MEMORY_PSI_LOW
-+		+ ((DOOMPERF_MEMORY_PSI_HIGH - DOOMPERF_MEMORY_PSI_LOW) * severe) / 400;
-+	    sectors[i].lightlevel = (short)(150 + (severe * 90) / 400);
-+	    continue;
-+	}
-+
-+	if (tag == DOOMPERF_MEMORY_OOM_TAG)
-+	{
-+	    sectors[i].floorheight = err ? 8 * FRACUNIT : -16 * FRACUNIT;
-+	    sectors[i].lightlevel = (short)(err ? 190 + pulse : 112);
++	    int mf = DoomPerf_Clamp1000(DoomPerf_EffectiveMemoryMajFlt());
++	    sectors[i].floorheight = DOOMPERF_MEMORY_FLT_LOW
++		+ ((DOOMPERF_MEMORY_FLT_HIGH - DOOMPERF_MEMORY_FLT_LOW) * mf) / 1000;
++	    sectors[i].lightlevel = (short)(162 + (mf * 66) / 1000 + (pulse * mf) / 4000);
 +	    continue;
 +	}
 +
@@ -501,6 +528,289 @@
 +	    if (light > 252)
 +		light = 252;
 +	    sectors[i].lightlevel = (short)light;
++	}
++    }
++}
++
++// Doom Perf: the OOM-killer BARON (memory wing, Station D). A Baron of Hell is
++// placed (map thing 3003) in the pen sector tagged DOOMPERF_MEMORY_OOM_PEN_TAG at
++// the head of the RSS reliquary. We freeze its AI (tics = -1) and make it
++// non-solid / non-shootable / not a counted kill so it never fights the player --
++// it is driven entirely by hand here. When an OOM kill fires (the browser's
++// DoomPerf_TriggerMemoryOomKill on a rising oom_kill counter, or a periodic
++// self-fire in the memory-saturation sim), the baron walks from its pen to the
++// victim reliquary barrel (the highest-badness resident set) and detonates it:
++// that process is gone. The barrel refills after a short delay so a fresh process
++// takes the slot. The detonation is a hand-played BEXP animation (no A_Explode),
++// so it deals NO radius damage to the watching player.
++#define DOOMPERF_OOM_STEP		(11 * FRACUNIT)	// baron walk speed / tic
++#define DOOMPERF_OOM_MELEE		(56 * FRACUNIT)	// touch distance to the barrel
++#define DOOMPERF_OOM_DET_TICS		30		// detonation animation length
++#define DOOMPERF_OOM_RESPAWN_TICS	90		// barrel refill delay after a kill
++#define DOOMPERF_OOM_SIM_PERIOD		240		// mode-6 self-fire cadence (~7s)
++#define DOOMPERF_OOM_PEN_DARK		104		// pen light at rest
++#define DOOMPERF_OOM_PEN_LIT		208		// pen light during an event
++#define DOOMPERF_OOM_GATE_TAG		556		// baron-enclosure gate sector
++#define DOOMPERF_OOM_GATE_SHUT		(64 * FRACUNIT)	// waist-high railing (closed)
++#define DOOMPERF_OOM_GATE_OPEN		(0 * FRACUNIT)	// dropped flush (open)
++#define DOOMPERF_OOM_GATE_STEP		(8 * FRACUNIT)	// gate ease speed / tic
++
++// Face + step `b` toward (tx,ty) by at most `step`, grounding it on the floor it
++// ends over. Returns the pre-move distance so the caller can decide when it has
++// arrived. Steering is by raw dx/dy deltas (as the run-queue orbs do), and the
++// move is a direct reposition (no P_TryMove), so the baron glides straight to its
++// target without snagging on the arm geometry.
++static fixed_t DoomPerf_BaronMove (mobj_t* b, fixed_t tx, fixed_t ty, fixed_t step)
++{
++    fixed_t	dx = tx - b->x;
++    fixed_t	dy = ty - b->y;
++    fixed_t	adx = dx < 0 ? -dx : dx;
++    fixed_t	ady = dy < 0 ? -dy : dy;
++    fixed_t	dist = adx > ady ? adx + (ady >> 1) : ady + (adx >> 1);
++
++    b->angle = R_PointToAngle2 (b->x, b->y, tx, ty);
++    P_UnsetThingPosition (b);
++    if (dist <= step || dist == 0)
++    {
++	b->x = tx;
++	b->y = ty;
++    }
++    else
++    {
++	b->x += FixedMul (dx, FixedDiv (step, dist));
++	b->y += FixedMul (dy, FixedDiv (step, dist));
++    }
++    P_SetThingPosition (b);
++    b->z = b->subsector->sector->floorheight;
++    return dist;
++}
++
++// Find the live reliquary barrel standing on the pad sector for slot `slot`
++// (tag DOOMPERF_MEMORY_BARREL_TAG_BASE + slot), or NULL if that slot is empty.
++static mobj_t* DoomPerf_ReliquaryBarrel (int slot)
++{
++    int		i;
++    mobj_t*	mo;
++
++    for (i = 0; i < numsectors; i++)
++    {
++	if (sectors[i].tag != DOOMPERF_MEMORY_BARREL_TAG_BASE + slot)
++	    continue;
++	for (mo = sectors[i].thinglist; mo; mo = mo->snext)
++	    if (mo->type == MT_BARREL)
++		return mo;
++    }
++    return NULL;
++}
++
++void DoomPerf_UpdateOomBaron (void)
++{
++    static int		found = 0;
++    static int		phase = 0;	// 0 idle, 1 walk, 2 detonate, 3 return
++    static mobj_t*	baron = NULL;
++    static mobj_t*	victim = NULL;
++    static fixed_t	home_x, home_y;
++    static fixed_t	det_x, det_y, det_z;
++    static int		det_timer = 0;
++    static int		respawn = 0;
++    static int		sim_timer = 0;
++    int			i;
++    int			pen_light;
++    int			slot;
++    int			trigger;
++    fixed_t		dist;
++    mobj_t*		mo;
++
++    // Level (re)load frees every mobj and zeroes leveltime: rediscover the baron
++    // and reset the state machine (as the packet lanes do with their pool refs).
++    if (leveltime == 0)
++    {
++	found = 0;
++	phase = 0;
++	baron = NULL;
++	victim = NULL;
++	det_timer = 0;
++	respawn = 0;
++	sim_timer = 0;
++    }
++
++    // Find + neutralize the penned baron once per level.
++    if (!found)
++    {
++	for (i = 0; i < numsectors && !baron; i++)
++	{
++	    if (sectors[i].tag != DOOMPERF_MEMORY_OOM_PEN_TAG)
++		continue;
++	    for (mo = sectors[i].thinglist; mo; mo = mo->snext)
++	    {
++		if (mo->type != MT_BRUISER)
++		    continue;
++		mo->flags &= ~(MF_SOLID | MF_SHOOTABLE | MF_COUNTKILL);
++		mo->flags |= MF_NOGRAVITY;
++		mo->momx = mo->momy = mo->momz = 0;
++		mo->target = NULL;
++		mo->tics = -1;		// freeze the AI state machine
++		mo->sprite = SPR_BOSS;
++		mo->frame = 0;		// stand
++		baron = mo;
++		home_x = mo->x;
++		home_y = mo->y;
++		break;
++	    }
++	}
++	found = 1;
++    }
++
++    // Barrel respawn: after a kill, refill the freed slot so the reliquary (and
++    // the next OOM event) has a full row of resident-set barrels again.
++    if (respawn > 0)
++    {
++	respawn--;
++	if (respawn == 0)
++	{
++	    mo = P_SpawnMobj (det_x, det_y, det_z, MT_BARREL);
++	    mo->flags &= ~(MF_SOLID | MF_SHOOTABLE);
++	    mo->flags |= MF_NOGRAVITY;
++	    mo->momx = mo->momy = mo->momz = 0;
++	}
++    }
++
++    if (!baron)
++	return;
++
++    // Pen ambient light: dark at rest, scaling with the live OOM error rate, and
++    // flaring fully while a kill is in flight.
++    if (phase != 0)
++	pen_light = DOOMPERF_OOM_PEN_LIT;
++    else
++    {
++	int e = DoomPerf_Clamp1000(DoomPerf_EffectiveMemoryErrors());
++	pen_light = DOOMPERF_OOM_PEN_DARK
++	    + ((DOOMPERF_OOM_PEN_LIT - DOOMPERF_OOM_PEN_DARK) * e) / 1000;
++    }
++    for (i = 0; i < numsectors; i++)
++	if (sectors[i].tag == DOOMPERF_MEMORY_OOM_PEN_TAG)
++	    sectors[i].lightlevel = (short)pen_light;
++
++    // Enclosure gate: held up as a waist-high railing (the baron reads as caged)
++    // at rest, eased down flush while a kill is in flight so the baron walks out.
++    {
++	fixed_t gate_target = (phase != 0) ? DOOMPERF_OOM_GATE_OPEN : DOOMPERF_OOM_GATE_SHUT;
++	for (i = 0; i < numsectors; i++)
++	{
++	    if (sectors[i].tag != DOOMPERF_OOM_GATE_TAG)
++		continue;
++	    if (sectors[i].floorheight < gate_target)
++	    {
++		sectors[i].floorheight += DOOMPERF_OOM_GATE_STEP;
++		if (sectors[i].floorheight > gate_target)
++		    sectors[i].floorheight = gate_target;
++	    }
++	    else if (sectors[i].floorheight > gate_target)
++	    {
++		sectors[i].floorheight -= DOOMPERF_OOM_GATE_STEP;
++		if (sectors[i].floorheight < gate_target)
++		    sectors[i].floorheight = gate_target;
++	    }
++	}
++    }
++
++    // Idle: wait for a pending kill (live edge-trigger) or self-fire in the
++    // memory-saturation sim, then latch the victim slot and start walking.
++    if (phase == 0)
++    {
++	trigger = 0;
++	slot = 0;
++	if (doomperf_oom_event)
++	{
++	    slot = doomperf_oom_victim;
++	    doomperf_oom_event = 0;
++	    trigger = 1;
++	}
++	else if (doomperf_sim_mode == 6)
++	{
++	    if (++sim_timer >= DOOMPERF_OOM_SIM_PERIOD)
++	    {
++		sim_timer = 0;
++		slot = (leveltime / DOOMPERF_OOM_SIM_PERIOD) % DOOMPERF_MEMORY_BARREL_COUNT;
++		trigger = 1;
++	    }
++	}
++	else
++	    sim_timer = 0;
++
++	if (trigger)
++	{
++	    if (slot < 0 || slot >= DOOMPERF_MEMORY_BARREL_COUNT)
++		slot = 0;
++	    victim = DoomPerf_ReliquaryBarrel (slot);
++	    if (victim)
++		phase = 1;
++	}
++    }
++
++    // Walk to the victim barrel.
++    if (phase == 1)
++    {
++	if (!victim)
++	    phase = 3;
++	else
++	{
++	    dist = DoomPerf_BaronMove (baron, victim->x, victim->y, DOOMPERF_OOM_STEP);
++	    baron->sprite = SPR_BOSS;
++	    baron->frame = (leveltime >> 3) & 3;	// walk cycle A..D
++	    if (dist <= DOOMPERF_OOM_MELEE)
++	    {
++		phase = 2;
++		det_timer = 0;
++	    }
++	}
++    }
++
++    // Detonate the barrel: a hand-played BEXP flash (no radius damage), then the
++    // barrel is removed (process killed) and scheduled to refill.
++    if (phase == 2)
++    {
++	baron->sprite = SPR_BOSS;
++	baron->frame = 6;		// BOSS G: attack pose
++	if (victim)
++	{
++	    int f;
++	    if (det_timer == 0)
++	    {
++		det_x = victim->x;
++		det_y = victim->y;
++		det_z = victim->z;
++		S_StartSound (victim, sfx_barexp);
++	    }
++	    f = det_timer / 6;		// BEXP A..E over the animation
++	    if (f > 4)
++		f = 4;
++	    victim->sprite = SPR_BEXP;
++	    victim->frame = f | FF_FULLBRIGHT;
++	}
++	if (++det_timer >= DOOMPERF_OOM_DET_TICS)
++	{
++	    if (victim)
++	    {
++		P_RemoveMobj (victim);
++		victim = NULL;
++		respawn = DOOMPERF_OOM_RESPAWN_TICS;
++	    }
++	    phase = 3;
++	}
++    }
++
++    // Return to the pen.
++    if (phase == 3)
++    {
++	dist = DoomPerf_BaronMove (baron, home_x, home_y, DOOMPERF_OOM_STEP);
++	baron->sprite = SPR_BOSS;
++	baron->frame = (leveltime >> 3) & 3;
++	if (dist <= DOOMPERF_OOM_STEP)
++	{
++	    baron->frame = 0;		// stand
++	    phase = 0;
 +	}
 +    }
 +}
@@ -1092,7 +1402,7 @@
  //
  // THINKERS
  // All thinkers should be allocated by Z_Malloc
-@@ -130,11 +1189,11 @@
+@@ -130,11 +1498,11 @@ void P_RunThinkers (void)
  void P_Ticker (void)
  {
      int		i;
@@ -1106,7 +1416,7 @@
      // pause if in menu and at least one tic has been run
      if ( !netgame
  	 && menuactive
-@@ -143,16 +1202,23 @@
+@@ -143,16 +1511,24 @@ void P_Ticker (void)
      {
  	return;
      }
@@ -1118,6 +1428,7 @@
 +    DoomPerf_UpdatePlatter ();
 +    DoomPerf_UpdateDiskDashboard ();
 +    DoomPerf_UpdateMemoryWing ();
++    DoomPerf_UpdateOomBaron ();
 +    DoomPerf_UpdateRunQueueParticles ();
 +    DoomPerf_UpdateNetworkPackets ();
 +

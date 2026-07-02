@@ -68,28 +68,34 @@ type cpuCoreTelemetry struct {
 
 type memoryTelemetry struct {
 	resourceUSE
-	TotalBytes            uint64                `json:"totalBytes"`
-	AvailableBytes        uint64                `json:"availableBytes"`
-	FreeBytes             uint64                `json:"freeBytes"`
-	BuffersBytes          uint64                `json:"buffersBytes"`
-	CachedBytes           uint64                `json:"cachedBytes"`
-	SwapTotalBytes        uint64                `json:"swapTotalBytes"`
-	SwapFreeBytes         uint64                `json:"swapFreeBytes"`
-	SwapUsedBytes         uint64                `json:"swapUsedBytes"`
-	SwapPagesPerSecond    float64               `json:"swapPagesPerSecond"`
-	SwapInPagesPerSecond  float64               `json:"swapInPagesPerSecond"`
-	SwapOutPagesPerSecond float64               `json:"swapOutPagesPerSecond"`
-	PressureSomeAvg10     float64               `json:"pressureSomeAvg10"`
-	PressureSomeAvg60     float64               `json:"pressureSomeAvg60"`
-	PressureSomeAvg300    float64               `json:"pressureSomeAvg300"`
-	PressureSomeTotal     uint64                `json:"pressureSomeTotal"`
-	PressureFullAvg10     float64               `json:"pressureFullAvg10"`
-	PressureFullAvg60     float64               `json:"pressureFullAvg60"`
-	PressureFullAvg300    float64               `json:"pressureFullAvg300"`
-	PressureFullTotal     uint64                `json:"pressureFullTotal"`
-	OOMKills              uint64                `json:"oomKills"`
-	OOMKillsPerSecond     float64               `json:"oomKillsPerSecond"`
-	TopRSS                []rssProcessTelemetry `json:"topRss,omitempty"`
+	TotalBytes            uint64  `json:"totalBytes"`
+	AvailableBytes        uint64  `json:"availableBytes"`
+	FreeBytes             uint64  `json:"freeBytes"`
+	BuffersBytes          uint64  `json:"buffersBytes"`
+	CachedBytes           uint64  `json:"cachedBytes"`
+	SwapTotalBytes        uint64  `json:"swapTotalBytes"`
+	SwapFreeBytes         uint64  `json:"swapFreeBytes"`
+	SwapUsedBytes         uint64  `json:"swapUsedBytes"`
+	SwapPagesPerSecond    float64 `json:"swapPagesPerSecond"`
+	SwapInPagesPerSecond  float64 `json:"swapInPagesPerSecond"`
+	SwapOutPagesPerSecond float64 `json:"swapOutPagesPerSecond"`
+	MinorFaultsPerSecond  float64 `json:"minorFaultsPerSecond"`
+	MajorFaultsPerSecond  float64 `json:"majorFaultsPerSecond"`
+	// PressureAvailable is false on kernels without /proc/pressure/memory (no PSI /
+	// CONFIG_PSI), so a consumer can distinguish "no reclaim stalls" from "this
+	// host can't report pressure at all" rather than reading the zeroed fields.
+	PressureAvailable  bool                  `json:"pressureAvailable"`
+	PressureSomeAvg10  float64               `json:"pressureSomeAvg10"`
+	PressureSomeAvg60  float64               `json:"pressureSomeAvg60"`
+	PressureSomeAvg300 float64               `json:"pressureSomeAvg300"`
+	PressureSomeTotal  uint64                `json:"pressureSomeTotal"`
+	PressureFullAvg10  float64               `json:"pressureFullAvg10"`
+	PressureFullAvg60  float64               `json:"pressureFullAvg60"`
+	PressureFullAvg300 float64               `json:"pressureFullAvg300"`
+	PressureFullTotal  uint64                `json:"pressureFullTotal"`
+	OOMKills           uint64                `json:"oomKills"`
+	OOMKillsPerSecond  float64               `json:"oomKillsPerSecond"`
+	TopRSS             []rssProcessTelemetry `json:"topRss,omitempty"`
 }
 
 type rssProcessTelemetry struct {
@@ -230,6 +236,8 @@ type sampler struct {
 	swapPages uint64
 	swapIn    uint64
 	swapOut   uint64
+	minFaults uint64
+	majFaults uint64
 	oomKills  uint64
 	ctxt      uint64
 	intr      uint64
@@ -493,9 +501,22 @@ func (s *sampler) sample(now time.Time) (telemetry, error) {
 	swapInRate := counterRate(swapInPages, s.swapIn, elapsed)
 	swapOutRate := counterRate(swapOutPages, s.swapOut, elapsed)
 	oomRate := counterRate(oomKills, s.oomKills, elapsed)
-	psiSome, psiFull := readPressure("/proc/pressure/memory")
+	// Page faults from /proc/vmstat: pgmajfault needed a disk/swap read (a real
+	// saturation signal), the remaining pgfault are minor faults served from RAM
+	// (workload context). Guard the subtraction against a counter reset.
+	majFaults := vmstat["pgmajfault"]
+	totalFaults := vmstat["pgfault"]
+	minFaults := uint64(0)
+	if totalFaults > majFaults {
+		minFaults = totalFaults - majFaults
+	}
+	minFaultRate := counterRate(minFaults, s.minFaults, elapsed)
+	majFaultRate := counterRate(majFaults, s.majFaults, elapsed)
+	psiSome, psiFull, psiAvailable := readPressure("/proc/pressure/memory")
 	topRSS := readTopRSSProcesses(5)
-	memSaturation := clamp(maxFloat(swapRate/2500, maxFloat(psiSome.Avg10/100, maxFloat(psiFull.Avg10/20, maxFloat(memUtil-0.90, 0)*5))))
+	// Major faults contribute to saturation (thrashing refaults from disk/swap);
+	// ~200 majflt/s reads as fully saturated, alongside swap churn and PSI.
+	memSaturation := clamp(maxFloat(swapRate/2500, maxFloat(majFaultRate/200, maxFloat(psiSome.Avg10/100, maxFloat(psiFull.Avg10/20, maxFloat(memUtil-0.90, 0)*5)))))
 	memErrors := clamp(oomRate)
 
 	storage, disks, err := sampleStorage(s.disk, elapsed)
@@ -519,6 +540,8 @@ func (s *sampler) sample(now time.Time) (telemetry, error) {
 	s.swapPages = swapPages
 	s.swapIn = swapInPages
 	s.swapOut = swapOutPages
+	s.minFaults = minFaults
+	s.majFaults = majFaults
 	s.oomKills = oomKills
 	s.ctxt = ctxt
 	s.intr = intr
@@ -569,6 +592,9 @@ func (s *sampler) sample(now time.Time) (telemetry, error) {
 			SwapPagesPerSecond:    swapRate,
 			SwapInPagesPerSecond:  swapInRate,
 			SwapOutPagesPerSecond: swapOutRate,
+			MinorFaultsPerSecond:  minFaultRate,
+			MajorFaultsPerSecond:  majFaultRate,
+			PressureAvailable:     psiAvailable,
 			PressureSomeAvg10:     psiSome.Avg10,
 			PressureSomeAvg60:     psiSome.Avg60,
 			PressureSomeAvg300:    psiSome.Avg300,
@@ -586,11 +612,12 @@ func (s *sampler) sample(now time.Time) (telemetry, error) {
 	}, nil
 }
 
-func readPressure(path string) (some, full pressureLineTelemetry) {
+func readPressure(path string) (some, full pressureLineTelemetry, available bool) {
 	content, err := os.ReadFile(path)
 	if err != nil {
-		return some, full
+		return some, full, false
 	}
+	available = true
 	for _, line := range strings.Split(string(content), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) == 0 {
@@ -621,7 +648,7 @@ func readPressure(path string) (some, full pressureLineTelemetry) {
 			full = pressure
 		}
 	}
-	return some, full
+	return some, full, available
 }
 
 func readTopRSSProcesses(limit int) []rssProcessTelemetry {

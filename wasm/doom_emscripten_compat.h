@@ -84,6 +84,21 @@ extern int doomperf_memory_cache;
 extern int doomperf_memory_proc_count;
 extern int doomperf_memory_proc_oom[DOOMPERF_MEMORY_PROC_SLOTS];
 
+// Doom Perf: page-fault rates in permille of a reference rate. Minor faults are
+// served from RAM (mostly workload); major faults had to read the page back from
+// disk/swap (the refault/thrash saturation signal). Drive the paging bay's two
+// fault meters in DoomPerf_UpdateMemoryWing; sims 5/6 synthesize their own.
+extern int doomperf_memory_minflt;
+extern int doomperf_memory_majflt;
+
+// Doom Perf: OOM-kill event for the memory wing's Baron of Hell. The browser
+// sets a pending flag (DoomPerf_TriggerMemoryOomKill) naming the victim barrel
+// slot when the live oom_kill counter rises; DoomPerf_UpdateOomBaron (p_tick.c)
+// consumes it, walks the penned baron to that barrel, and detonates it. The
+// memory saturation sim (mode 6) self-fires the event, so this stays 0 there.
+extern int doomperf_oom_event;  // 1 = an OOM kill is pending (browser edge-trigger)
+extern int doomperf_oom_victim; // reliquary barrel slot to detonate (0..DOOMPERF_MEMORY_PROC_SLOTS-1)
+
 // Network RX/TX throughput, each as a permille of a full-scale link (the browser
 // scales bytes/sec; see src/index.ts). Sets the packet-orb density in the network
 // wing's grove. DoomPerf_EffectiveNetworkRx/Tx are the sim-aware values read by

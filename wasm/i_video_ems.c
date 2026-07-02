@@ -37,6 +37,10 @@ int doomperf_memory_errors = 0;
 int doomperf_memory_cache = 0;
 int doomperf_memory_proc_count = 0;
 int doomperf_memory_proc_oom[DOOMPERF_MEMORY_PROC_SLOTS];
+int doomperf_memory_minflt = 0;
+int doomperf_memory_majflt = 0;
+int doomperf_oom_event = 0;
+int doomperf_oom_victim = 0;
 int doomperf_net_rx = 0;
 int doomperf_net_tx = 0;
 int doomperf_sim_mode = 0;
@@ -243,6 +247,34 @@ void DoomPerf_SetMemoryProcessOom(int index, int permille)
     if (index < 0 || index >= DOOMPERF_MEMORY_PROC_SLOTS)
         return;
     doomperf_memory_proc_oom[index] = DoomPerf_ClampPermille(permille);
+}
+
+// Page-fault rates in permille of a reference (minor mostly workload; major =
+// disk/swap refaults, a saturation signal). Drive the paging bay's fault meters.
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_SetMemoryMinorFaults(int permille)
+{
+    doomperf_memory_minflt = DoomPerf_ClampPermille(permille);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_SetMemoryMajorFaults(int permille)
+{
+    doomperf_memory_majflt = DoomPerf_ClampPermille(permille);
+}
+
+// Fire the Baron OOM-kill event: latch a pending kill naming the victim barrel
+// slot (0 = largest resident set). DoomPerf_UpdateOomBaron consumes the latch,
+// sends the penned baron to that barrel, and detonates it. The browser calls this
+// when the live oom_kill counter increments; a new kill arriving mid-event is
+// dropped (approximate timing is acceptable).
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_TriggerMemoryOomKill(int slot)
+{
+    if (slot < 0 || slot >= DOOMPERF_MEMORY_PROC_SLOTS)
+        slot = 0;
+    doomperf_oom_victim = slot;
+    doomperf_oom_event = 1;
 }
 
 // Network receive/transmit throughput, each as a permille of a full-scale link

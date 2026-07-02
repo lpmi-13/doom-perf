@@ -52,21 +52,21 @@ export const mapManifest = {
       "sign": "memory-rss",
       "segments": [
         {
-          "ax": 1088,
-          "ay": 800,
-          "bx": 1344,
-          "by": 800
+          "ax": 1616,
+          "ay": 736,
+          "bx": 1616,
+          "by": 576
         }
       ]
     },
     {
-      "sign": "memory-pressure",
+      "sign": "memory-oom",
       "segments": [
         {
-          "ax": 912,
-          "ay": 512,
-          "bx": 912,
-          "by": 256
+          "ax": 1616,
+          "ay": 320,
+          "bx": 1616,
+          "by": 160
         }
       ]
     },
@@ -75,20 +75,20 @@ export const mapManifest = {
       "segments": [
         {
           "ax": 912,
-          "ay": -256,
+          "ay": -416,
           "bx": 912,
-          "by": -512
+          "by": -608
         }
       ]
     },
     {
-      "sign": "memory-oom",
+      "sign": "memory-faults",
       "segments": [
         {
-          "ax": 1088,
-          "ay": -800,
-          "bx": 1344,
-          "by": -800
+          "ax": 912,
+          "ay": -160,
+          "bx": 912,
+          "by": -352
         }
       ]
     },

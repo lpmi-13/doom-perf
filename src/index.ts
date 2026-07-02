@@ -212,6 +212,14 @@ type DoomPerfEngine = {
   _DoomPerf_SetMemoryCacheFraction?: (permille: number) => void;
   _DoomPerf_SetMemoryProcessCount?: (count: number) => void;
   _DoomPerf_SetMemoryProcessOom?: (index: number, permille: number) => void;
+  // Page-fault rates as permille of a reference rate, driving the paging bay's
+  // minor/major fault meters in the memory wing.
+  _DoomPerf_SetMemoryMinorFaults?: (permille: number) => void;
+  _DoomPerf_SetMemoryMajorFaults?: (permille: number) => void;
+  // Fire the Baron-of-Hell OOM-kill event: the baron walks to reliquary barrel
+  // `slot` (0 = largest resident set) and detonates it. Called when the live
+  // oom_kill counter increments; the memory saturation sim self-fires it engine-side.
+  _DoomPerf_TriggerMemoryOomKill?: (slot: number) => void;
   // Network RX/TX throughput as permille of a 1 Gbit reference link, driving the
   // density of the two packet-orb streams in the network wing's grove.
   _DoomPerf_SetNetworkRx?: (permille: number) => void;
@@ -239,6 +247,12 @@ const getEngine = () =>
   ).DoomEngine;
 
 const clampRatio = (value: number) => Math.max(0, Math.min(1, value));
+
+// Cumulative oom_kill count from the previous LIVE sample. When it rises we fire
+// the in-world Baron OOM-kill event once per new kill (pushTelemetryToEngine only
+// ever runs on live telemetry, so a scenario's synthetic values never leak in;
+// the memory saturation sim self-fires the event engine-side instead).
+let lastOomKills: number | undefined;
 
 const pushTelemetryToEngine = (engine: DoomPerfEngine | undefined, telemetry: TelemetrySnapshot) => {
   const displayCores = telemetry.cpu.cores.filter(({ id }) => id < doomPerfCpuCoreCapacity);
@@ -289,6 +303,31 @@ const pushTelemetryToEngine = (engine: DoomPerfEngine | undefined, telemetry: Te
       proc ? Math.round(clampRatio((proc.oomScore ?? 0) / 1000) * 1000) : 0
     );
   }
+  // Page-fault rates as permille of reference rates (minor mostly workload at a
+  // busy 50k/s reference; major = disk/swap refaults, a saturation signal, at a
+  // 200/s reference). Drive the paging bay's two fault meters. Sims 5/6 synthesize
+  // their own fault levels engine-side.
+  engine?._DoomPerf_SetMemoryMinorFaults?.(
+    Math.round(clampRatio((telemetry.memory.minorFaultsPerSecond ?? 0) / 50000) * 1000)
+  );
+  engine?._DoomPerf_SetMemoryMajorFaults?.(
+    Math.round(clampRatio((telemetry.memory.majorFaultsPerSecond ?? 0) / 200) * 1000)
+  );
+  // OOM-kill event: when the live oom_kill counter rises, send the Baron after the
+  // hottest resident-set barrel (highest oom_score = the kernel's likeliest victim).
+  const oomKills = telemetry.memory.oomKills ?? 0;
+  if (lastOomKills !== undefined && oomKills > lastOomKills) {
+    let victim = 0;
+    let worst = -1;
+    topRss.slice(0, barrelSlots).forEach((proc, slot) => {
+      if ((proc.oomScore ?? 0) > worst) {
+        worst = proc.oomScore ?? 0;
+        victim = slot;
+      }
+    });
+    engine?._DoomPerf_TriggerMemoryOomKill?.(victim);
+  }
+  lastOomKills = oomKills;
   // Network RX/TX throughput as a fraction of a 1 Gbit reference link, pushed as
   // permille. The engine maps it through a sqrt gradient to the packet-orb density
   // in the grove's two lanes — a representative abstraction, not one orb per
@@ -379,6 +418,11 @@ const scenarioTelemetry = (
         swapInPagesPerSecond: memorySwapIn,
         swapOutPagesPerSecond: memorySwapOut,
         swapPagesPerSecond: memorySwapIn + memorySwapOut,
+        // Paging: mode 6 (saturation) thrashes — heavy major faults refaulting
+        // from disk/swap; mode 5 (utilization) has only light minor-fault churn.
+        minorFaultsPerSecond: memorySaturated ? 9000 + 5000 * memoryWave : 1200 + 400 * memoryWave,
+        majorFaultsPerSecond: memorySaturated ? 150 + 90 * memoryWave : 2 + 3 * memoryWave,
+        pressureAvailable: true,
         pressureSomeAvg10: memorySaturated ? 18 + 10 * memoryWave : 0.35,
         pressureSomeAvg60: memorySaturated ? 15 + 6 * memoryWave : 0.2,
         pressureSomeAvg300: memorySaturated ? 7 + 3 * memoryWave : 0.05,
@@ -421,6 +465,9 @@ const scenarioTelemetry = (
         swapInPagesPerSecond: 0,
         swapOutPagesPerSecond: genericSwapUsedBytes > 0 ? 60 + utilization * 200 : 0,
         swapPagesPerSecond: genericSwapUsedBytes > 0 ? 60 + utilization * 200 : 0,
+        minorFaultsPerSecond: 400 + utilization * 2200,
+        majorFaultsPerSecond: 0,
+        pressureAvailable: true,
         pressureSomeAvg10: 0,
         pressureSomeAvg60: 0,
         pressureSomeAvg300: 0,

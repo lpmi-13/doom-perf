@@ -12,9 +12,7 @@ import { addWingEntrance } from "./common.mjs";
 import { reserved, wingName } from "./registry.mjs";
 import {
   terminalTextureSize,
-  wallSignSize,
   buildTerminalPatch,
-  buildWallSignPatch,
   drawCenteredText,
   signTextColor,
 } from "../textures.mjs";
@@ -56,47 +54,28 @@ const rotatePoint = ([u, v], direction) => {
 // near walls / far ends of the two arms.
 const mem = {
   termFaceV: 1200,                          // free -m screen wall (junction back)
-  rss: { u: -800, v1: 1088, v2: 1344 },     // RSS sign, north arm far (west) end
-  pressure: { v: 912, u1: -512, u2: -256 }, // PSI sign, north arm near wall
-  swap: { v: 912, u1: 256, u2: 512 },       // swap sign, south arm near wall
-  oom: { u: 800, v1: 1088, v2: 1344 },      // OOM sign, south arm far (east) end
+  rss: { v: 1616, u1: -736, u2: -576 },     // RSS screen, reliquary deep wall (west of the baron gate)
+  oom: { v: 1616, u1: -320, u2: -160 },     // OOM screen, reliquary deep wall (east of the baron gate)
+  swap: { v: 912, u1: 416, u2: 608 },       // swap screen, south arm near wall
+  faults: { v: 912, u1: 160, u2: 352 },     // page-fault screen, south arm near wall
 };
 
+// Every read-point is a proper terminal — a simulated computer screen (blurred
+// streaming logs) with the "server details" control-panel strip on the riser
+// below, exactly like the CPU wing. buildTerminalPatch seeds its per-screen
+// gibberish from `lines` (the lines are not shown verbatim), so each terminal
+// looks distinct. The USE proof for each is in the terminal overlay you open
+// (free -m / ps / vmstat / sar), not painted on the wall.
 const memoryTerminal = {
   lines: ["MEMORY", "FREE -M"],
   texture: wingName("memory", "TERM"),
   patch: wingName("memory", "PTRM"),
 };
-
-// Library signage. Signs carry the USE *signal* in reading-room language; the
-// Linux *proof* lives on the wing terminals (free -m / vmstat / PSI / ps). The
-// bitmap font has no B/F/H/J glyphs, so the words avoid them.
-const memoryWallSigns = {
-  pages: {
-    texture: wingName("memory", "PAGE"),
-    patch: wingName("memory", "PPAG"),
-    text: "STACKS",
-  },
-  rss: {
-    texture: wingName("memory", "RSS"),
-    patch: wingName("memory", "PRSS"),
-    text: "TOMES",
-  },
-  swap: {
-    texture: wingName("memory", "SWAP"),
-    patch: wingName("memory", "PSWP"),
-    text: "ANNEX",
-  },
-  pressure: {
-    texture: wingName("memory", "PSI"),
-    patch: wingName("memory", "PPSI"),
-    text: "WAITING",
-  },
-  oom: {
-    texture: wingName("memory", "OOM"),
-    patch: wingName("memory", "POOM"),
-    text: "DISCARD",
-  },
+const memoryScreens = {
+  rss: { lines: ["RESIDENT SET", "PS SORT RSS"], texture: wingName("memory", "RTRM"), patch: wingName("memory", "PRTR") },
+  oom: { lines: ["OOM KILLER", "VMSTAT DMESG"], texture: wingName("memory", "OTRM"), patch: wingName("memory", "POTR") },
+  swap: { lines: ["SWAP IO", "VMSTAT SI SO"], texture: wingName("memory", "STRM"), patch: wingName("memory", "PSTR") },
+  faults: { lines: ["PAGE FAULTS", "SAR -B PSI"], texture: wingName("memory", "FTRM"), patch: wingName("memory", "PFTR") },
 };
 
 // Names the whole central element at the highest level of abstraction: the
@@ -223,6 +202,51 @@ const buildBarrelPadFlat = () => {
   return lump(barrelPadFlatName, Buffer.from(px));
 };
 
+// Oversized RSS-reliquary barrel sprite, replacing the small IWAD BAR1 so the
+// resident-set barrels read boldly across the opened-up plaza. Procedural (no IWAD
+// read): a ~40x56 steel cylinder shaded bright-centre -> dark-edge, banded with
+// dark hoops and one amber hazard stripe, on a dark lid. Reuses the IWAD sprite
+// name BAR1 (frames A0/B0 both exist), so it overrides by name like the orb
+// sprites — see [[pwad-sprite-override-constraint]]. leftOffset centres it and
+// topOffset = height sits it on the floor.
+const buildBarrelSprite = () => {
+  const width = 40;
+  const height = 56;
+  const TRANSPARENT = 247;
+  const px = new Uint8Array(width * height).fill(TRANSPARENT);
+  const cx = 20;
+  const bodyHalf = 17;
+  // Column half-width by row: a domed lid tapering into the straight body.
+  const halfAt = (y) => {
+    if (y < 4) return 0;
+    if (y < 9) return 11 + (y - 4);       // lid widening 11..16
+    if (y >= 52) return bodyHalf - 2;     // slight foot taper
+    return bodyHalf;
+  };
+  for (let y = 3; y < 54; y += 1) {
+    const hw = halfAt(y);
+    for (let dx = -hw; dx <= hw; dx += 1) {
+      const x = cx + dx;
+      if (x < 0 || x >= width) continue;
+      const f = hw > 0 ? Math.abs(dx) / hw : 0;
+      let c = f < 0.35 ? 96 : f < 0.72 ? 7 : 5; // cylinder shade
+      if (y < 9) c = f < 0.5 ? 8 : 5;           // dark lid
+      px[y * width + x] = c;
+    }
+  }
+  const band = (y, c) => {
+    for (let dx = -bodyHalf; dx <= bodyHalf; dx += 1) {
+      const x = cx + dx;
+      if (x >= 0 && x < width && y >= 0 && y < height) px[y * width + x] = c;
+    }
+  };
+  band(9, 8);            // rim under the lid
+  band(53, 0);           // foot shadow
+  [18, 32, 46].forEach((hy) => { band(hy, 8); band(hy + 1, 5); }); // hoops
+  band(25, 215);         // amber hazard stripe
+  return buildPatch(px, width, height, { leftOffset: cx, topOffset: height, transparent: TRANSPARENT });
+};
+
 // Bookshelf wall texture for the reading hall. Decor stays neutral per the lab's
 // palette discipline (bright green/cyan is reserved for the metric books), so the
 // spines use muted warm/grey tones. 64x128 tiles along the hall walls; the three
@@ -287,19 +311,23 @@ const buildBookshelfPatch = () => {
 
 const tagBase = reserved.memory.sectorTags[0];
 const pageCellTag = (index) => tagBase + index;
+// One tag per independent instrument, matching DoomPerf_UpdateMemoryWing /
+// DoomPerf_UpdateOomBaron in p_tick.c: swap-in/out channels (Station B), the
+// minor/major page-fault meters (Station C), and the OOM-killer Baron's pen
+// (Station D). 545 (old page-cache reservoir) and PSI 549/550 are retired; the
+// fault meters reuse 549/550.
 const memoryTags = {
-  cache: tagBase + 45,
   swapIn: tagBase + 46,
   swapOut: tagBase + 47,
-  oom: tagBase + 48,
-  psiSome: tagBase + 49,
-  psiFull: tagBase + 50,
+  oomPen: tagBase + 48,
+  minFlt: tagBase + 49,
+  majFlt: tagBase + 50,
+  gate: tagBase + 56, // baron-dais gate (drops open on an OOM kill)
 };
 // RSS "reliquary" barrels: the top processes from `ps --sort=-rss`, one barrel
 // per pad, each pad an independently-lit sector so the engine can glow a barrel
 // brighter the closer its process is to an OOM kill (p_tick.c, by tag). Tags
 // 551..555 sit inside the memory wing's reserved [500,559] block.
-const barrelCount = 5;
 const barrelTag = (index) => tagBase + 51 + index;
 
 const build = (ctx) => {
@@ -316,8 +344,6 @@ const build = (ctx) => {
   addWingEntrance(ctx);
 
   const backWall = localSideToWorld(direction, "top");
-  const localLeftWall = localSideToWorld(direction, "left");
-  const localRightWall = localSideToWorld(direction, "right");
 
   const memoryBase = {
     ...base,
@@ -390,87 +416,97 @@ const build = (ctx) => {
   });
   areaRect(direction, "junction-term", { u1: -128, v1: mem.termFaceV - terminalPanelDepth, u2: 128, v2: mem.termFaceV }, {
     ...walkway,
-    kind: "memory-junction",
+    kind: "terminal",
     floor: terminalPanelFloor,
     ceiling: terminalPanelFloor + terminalTextureSize.height,
     labelSide: backWall,
     labelTexture: memoryTerminal.texture,
+    controlPanel: true,
   });
   // Reading lamps flanking the junction mouth.
   addAreaThing(direction, 2028, -112, 968);
   addAreaThing(direction, 2028, 112, 968);
 
-  // ===== NORTH arm — ACTIVE: working-set page banks, RSS, PSI pressure. A
-  // walkway runs the arm's length; the live 9x5 page grid is a sunken top-down
-  // bank you read from it, the PSI pads are raised platforms at the junction
-  // end, and the RSS screen closes the far (west) end. =====
-  areaRect(direction, "n-walk", { u1: -768, v1: 944, u2: -288, v2: 1024 }, { ...walkway, kind: "memory-walk" });
-  // PSI pressure pads (two raised platforms) + the strip of walk in front of
-  // them that links the junction to the arm walkway.
-  areaRect(direction, "psi-strip", { u1: -288, v1: 976, u2: -128, v2: 1024 }, { ...walkway, kind: "memory-walk" });
-  areaRect(direction, "psi-some-pad", { u1: -288, v1: 944, u2: -208, v2: 976 }, {
-    ...bankWall,
-    kind: "memory-pressure-pad",
-    floor: 20,
-    floorFlat: pageFlatNames.cache,
-    light: 188,
-    tag: memoryTags.psiSome,
-  });
-  areaRect(direction, "psi-full-pad", { u1: -208, v1: 944, u2: -128, v2: 976 }, {
-    ...bankWall,
-    kind: "memory-pressure-pad",
-    floor: 36,
-    floorFlat: pageFlatNames.used,
-    light: 172,
-    tag: memoryTags.psiFull,
-  });
-  // Near-wall signs: the STACKS plaque (decorative) and the PSI read-point.
-  areaRect(direction, "pages-sign-recess", { u1: -768, v1: 912, u2: -512, v2: 944 }, {
-    ...bankWall,
-    kind: "memory-sign",
-    floor: 8,
-    ceiling: 8 + wallSignSize.height,
-    light: 196,
-    labelSide: "left",
-    labelTexture: memoryWallSigns.pages.texture,
-  });
-  areaRect(direction, "pressure-sign-recess", { u1: mem.pressure.u1, v1: mem.pressure.v, u2: mem.pressure.u2, v2: 944 }, {
-    ...bankWall,
-    kind: "memory-sign",
-    floor: 8,
-    ceiling: 8 + wallSignSize.height,
-    light: 188,
-    labelSide: "left",
-    labelTexture: memoryWallSigns.pressure.texture,
-  });
-  // Terminal plaza at the far (west) end of the arm, with the RSS screen. The
-  // plaza walkway is tiled into the RSS RELIQUARY: five pads running north->south
-  // (slot 0, the largest resident set, nearest the entrance), each carrying a
-  // barrel that stands for a row of `ps -eo pid,rss,comm --sort=-rss`. Each pad
-  // is its own sector (tag 551..555) so the engine lights it independently —
-  // the closer a process is to being OOM-killed, the brighter its barrel glows.
-  // The pads are flush with the walkway, so the player still strolls the row up
-  // to the RSS terminal on the west wall.
-  for (let slot = 0; slot < barrelCount; slot += 1) {
-    const v1 = 1024 + slot * 64;
-    areaRect(direction, `rss-barrel-pad-${slot}`, { u1: -768, v1, u2: -704, v2: v1 + 64 }, {
+  // ===== NORTH arm — RESIDENT SETS + OOM (Stations A + D). The near band is the
+  // walkway; the sunken 9x5 page grid (Station A, read at the junction free -m
+  // screen) fills the east half. A west-side walkway leads DEEP past the grid into
+  // a broad RSS RELIQUARY PLAZA: the five barrels (top-RSS processes, tags
+  // 551..555) stand on a 128-pitch row with open floor front and back, so the
+  // player can weave between and circle them. At the far deep end the OOM-killer
+  // BARON waits on a raised, gated DAIS: a set-apart sanctum flanked by columns
+  // and framed by the RSS + OOM screens. On an OOM kill the gate drops and the
+  // baron walks out to detonate the victim barrel (DoomPerf_UpdateOomBaron). =====
+  areaRect(direction, "n-walk", { u1: -768, v1: 944, u2: -128, v2: 1024 }, { ...walkway, kind: "memory-walk" });
+  // West-side walkway running alongside the page grid to the deep plaza.
+  areaRect(direction, "n-west-walk", { u1: -768, v1: 1024, u2: -704, v2: 1344 }, { ...walkway, kind: "memory-walk", light: 182 });
+
+  // Open plaza floor in front of and behind a 128-pitch barrel row (64u gaps, so
+  // the player weaves between the barrels), opened up deep past the grid.
+  areaRect(direction, "plaza-front", { u1: -768, v1: 1344, u2: -128, v2: 1408 }, { ...walkway, kind: "memory-walk", light: 182 });
+  areaRect(direction, "plaza-back", { u1: -768, v1: 1472, u2: -128, v2: 1600 }, { ...walkway, kind: "memory-walk", light: 178 });
+  const padU = [-704, -576, -448, -320, -192]; // 64-wide pads on a 128 pitch
+  areaRect(direction, "plaza-row-lead", { u1: -768, v1: 1408, u2: -704, v2: 1472 }, { ...walkway, kind: "memory-walk", light: 182 });
+  padU.forEach((u1, slot) => {
+    areaRect(direction, `rss-barrel-pad-${slot}`, { u1, v1: 1408, u2: u1 + 64, v2: 1472 }, {
       ...dimWalkway,
       kind: "memory-walk",
       floorFlat: barrelPadFlatName,
       light: 176,
       tag: barrelTag(slot),
     });
-    addAreaThing(direction, 2035, -736, v1 + 32); // explosive barrel = a heavy process
-  }
-  areaRect(direction, "rss-sign-recess", { u1: mem.rss.u, v1: mem.rss.v1, u2: -768, v2: mem.rss.v2 }, {
-    ...bankWall,
-    kind: "memory-sign",
-    floor: 8,
-    ceiling: 8 + wallSignSize.height,
-    light: 184,
-    labelSide: localLeftWall,
-    labelTexture: memoryWallSigns.rss.texture,
+    addAreaThing(direction, 2035, u1 + 32, 1440); // explosive barrel = a heavy process
+    if (slot < padU.length - 1) {
+      areaRect(direction, `plaza-row-gap-${slot}`, { u1: u1 + 64, v1: 1408, u2: padU[slot + 1], v2: 1472 }, { ...walkway, kind: "memory-walk", light: 182 });
+    }
   });
+
+  // RSS + OOM screens flank the baron gate on the plaza's deep (far) wall, read
+  // across the barrel row.
+  areaRect(direction, "rss-term-recess", { u1: mem.rss.u1, v1: 1600, u2: mem.rss.u2, v2: mem.rss.v }, {
+    ...bankWall,
+    kind: "terminal",
+    floor: terminalPanelFloor,
+    ceiling: terminalPanelFloor + terminalTextureSize.height,
+    light: 184,
+    labelSide: backWall,
+    labelTexture: memoryScreens.rss.texture,
+    controlPanel: true,
+  });
+  areaRect(direction, "oom-term-recess", { u1: mem.oom.u1, v1: 1600, u2: mem.oom.u2, v2: mem.oom.v }, {
+    ...bankWall,
+    kind: "terminal",
+    floor: terminalPanelFloor,
+    ceiling: terminalPanelFloor + terminalTextureSize.height,
+    light: 150,
+    labelSide: backWall,
+    labelTexture: memoryScreens.oom.texture,
+    controlPanel: true,
+  });
+
+  // OOM-killer BARON's gate + dais close the plaza's deep end (u[-576,-320]). The
+  // GATE is a waist-high sill (tag 556) the engine holds up (closed) at rest, so
+  // the dormant baron reads as caged behind a railing, and drops (open) during a
+  // kill so the baron walks out (DoomPerf_UpdateOomBaron).
+  areaRect(direction, "oom-gate", { u1: -576, v1: 1600, u2: -320, v2: 1632 }, {
+    ...bankWall,
+    kind: "memory-oom-gate",
+    floor: 64,
+    floorFlat: "FLOOR5_2",
+    light: 150,
+    tag: memoryTags.gate,
+  });
+  // Raised DAIS: distinct flat + engine-driven glow (tag 548), lifted so the
+  // baron is visible over the gate and across the plaza.
+  areaRect(direction, "oom-dais", { u1: -576, v1: 1632, u2: -320, v2: 1776 }, {
+    ...bankWall,
+    kind: "memory-oom-pen",
+    floor: 40,
+    floorFlat: "FLOOR5_2",
+    ceiling: 208,
+    light: 120,
+    tag: memoryTags.oomPen,
+  });
+  addAreaThing(direction, 3003, -448, 1704); // Baron of Hell = the OOM killer
 
   // Sunken working-set page grid (9 cols x 5 rows), engine-driven per cell by
   // tag. The pit is shallow (<=24) so it is escapable; the engine drives live
@@ -498,31 +534,55 @@ const build = (ctx) => {
     }
   }
 
-  // ===== SOUTH arm — RECLAIM: page-cache reservoir, swap channels, OOM sanctum.
-  // A walkway runs the arm; the reclaimable cache (water) and the swap nukage
-  // channels are sunken banks read from it, descending into the dark OOM sanctum
-  // and its screen at the far (east) end. =====
+  // ===== SOUTH arm — SATURATION (Stations B + C). A walkway runs the arm; the
+  // sunken banks read from it are the two swap channels (swap-in / swap-out,
+  // vmstat si/so) and the two page-fault meters (minor / major, sar -B). Their
+  // read-point screens line the near wall. This reclaim/thrash arm keeps the T's
+  // anti-smear shape — no long grazing hall faces the entrance. =====
   areaRect(direction, "s-walk", { u1: 128, v1: 944, u2: 768, v2: 1024 }, { ...walkway, kind: "memory-walk" });
-  areaRect(direction, "swap-sign-recess", { u1: mem.swap.u1, v1: mem.swap.v, u2: mem.swap.u2, v2: 944 }, {
+  areaRect(direction, "faults-term-recess", { u1: mem.faults.u1, v1: mem.faults.v, u2: mem.faults.u2, v2: 944 }, {
     ...bankWall,
-    kind: "memory-sign",
-    floor: 8,
-    ceiling: 8 + wallSignSize.height,
+    kind: "terminal",
+    floor: terminalPanelFloor,
+    ceiling: terminalPanelFloor + terminalTextureSize.height,
+    light: 186,
+    labelSide: "left",
+    labelTexture: memoryScreens.faults.texture,
+    controlPanel: true,
+  });
+  areaRect(direction, "swap-term-recess", { u1: mem.swap.u1, v1: mem.swap.v, u2: mem.swap.u2, v2: 944 }, {
+    ...bankWall,
+    kind: "terminal",
+    floor: terminalPanelFloor,
+    ceiling: terminalPanelFloor + terminalTextureSize.height,
     light: 188,
     labelSide: "left",
-    labelTexture: memoryWallSigns.swap.texture,
+    labelTexture: memoryScreens.swap.texture,
+    controlPanel: true,
   });
-  // Page-cache reservoir (reclaimable memory), engine-driven by tag.
-  areaRect(direction, "cache-reservoir", { u1: 128, v1: 1024, u2: 448, v2: 1344 }, {
+  // Page-fault meters (Station C): minor (served from RAM = workload) and major
+  // (refault from disk/swap = the saturation signal). Engine drives the floor
+  // height + light per tag; distinct flats keep the two lanes readable.
+  areaRect(direction, "fault-walk-l", { u1: 128, v1: 1024, u2: 192, v2: 1344 }, { ...dimWalkway, kind: "memory-walk" });
+  areaRect(direction, "minflt-meter", { u1: 192, v1: 1024, u2: 256, v2: 1344 }, {
     ...bankWall,
-    kind: "memory-cache-reservoir",
-    floor: -12,
-    floorFlat: "FWATER1",
-    light: 182,
-    tag: memoryTags.cache,
+    kind: "memory-fault-meter",
+    floor: -24,
+    floorFlat: "FLOOR5_3",
+    light: 168,
+    tag: memoryTags.minFlt,
   });
-  // Swap reclaim channels (in / out), nukage.
-  areaRect(direction, "swap-in-channel", { u1: 448, v1: 1024, u2: 512, v2: 1344 }, {
+  areaRect(direction, "majflt-meter", { u1: 256, v1: 1024, u2: 320, v2: 1344 }, {
+    ...bankWall,
+    kind: "memory-fault-meter",
+    floor: -24,
+    floorFlat: "NUKAGE1",
+    light: 176,
+    tag: memoryTags.majFlt,
+  });
+  areaRect(direction, "fault-swap-walk", { u1: 320, v1: 1024, u2: 416, v2: 1344 }, { ...dimWalkway, kind: "memory-walk" });
+  // Swap channels (Station B): in / out reclaim, nukage.
+  areaRect(direction, "swap-in-channel", { u1: 416, v1: 1024, u2: 480, v2: 1344 }, {
     ...bankWall,
     kind: "memory-swap-channel",
     floor: -20,
@@ -530,7 +590,7 @@ const build = (ctx) => {
     light: 180,
     tag: memoryTags.swapIn,
   });
-  areaRect(direction, "swap-out-channel", { u1: 512, v1: 1024, u2: 576, v2: 1344 }, {
+  areaRect(direction, "swap-out-channel", { u1: 480, v1: 1024, u2: 544, v2: 1344 }, {
     ...bankWall,
     kind: "memory-swap-channel",
     floor: -20,
@@ -538,36 +598,19 @@ const build = (ctx) => {
     light: 180,
     tag: memoryTags.swapOut,
   });
-  areaRect(direction, "swap-mid-walk", { u1: 576, v1: 1024, u2: 640, v2: 1344 }, { ...dimWalkway, kind: "memory-walk" });
-  // OOM sanctum: the darkest, deepest corner, with its screen at the far end.
-  areaRect(direction, "oom-bay", { u1: 640, v1: 1024, u2: 768, v2: 1344 }, {
-    ...bankWall,
-    kind: "memory-oom-bay",
-    floor: -16,
-    ceiling: 176,
-    floorFlat: "FLOOR0_6",
-    light: 160,
-    tag: memoryTags.oom,
-  });
-  areaRect(direction, "oom-sign-recess", { u1: 768, v1: mem.oom.v1, u2: mem.oom.u, v2: mem.oom.v2 }, {
-    ...bankWall,
-    kind: "memory-sign",
-    floor: 0,
-    ceiling: wallSignSize.height,
-    light: 120,
-    labelSide: localRightWall,
-    labelTexture: memoryWallSigns.oom.texture,
-  });
+  areaRect(direction, "s-walk-r", { u1: 544, v1: 1024, u2: 768, v2: 1344 }, { ...walkway, kind: "memory-walk" });
 };
 
 const textures = [
-  {
-    texture: memoryTerminal.texture,
-    patch: memoryTerminal.patch,
+  // Every read-point screen is a CPU-wing-style simulated terminal (blurred
+  // streaming logs); the free -m screen plus the four instrument screens.
+  ...[memoryTerminal, ...Object.values(memoryScreens)].map((screen) => ({
+    texture: screen.texture,
+    patch: screen.patch,
     width: terminalTextureSize.width,
     height: terminalTextureSize.height,
-    build: () => buildTerminalPatch(memoryTerminal),
-  },
+    build: () => buildTerminalPatch(screen),
+  })),
   {
     texture: bookshelfTexture.texture,
     patch: bookshelfTexture.patch,
@@ -575,13 +618,6 @@ const textures = [
     height: bookshelfTexture.height,
     build: buildBookshelfPatch,
   },
-  ...Object.values(memoryWallSigns).map((sign) => ({
-    texture: sign.texture,
-    patch: sign.patch,
-    width: wallSignSize.width,
-    height: wallSignSize.height,
-    build: () => buildWallSignPatch(sign.text),
-  })),
 ];
 
 const flats = [
@@ -600,12 +636,19 @@ const terminals = ({ terminalHalfWidth }) => {
   };
   return [
     { sign: "memory", segments: [segment([-terminalHalfWidth, mem.termFaceV], [terminalHalfWidth, mem.termFaceV])] },
-    { sign: "memory-rss", segments: [segment([mem.rss.u, mem.rss.v1], [mem.rss.u, mem.rss.v2])] },
-    { sign: "memory-pressure", segments: [segment([mem.pressure.u1, mem.pressure.v], [mem.pressure.u2, mem.pressure.v])] },
+    { sign: "memory-rss", segments: [segment([mem.rss.u1, mem.rss.v], [mem.rss.u2, mem.rss.v])] },
+    { sign: "memory-oom", segments: [segment([mem.oom.u1, mem.oom.v], [mem.oom.u2, mem.oom.v])] },
     { sign: "memory-swap", segments: [segment([mem.swap.u1, mem.swap.v], [mem.swap.u2, mem.swap.v])] },
-    { sign: "memory-oom", segments: [segment([mem.oom.u, mem.oom.v1], [mem.oom.u, mem.oom.v2])] },
+    { sign: "memory-faults", segments: [segment([mem.faults.u1, mem.faults.v], [mem.faults.u2, mem.faults.v])] },
   ];
 };
+
+// Oversized barrel overrides the IWAD BAR1 (both existing frames) so the
+// reliquary barrels are large. Same image for A0/B0 (the barrels stand static).
+const sprites = [
+  { name: "BAR1A0", build: buildBarrelSprite },
+  { name: "BAR1B0", build: buildBarrelSprite },
+];
 
 export const memoryWing = {
   resource: "memory",
@@ -613,6 +656,6 @@ export const memoryWing = {
   build,
   textures,
   flats,
-  sprites: [],
+  sprites,
   terminals,
 };

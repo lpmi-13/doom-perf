@@ -264,27 +264,46 @@ const formatMemorySwap = (telemetry: TelemetrySnapshot): string => {
   return lines.join("\n");
 };
 
-const formatMemoryPressure = (telemetry: TelemetrySnapshot): string => {
+// MEMORY PAGING/FAULTS wing terminal — USE saturation from page faults. A MINOR
+// fault is served from RAM (page already resident / zero-fill) — mostly workload;
+// a MAJOR fault had to read the page back from disk or swap — the refault/thrash
+// signal, so majflt/s is what drives saturation. Rates come from `sar -B`
+// (fault/s, majflt/s) or the /proc/vmstat pgfault/pgmajfault counters. The PSI
+// reclaim-stall census folds in here, but only when the kernel exposes
+// /proc/pressure/memory (older kernels / no CONFIG_PSI report nothing).
+const formatMemoryFaults = (telemetry: TelemetrySnapshot): string => {
   const m = telemetry.memory;
-  const some = rate(m.pressureSomeAvg10);
-  const full = rate(m.pressureFullAvg10);
-  const pressureLine = (
-    label: string,
-    avg10?: number,
-    avg60?: number,
-    avg300?: number,
-    total?: number
-  ) =>
-    `${label} avg10=${rate(avg10).toFixed(2)} avg60=${rate(avg60).toFixed(2)} avg300=${rate(avg300).toFixed(2)} total=${Math.round(rate(total))}`;
+  const minor = Math.max(0, rate(m.minorFaultsPerSecond));
+  const major = Math.max(0, rate(m.majorFaultsPerSecond));
   const lines: string[] = [];
-  lines.push("$ cat /proc/pressure/memory");
-  lines.push(pressureLine("some", m.pressureSomeAvg10, m.pressureSomeAvg60, m.pressureSomeAvg300, m.pressureSomeTotal));
-  lines.push(pressureLine("full", m.pressureFullAvg10, m.pressureFullAvg60, m.pressureFullAvg300, m.pressureFullTotal));
+  lines.push("$ sar -B 1 1     # paging activity");
+  lines.push(padStart("fault/s", 14) + padStart("majflt/s", 14));
+  lines.push(padStart((minor + major).toFixed(2), 14) + padStart(major.toFixed(2), 14));
   lines.push("");
-  lines.push(`some stalls   ${bar(clamp(some / 20))} ${some.toFixed(2)}% of last 10s`);
-  lines.push(`full stalls   ${bar(clamp(full / 5))} ${full.toFixed(2)}% of last 10s`);
+  lines.push("$ awk '/^pgfault|^pgmajfault/{print}' /proc/vmstat   # (shown as rates)");
+  lines.push(`pgfault      ${padStart(String(Math.round(minor + major)), 12)} /s   minor + major`);
+  lines.push(`pgmajfault   ${padStart(String(Math.round(major)), 12)} /s   disk/swap refaults`);
   lines.push("");
-  lines.push("some > 10% is sustained memory saturation; full > 0 is severe.");
+  // Minor = workload context (scaled against a busy 50k/s reference); major =
+  // saturation (matches the collector's majFaultRate/200 severity contribution).
+  lines.push(`minor faults ${bar(clamp(minor / 50000))} ${Math.round(minor)} /s   served from RAM`);
+  lines.push(`major faults ${bar(clamp(major / 200))} ${Math.round(major)} /s   refault from disk/swap`);
+  lines.push(`saturation   ${bar(m.saturation)} ${pctText(m.saturation)}%`);
+  lines.push("");
+  // PSI reclaim stalls fold in here, gated on the kernel actually exposing them.
+  if (m.pressureAvailable) {
+    const some = rate(m.pressureSomeAvg10);
+    const full = rate(m.pressureFullAvg10);
+    lines.push("$ cat /proc/pressure/memory");
+    lines.push(`some avg10=${some.toFixed(2)} avg60=${rate(m.pressureSomeAvg60).toFixed(2)} avg300=${rate(m.pressureSomeAvg300).toFixed(2)}`);
+    lines.push(`full avg10=${full.toFixed(2)} avg60=${rate(m.pressureFullAvg60).toFixed(2)} avg300=${rate(m.pressureFullAvg300).toFixed(2)}`);
+    lines.push(`some stalls   ${bar(clamp(some / 20))} ${some.toFixed(2)}% of last 10s   (>10% = sustained)`);
+    lines.push(`full stalls   ${bar(clamp(full / 5))} ${full.toFixed(2)}% of last 10s   (>0 = severe)`);
+  } else {
+    lines.push("$ cat /proc/pressure/memory");
+    lines.push("cat: /proc/pressure/memory: No such file or directory");
+    lines.push("PSI reclaim stalls unavailable on this kernel (needs CONFIG_PSI).");
+  }
   return lines.join("\n");
 };
 
@@ -461,7 +480,7 @@ const terminals: Record<TerminalSign, { title: string; render: (telemetry: Telem
   memory: { title: "MEMORY — utilization baseline", render: formatMemory },
   "memory-rss": { title: "MEMORY — top resident sets", render: formatMemoryRss },
   "memory-swap": { title: "MEMORY — swap churn", render: formatMemorySwap },
-  "memory-pressure": { title: "MEMORY — PSI reclaim stalls", render: formatMemoryPressure },
+  "memory-faults": { title: "MEMORY — page faults", render: formatMemoryFaults },
   "memory-oom": { title: "MEMORY — OOM errors", render: formatMemoryOom },
   storage: { title: "STORAGE — iostat service & queue", render: formatStorage },
   network: { title: "NETWORK — per-interface throughput", render: formatNetwork },

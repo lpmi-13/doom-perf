@@ -11,7 +11,7 @@
 
 --- a/p_mobj.c
 +++ b/p_mobj.c
-@@ -764,14 +764,25 @@
+@@ -764,14 +764,32 @@ void P_SpawnMapThing (mapthing_t* mthing)
      if (deathmatch && mobjinfo[i].flags & MF_NOTDMATCH)
  	return;
  		
@@ -19,24 +19,31 @@
 -    if (nomonsters
 -	&& ( i == MT_SKULL
 -	     || (mobjinfo[i].flags & MF_COUNTKILL)) )
-+    // Doom Perf: pure exploratory space — never spawn monsters or lost
-+    //  souls, regardless of the -nomonsters flag.
-+    if ( i == MT_SKULL
-+	 || (mobjinfo[i].flags & MF_COUNTKILL) )
++    // Doom Perf: pure exploratory space — never spawn monsters or lost souls,
++    //  regardless of the -nomonsters flag. The lone exception is the memory
++    //  wing's OOM-killer Baron (type 3003), which p_tick.c neutralizes into a
++    //  scripted instrument that never fights the player.
++    if ( (i == MT_SKULL
++	  || (mobjinfo[i].flags & MF_COUNTKILL))
++	 && mthing->type != 3003 )
      {
  	return;
      }
 -    
 +
-+    // Doom Perf: strip pickups, keys, barrels, gore, teleport landings, and
-+    //  almost all decorative map things. Player starts are handled at the top
-+    //  of this function; a small prop allowlist lets generated resource rooms
-+    //  keep shareware-IWAD stock props without reintroducing gameplay items.
++    // Doom Perf: strip pickups, keys, gore, teleport landings, and almost all
++    //  decorative map things. Player starts are handled at the top of this
++    //  function; a small prop allowlist lets generated resource rooms keep
++    //  shareware-IWAD stock props without reintroducing gameplay items. The
++    //  memory wing's RSS-reliquary barrels (2035) and OOM-killer Baron (3003)
++    //  are in-world instruments, so they are allowed through here too.
 +    if (mthing->type != 34	// Doom Perf CPU core utilization sign
 +	&& mthing->type != 35	// Doom Perf CPU run-queue sign
 +	&& mthing->type != 46	// tall red torch
 +	&& mthing->type != 48	// Doom Perf CPU load-pressure sign
-+	&& mthing->type != 2028)	// tech pillar
++	&& mthing->type != 2028	// tech pillar
++	&& mthing->type != 2035	// Doom Perf memory-wing RSS-reliquary barrel
++	&& mthing->type != 3003)	// Doom Perf memory-wing OOM-killer Baron
 +	return;
 +
      // spawn it

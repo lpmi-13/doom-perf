@@ -48,6 +48,11 @@ export interface MemoryTelemetry extends ResourceTelemetry {
   swapInPagesPerSecond?: number;
   swapOutPagesPerSecond?: number;
   swapPagesPerSecond?: number;
+  minorFaultsPerSecond?: number;
+  majorFaultsPerSecond?: number;
+  // False on kernels without /proc/pressure/memory (no PSI), so the faults
+  // terminal can say "unavailable" instead of showing zeroed stall figures.
+  pressureAvailable?: boolean;
   pressureSomeAvg10?: number;
   pressureSomeAvg60?: number;
   pressureSomeAvg300?: number;
@@ -157,7 +162,7 @@ export type TerminalSign =
   | "memory"
   | "memory-rss"
   | "memory-swap"
-  | "memory-pressure"
+  | "memory-faults"
   | "memory-oom"
   | "storage"
   | "network"
