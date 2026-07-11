@@ -349,6 +349,69 @@ const formatStorage = (telemetry: TelemetrySnapshot): string => {
   lines.push(`await (ms)   ${bar(clamp(rate(s.awaitMillis) / 250))} ${rate(s.awaitMillis).toFixed(2)} ms`);
   lines.push(`utilization  ${bar(s.utilization)} ${pctText(s.utilization)}%`);
   lines.push(`saturation   ${bar(s.saturation)} ${pctText(s.saturation)}%   (queue + await)`);
+  // Cross-reference the two dedicated instruments off this hall so the aggregate
+  // iostat readout points to where the per-device IOPS bank and capacity cistern live.
+  const usedRatio = clamp(s.usedRatio ?? 0);
+  lines.push(`IOPS         ${Math.round(rate(s.iops))} ops/s   (reads + writes; per-device on the IOPS bank)`);
+  lines.push(`disk usage   ${bar(usedRatio)} ${pctText(usedRatio)}%   (df / — the capacity cistern)`);
+  return lines.join("\n");
+};
+
+// Human-readable byte size in `df -h` style: powers of 1024 with one unit suffix.
+const humanBytes = (bytes: number): string => {
+  const units = ["B", "K", "M", "G", "T", "P"];
+  let value = Math.max(0, bytes);
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  const rounded = value >= 100 || unit === 0 ? Math.round(value) : Math.round(value * 10) / 10;
+  return `${rounded}${units[unit]}`;
+};
+
+// STORAGE wing — root-filesystem capacity (`df -h /`), the input to the disk-usage
+// cistern. USE read is how full `/` is; a brimming cistern = a near-full disk.
+const formatStorageUsage = (telemetry: TelemetrySnapshot): string => {
+  const s = telemetry.storage;
+  const total = Math.max(0, s.totalBytes ?? 0);
+  const used = Math.max(0, s.usedBytes ?? 0);
+  const avail = Math.max(0, s.availBytes ?? 0);
+  const usedRatio = clamp(s.usedRatio ?? (total > 0 ? used / total : 0));
+  const columns: [string, number][] = [
+    ["Filesystem", 12], ["Size", 8], ["Used", 8], ["Avail", 8], ["Use%", 7], ["Mounted", 9],
+  ];
+  const cells = ["/dev/root", humanBytes(total), humanBytes(used), humanBytes(avail), `${pctText(usedRatio)}%`, "/"];
+  const lines: string[] = [];
+  lines.push("$ df -h /");
+  lines.push(columns.map(([label, width]) => padStart(label, width)).join(""));
+  lines.push(columns.map(([, width], i) => padStart(cells[i], width)).join(""));
+  lines.push("");
+  lines.push(`disk usage   ${bar(usedRatio)} ${pctText(usedRatio)}%`);
+  lines.push(`used ${humanBytes(used)} of ${humanBytes(total)}   (${humanBytes(avail)} available)`);
+  return lines.join("\n");
+};
+
+// STORAGE wing — per-device operations rate (`iostat -x`), the input to the IOPS
+// counter bank. USE read is completed operations/s (reads+writes) per block device,
+// busiest first, plus the aggregate that feeds the dashboard's IOPS graph.
+const formatStorageIops = (telemetry: TelemetrySnapshot): string => {
+  const s = telemetry.storage;
+  const devices = s.devices ?? [];
+  const lines: string[] = [];
+  lines.push("$ iostat -x 1 2   (per device)");
+  lines.push(`${padStart("Device", 10)}  ${padStart("", 22)} ${padStart("iops", 7)}  util`);
+  const scale = Math.max(1, ...devices.map((d) => rate(d.iops)));
+  const rows = devices.slice(0, 4);
+  rows.forEach((d) => {
+    lines.push(
+      `${padStart(d.name, 10)}  ${bar(rate(d.iops) / scale)} ${padStart(String(Math.round(rate(d.iops))), 7)}  ${(clamp(d.utilization) * 100).toFixed(0)}%`
+    );
+  });
+  // Pin the block height so the summary below doesn't jump as devices come and go.
+  for (let i = rows.length; i < 4; i += 1) lines.push("");
+  lines.push("");
+  lines.push(`aggregate IOPS  ${Math.round(rate(s.iops))} ops/s   (reads + writes, all devices)`);
   return lines.join("\n");
 };
 
@@ -483,6 +546,8 @@ const terminals: Record<TerminalSign, { title: string; render: (telemetry: Telem
   "memory-faults": { title: "MEMORY — page faults", render: formatMemoryFaults },
   "memory-oom": { title: "MEMORY — OOM errors", render: formatMemoryOom },
   storage: { title: "STORAGE — iostat service & queue", render: formatStorage },
+  "storage-usage": { title: "STORAGE — df / capacity", render: formatStorageUsage },
+  "storage-iops": { title: "STORAGE — per-device IOPS", render: formatStorageIops },
   network: { title: "NETWORK — per-interface throughput", render: formatNetwork },
   "network-sockets": { title: "NETWORK — TCP socket state census", render: formatNetworkSockets },
   "network-queues": { title: "NETWORK — SendQ / RecvQ backlog", render: formatNetworkQueues },

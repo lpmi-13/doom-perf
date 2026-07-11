@@ -8,6 +8,7 @@ import type {
   NetworkTelemetry,
   ResourceTelemetry,
   SocketTelemetry,
+  StorageDeviceTelemetry,
   StorageTelemetry,
   TcpStateTelemetry,
   TelemetrySnapshot,
@@ -200,6 +201,22 @@ const readMemory = (payload: Record<string, unknown>): MemoryTelemetry => {
   };
 };
 
+const readStorageDevices = (value: unknown): StorageDeviceTelemetry[] | undefined =>
+  Array.isArray(value)
+    ? value.flatMap((entry) => {
+        const device = objectValue(entry);
+        const name = device?.name;
+        if (typeof name !== "string") {
+          return [];
+        }
+        return [{
+          name,
+          iops: numberValue(device?.iops) ?? 0,
+          utilization: numberValue(device?.utilization) ?? 0,
+        }];
+      })
+    : undefined;
+
 const readStorage = (payload: Record<string, unknown>): StorageTelemetry => {
   const base = readResource(payload, "storage");
   const source = objectValue(findResourceSource(payload, "storage"));
@@ -212,6 +229,12 @@ const readStorage = (payload: Record<string, unknown>): StorageTelemetry => {
     awaitMillis: numberValue(source.awaitMillis),
     readBytesPerSecond: numberValue(source.readBytesPerSecond),
     writeBytesPerSecond: numberValue(source.writeBytesPerSecond),
+    iops: numberValue(source.iops),
+    devices: readStorageDevices(source.devices),
+    usedBytes: numberValue(source.usedBytes),
+    totalBytes: numberValue(source.totalBytes),
+    availBytes: numberValue(source.availBytes),
+    usedRatio: numberValue(source.usedRatio),
   };
 };
 

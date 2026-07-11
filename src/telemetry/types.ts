@@ -81,6 +81,22 @@ export interface StorageTelemetry extends ResourceTelemetry {
   awaitMillis?: number;
   readBytesPerSecond?: number;
   writeBytesPerSecond?: number;
+  // Aggregate completed-operations rate (reads+writes/s) and the per-device
+  // breakdown (busiest first) that feed the IOPS counter bank + `iostat -x` term.
+  iops?: number;
+  devices?: StorageDeviceTelemetry[];
+  // Root-filesystem capacity (`df /`) driving the disk-usage cistern. usedRatio
+  // is df's capacity fraction (0..1).
+  usedBytes?: number;
+  totalBytes?: number;
+  availBytes?: number;
+  usedRatio?: number;
+}
+
+export interface StorageDeviceTelemetry {
+  name: string;
+  iops: number;
+  utilization: number;
 }
 
 export interface NetworkInterfaceTelemetry {
@@ -165,6 +181,8 @@ export type TerminalSign =
   | "memory-faults"
   | "memory-oom"
   | "storage"
+  | "storage-usage"
+  | "storage-iops"
   | "network"
   | "network-sockets"
   | "network-queues";

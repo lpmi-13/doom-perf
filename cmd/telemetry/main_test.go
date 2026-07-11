@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -174,5 +175,59 @@ func TestReduceNetworkHidesIdleInterfaces(t *testing.T) {
 	// The hidden interfaces still count toward the aggregate throughput.
 	if result.RXBytesPerSecond != 8100 {
 		t.Fatalf("aggregate RXBytesPerSecond = %v, want 8100 (all interfaces)", result.RXBytesPerSecond)
+	}
+}
+
+func TestReduceStorageAggregatesIopsAndRanksDevices(t *testing.T) {
+	previous := map[string]diskCounter{
+		"sda":   {name: "sda"},
+		"nvme0": {name: "nvme0"},
+	}
+	// Over 1s: sda does 100 reads + 20 writes = 120 IOPS; nvme0 does 400 + 100 =
+	// 500 IOPS. Aggregate = 620 IOPS, and nvme0 ranks first (busiest).
+	disks := []diskCounter{
+		{name: "sda", reads: 100, writes: 20, ioMillis: 500, weightedIO: 1000},
+		{name: "nvme0", reads: 400, writes: 100, ioMillis: 900, weightedIO: 4000},
+	}
+	result, _ := reduceStorage(disks, previous, 1.0)
+
+	if result.IOPS != 620 {
+		t.Fatalf("aggregate IOPS = %v, want 620", result.IOPS)
+	}
+	if len(result.Devices) != 2 {
+		t.Fatalf("Devices len = %d, want 2", len(result.Devices))
+	}
+	if result.Devices[0].Name != "nvme0" || result.Devices[1].Name != "sda" {
+		t.Fatalf("device order = %q,%q, want nvme0,sda (busiest first)", result.Devices[0].Name, result.Devices[1].Name)
+	}
+	if result.Devices[0].IOPS != 500 {
+		t.Fatalf("nvme0 IOPS = %v, want 500", result.Devices[0].IOPS)
+	}
+	// util is the max over devices (nvme0's 0.9 > sda's 0.5).
+	if result.Utilization != 0.9 {
+		t.Fatalf("Utilization = %v, want 0.9 (busiest device)", result.Utilization)
+	}
+}
+
+func TestReduceStorageCapsDeviceBank(t *testing.T) {
+	previous := map[string]diskCounter{}
+	disks := make([]diskCounter, 0, maxDiskDevices+2)
+	for i := range maxDiskDevices + 2 {
+		name := fmt.Sprintf("dev%d", i)
+		previous[name] = diskCounter{name: name}
+		// Higher-indexed devices are busier so ranking is unambiguous.
+		disks = append(disks, diskCounter{name: name, reads: uint64((i + 1) * 10)})
+	}
+	result, _ := reduceStorage(disks, previous, 1.0)
+	if len(result.Devices) != maxDiskDevices {
+		t.Fatalf("Devices len = %d, want %d (capped)", len(result.Devices), maxDiskDevices)
+	}
+	// Aggregate still counts every device, not just the kept bank.
+	var wantIops float64
+	for i := range maxDiskDevices + 2 {
+		wantIops += float64((i + 1) * 10)
+	}
+	if result.IOPS != wantIops {
+		t.Fatalf("aggregate IOPS = %v, want %v (all devices)", result.IOPS, wantIops)
 	}
 }

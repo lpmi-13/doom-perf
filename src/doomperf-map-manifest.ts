@@ -104,6 +104,28 @@ export const mapManifest = {
       ]
     },
     {
+      "sign": "storage-usage",
+      "segments": [
+        {
+          "ax": -600,
+          "ay": -1116,
+          "bx": -856,
+          "by": -1116
+        }
+      ]
+    },
+    {
+      "sign": "storage-iops",
+      "segments": [
+        {
+          "ax": 846,
+          "ay": -1516,
+          "bx": 590,
+          "by": -1516
+        }
+      ]
+    },
+    {
       "sign": "network",
       "segments": [
         {

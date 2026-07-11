@@ -1,8 +1,9 @@
 // Storage wing (south): a steampunk I/O tower, rebuilt as a TRUE FLAT-TOP HEXAGON.
 // A central solid hex DRUM (the spindle) is ringed by a flush hexagonal PLATTER
 // floor (the utilization disk), all wrapped by a hexagonal RING OF CLIMBING STEPS
-// that spirals one loop up to the platter summit. Three instrument halls branch
-// off the ring:
+// that spirals one loop up to the platter summit. FIVE instrument halls branch
+// off the ring -- one per free step face, so all six faces (near = entrance) are
+// used:
 //
 //   drum        a solid hex pillar at the centre; its lower faces carry the
 //               vertical %util fill + throughput streaks (line tag 664,
@@ -23,6 +24,19 @@
 //   QUEUE hall  off the lower-left step face via a squared (axis-aligned) chamber
 //               so the recessed queue-depth trough stays axis-aligned and patch
 //               0023's world-x fill keeps working (light sentinel 134, tag 610).
+//   CISTERN     off the lower-right step face (squared chamber): the disk-usage
+//     hall      instrument -- a recessed fluid tank whose floor the engine raises
+//               with `df /` usage (sector tag 616, DoomPerf_UpdateDiskUsage) plus a
+//               df read-point terminal on the back wall.
+//   IOPS BANK   off the upper-left step face (squared chamber): a row of four
+//     hall      per-device standpipe columns whose floors rise with each device's
+//               ops/s (sector tags 630..633, DoomPerf_UpdateDiskDevices) plus an
+//               iostat -x read-point terminal on the back wall.
+//
+// Await (wait time) and queue depth (size) are deliberately SEPARATE instruments in
+// SEPARATE halls; the cistern (capacity) and IOPS bank (operations) are the two new
+// stations. Every read-point terminal (iostat / df / iostat -x) is a proper
+// simulated screen with the server-details control panel below it (controlPanel).
 //
 // Why a hexagon spiral: like the old square spiral it has no long receding
 // sightline (every view dead-ends on a near wall), killing the 320x200 far-wall
@@ -55,7 +69,7 @@ import {
   buildStorageDisplayPatch,
   makeInscription,
 } from "../textures.mjs";
-import { buildPatch } from "../wad-bytes.mjs";
+import { lump, buildPatch } from "../wad-bytes.mjs";
 
 const ids = reserved.storage;
 const tex = (suffix) => wingName("storage", suffix);
@@ -76,12 +90,22 @@ const localSideToWorld = (direction, side) => {
 // Custom WAD art, all under the reserved "DPD" prefix so it can't collide with
 // the other wings' names.
 const screen = { texture: tex("TERM"), patch: tex("PTRM"), lines: ["DISK IO", "SERVICE"] };
+// Two more read-point screens, one per new instrument hall (cistern / IOPS bank).
+// Each is a CPU-wing-style simulated terminal (buildTerminalPatch) so it reads as
+// a computer screen with the server-details control panel below it, like the rest.
+const usageScreen = { texture: tex("UTRM"), patch: tex("PUTM"), lines: ["DISK USAGE", "DF ROOT"] };
+const iopsScreen = { texture: tex("ITRM"), patch: tex("PITM"), lines: ["DEVICE IOPS", "IOSTAT X"] };
 const signs = {
   read: { texture: tex("READ"), patch: tex("PRD"), text: "READ" },
   write: { texture: tex("WRITE"), patch: tex("PWR"), text: "WRITE" },
   rate: { texture: tex("RATE"), patch: tex("PRAT"), text: "IO RATE" },
   await: { texture: tex("AWAIT"), patch: tex("PAWT"), text: "AWAIT" },
 };
+// Cistern fluid flat: a still, dark storage-medium pool (metallic blue), distinct
+// from the memory wing's green swap nukage so a full cistern reads as "capacity",
+// not "toxic". The engine drives the tank's floor height + glow (p_tick.c
+// DoomPerf_UpdateDiskUsage, sector tag 616); this is just its surface.
+const cisternFlat = tex("CIST");
 const gauge = { texture: tex("GAUG"), patch: tex("PGAU") };
 const tubeRead = { texture: tex("RTUB"), patch: tex("PRTU") };
 const tubeWrite = { texture: tex("WTUB"), patch: tex("PWTU") };
@@ -118,6 +142,19 @@ const buildTubePatch = ({ capsule, glint }) => {
     R(x + 18, 58, 3, 9, 167);
   }
   return buildPatch(px, W, H);
+};
+
+// Cistern fluid flat: a still, dark metallic-blue pool with faint horizontal
+// ripple bands (Doom blue ramp ~200..204), distinct from the memory wing's green
+// swap nukage so a full cistern reads as "capacity", not "toxic". 64x64 flat.
+const buildCisternFlat = () => {
+  const size = 64;
+  const px = new Uint8Array(size * size).fill(202);
+  for (let y = 0; y < size; y += 1) {
+    const band = y % 16 < 2 ? 204 : y % 8 < 1 ? 200 : 202;
+    for (let x = 0; x < size; x += 1) px[y * size + x] = band;
+  }
+  return lump(cisternFlat, Buffer.from(px));
 };
 
 // "IO VAULT" inscription flats, generated for the entry threshold (placed below).
@@ -231,6 +268,41 @@ const queueFaceMidV = Math.round((stepHex[4][1] + stepHex[5][1]) / 2);
 const queueChamber = { u1: stepHex[4][0] - 264, v1: queueFaceMidV - 72, u2: stepHex[4][0] - 40, v2: queueFaceMidV + 72 };
 const queueTrough = { u1: queueChamber.u1 + 32, v1: queueChamber.v1 + 40, u2: queueChamber.u2 - 32, v2: queueChamber.v2 - 40 };
 
+// ===== CISTERN hall (off the lower-right face stepHex[0..1], the last free +u
+// near face): an angled throat squares up to an axis-aligned chamber holding the
+// recessed disk-usage tank (df /, floor display, engine tag 616) with a df read-
+// point terminal on its back (+v) wall. Mirrors the queue hall's throat->chamber
+// pattern on the opposite (+u) side. =====
+const CIST_FLOOR = 1 * RISE; // 24: lower-right step floor
+const CIST_CEIL = CIST_FLOOR + 160; // 184
+// Inner wall matches the AWAIT hall's offset (+50) so the two +u throats share an
+// identical segment at the stepHex[1] vertex (v=1153) — clean two-sided meshing,
+// no collinear split. (The IOPS hall likewise matches the QUEUE hall's -40 on -u.)
+const CIST_INNER_U = stepHex[1][0] + 50; // 568: inner (near) wall of the +u chamber
+const cistChamber = { u1: CIST_INNER_U, v1: 812, u2: CIST_INNER_U + 320, v2: 1116 };
+const cistTank = { u1: 606, v1: 900, u2: 830, v2: 1012 }; // engine tag 616 (df / fill)
+const CIST_TERM_V = cistChamber.v2; // 1116: screen face on the chamber's back wall
+const CIST_TERM_CX = Math.round((cistChamber.u1 + cistChamber.u2) / 2); // 718
+const cistTerm = { u1: CIST_TERM_CX - terminalHalfWidthLocal, v1: CIST_TERM_V - 16, u2: CIST_TERM_CX + terminalHalfWidthLocal, v2: CIST_TERM_V };
+
+// ===== IOPS BANK hall (off the upper-left face stepHex[3..4], the last free -u
+// far face): a throat squares up to a chamber holding a row of four per-device
+// standpipe columns (engine tags 630..633) whose floors rise with each device's
+// ops/s, plus an iostat -x read-point terminal on the back (+v) wall. Point-mirror
+// of the cistern hall on the -u/far side. =====
+const IOPS_FLOOR = 4 * RISE; // 96: upper-left step floor
+const IOPS_CEIL = IOPS_FLOOR + 160; // 256
+const IOPS_INNER_U = stepHex[4][0] - 40; // -558: inner (near) wall of the -u chamber
+const iopsChamber = { u1: IOPS_INNER_U - 320, v1: 1220, u2: IOPS_INNER_U, v2: 1516 };
+const IOPS_COL_COUNT = 4;
+const IOPS_COL_V1 = 1300;
+const IOPS_COL_V2 = 1396;
+const IOPS_COL_LEFT = iopsChamber.u1 + 32; // -846: first column's left edge (32u side walk)
+const IOPS_COL_WIDTH = 60; // 4x60 = 240 columns; 32/48 side walks fill the 320 span
+const IOPS_TERM_V = iopsChamber.v2; // 1516
+const IOPS_TERM_CX = Math.round((iopsChamber.u1 + iopsChamber.u2) / 2); // -718
+const iopsTerm = { u1: IOPS_TERM_CX - terminalHalfWidthLocal, v1: IOPS_TERM_V - 16, u2: IOPS_TERM_CX + terminalHalfWidthLocal, v2: IOPS_TERM_V };
+
 const build = (ctx) => {
   const { areaRect, areaPoly, addAreaThing, direction, base, accent } = ctx;
 
@@ -336,7 +408,11 @@ const build = (ctx) => {
     ceiling: TP_FLOOR + SERVER_PANEL_HEIGHT,
   });
   // iostat terminal: a one-step lectern recess at the dead end; its far one-sided
-  // wall carries the DISK IO screen (read-point wired in terminals()).
+  // wall carries the DISK IO screen (read-point wired in terminals()). controlPanel
+  // puts the keyboard/server-details strip on the step riser below the screen, so
+  // it matches the CPU/memory/network terminals (the south back wall rotates to
+  // world "bottom", so the labelSide==="top" shortcut can't fire — the flag is
+  // required; see isControlPanelRecess in build-doomperf-map.mjs).
   areaRect(direction, "storage-terminal", { u1: -terminalHalfWidthLocal, v1: TP_BACK, u2: terminalHalfWidthLocal, v2: TP_TERM_WALL }, {
     ...hallStyle,
     kind: "terminal",
@@ -345,6 +421,7 @@ const build = (ctx) => {
     light: 200,
     labelSide: backWall, // far wall (local +v) = the screen
     labelTexture: screen.texture,
+    controlPanel: true,
   });
 
   // ===== AWAIT hall (off the upper-right angled face, floor == that step): an
@@ -368,7 +445,10 @@ const build = (ctx) => {
     ...hallStyle,
     kind: "metric-hall",
     floor: F_AWAIT,
-    ceiling: F_AWAIT + 160,
+    // Ceiling sits exactly one sign-height (128) above the floor so the AWAIT
+    // placard fills the far wall with no vertical tiling; a taller wall repeats the
+    // 128-tall sign and shows an empty black partial tile below it.
+    ceiling: F_AWAIT + wallSignSize.height,
     light: 188,
     labelEdge: 1, // the far-v throat wall carries the AWAIT placard
     labelTexture: signs.await.texture,
@@ -430,18 +510,107 @@ const build = (ctx) => {
     light: ids.lights[0] + 4, // 134
     tag: ids.sectorTags[0] + 10, // 610
   });
+
+  // ===== CISTERN hall (off the lower-right face stepHex[0..1]): the disk-usage
+  // instrument. An angled throat squares up to an axis-aligned chamber; a recessed
+  // tank (engine tag 616, `df /` fill) sits centred with a walk-around rim, and a
+  // df read-point terminal rides the chamber's back (+v) wall. =====
+  const cistWalk = { ...hallStyle, kind: "cistern-walk", floorFlat: "FLOOR0_3", light: 184 };
+  // No throat placard: the throat's outer edge (edge 1) is the two-sided seam it
+  // shares with the adjacent AWAIT throat, which can't carry a label. The hall is
+  // identified by its df read-point terminal instead.
+  areaPoly(direction, "cist-throat", [stepHex[0], stepHex[1], [CIST_INNER_U, stepHex[1][1]], [CIST_INNER_U, stepHex[0][1]]], {
+    ...cistWalk,
+    kind: "metric-hall",
+    floor: CIST_FLOOR,
+    ceiling: CIST_CEIL,
+  });
+  const cistRim = { ...cistWalk, floor: CIST_FLOOR, ceiling: CIST_CEIL };
+  areaRect(direction, "cist-front", { u1: cistChamber.u1, v1: cistChamber.v1, u2: cistChamber.u2, v2: cistTank.v1 }, cistRim);
+  areaRect(direction, "cist-rim-left", { u1: cistChamber.u1, v1: cistTank.v1, u2: cistTank.u1, v2: cistTank.v2 }, cistRim);
+  areaRect(direction, "cist-rim-right", { u1: cistTank.u2, v1: cistTank.v1, u2: cistChamber.u2, v2: cistTank.v2 }, cistRim);
+  areaRect(direction, "cist-back", { u1: cistChamber.u1, v1: cistTank.v2, u2: cistChamber.u2, v2: cistTerm.v1 }, cistRim);
+  // The tank itself: a shallow fluid basin the engine raises with `df /` usage.
+  areaRect(direction, "cist-tank", cistTank, {
+    ...cistWalk,
+    kind: "cistern",
+    floor: 0, // engine drives 0 (empty) .. 22 (brimming); tag 616
+    ceiling: CIST_CEIL,
+    floorFlat: cisternFlat,
+    light: 164,
+    tag: ids.sectorTags[0] + 16, // 616
+  });
+  // df terminal on the back wall, flanked by wall so the 256-wide screen seats.
+  areaRect(direction, "cist-term-l", { u1: cistChamber.u1, v1: cistTerm.v1, u2: cistTerm.u1, v2: cistTerm.v2 }, cistRim);
+  areaRect(direction, "cist-term-r", { u1: cistTerm.u2, v1: cistTerm.v1, u2: cistChamber.u2, v2: cistTerm.v2 }, cistRim);
+  areaRect(direction, "cist-terminal", cistTerm, {
+    ...cistWalk,
+    kind: "terminal",
+    floor: CIST_FLOOR + 16,
+    ceiling: CIST_FLOOR + 16 + terminalTextureSize.height,
+    light: 200,
+    labelSide: backWall, // far wall (local +v) = the screen
+    labelTexture: usageScreen.texture,
+    controlPanel: true,
+  });
+
+  // ===== IOPS BANK hall (off the upper-left face stepHex[3..4]): the per-device
+  // IOPS instrument. A throat squares up to a chamber holding a row of four device
+  // standpipe columns (engine tags 630..633) whose floors rise with each device's
+  // ops/s, plus an iostat -x read-point terminal on the back (+v) wall. =====
+  const iopsWalk = { ...hallStyle, kind: "iops-walk", floorFlat: "FLOOR0_3", light: 184 };
+  // No throat placard (see cist-throat): edge 1 is the two-sided seam shared with
+  // the adjacent QUEUE throat. The hall is identified by its iostat -x terminal.
+  areaPoly(direction, "iops-throat", [stepHex[3], stepHex[4], [IOPS_INNER_U, stepHex[4][1]], [IOPS_INNER_U, stepHex[3][1]]], {
+    ...iopsWalk,
+    kind: "metric-hall",
+    floor: IOPS_FLOOR,
+    ceiling: IOPS_CEIL,
+  });
+  const iopsRim = { ...iopsWalk, floor: IOPS_FLOOR, ceiling: IOPS_CEIL };
+  areaRect(direction, "iops-front", { u1: iopsChamber.u1, v1: iopsChamber.v1, u2: iopsChamber.u2, v2: IOPS_COL_V1 }, iopsRim);
+  areaRect(direction, "iops-left-walk", { u1: iopsChamber.u1, v1: IOPS_COL_V1, u2: IOPS_COL_LEFT, v2: IOPS_COL_V2 }, iopsRim);
+  for (let c = 0; c < IOPS_COL_COUNT; c += 1) {
+    const u1 = IOPS_COL_LEFT + c * IOPS_COL_WIDTH;
+    areaRect(direction, `iops-col-${c}`, { u1, v1: IOPS_COL_V1, u2: u1 + IOPS_COL_WIDTH, v2: IOPS_COL_V2 }, {
+      ...iopsWalk,
+      kind: "iops-column",
+      floor: 76, // engine drives 76 (idle slot) .. 160 (busy bar); tags 630..633
+      ceiling: IOPS_CEIL,
+      floorFlat: "FLOOR1_7", // a metric-floor FLAT (as the queue channel uses); METAL1 is a wall texture, not a flat
+      light: 168,
+      tag: ids.sectorTags[0] + 30 + c, // 630..633
+    });
+  }
+  areaRect(direction, "iops-right-walk", { u1: IOPS_COL_LEFT + IOPS_COL_COUNT * IOPS_COL_WIDTH, v1: IOPS_COL_V1, u2: iopsChamber.u2, v2: IOPS_COL_V2 }, iopsRim);
+  areaRect(direction, "iops-back", { u1: iopsChamber.u1, v1: IOPS_COL_V2, u2: iopsChamber.u2, v2: iopsTerm.v1 }, iopsRim);
+  // iostat -x terminal on the back wall, flanked by wall so the screen seats.
+  areaRect(direction, "iops-term-l", { u1: iopsChamber.u1, v1: iopsTerm.v1, u2: iopsTerm.u1, v2: iopsTerm.v2 }, iopsRim);
+  areaRect(direction, "iops-term-r", { u1: iopsTerm.u2, v1: iopsTerm.v1, u2: iopsChamber.u2, v2: iopsTerm.v2 }, iopsRim);
+  areaRect(direction, "iops-terminal", iopsTerm, {
+    ...iopsWalk,
+    kind: "terminal",
+    floor: IOPS_FLOOR + 16,
+    ceiling: IOPS_FLOOR + 16 + terminalTextureSize.height,
+    light: 200,
+    labelSide: backWall, // far wall (local +v) = the screen
+    labelTexture: iopsScreen.texture,
+    controlPanel: true,
+  });
 };
 
 // Texture patches this wing contributes: the iostat screen, disk wall signs,
 // await gauge, throughput tubes, rack, and live-dashboard fallback art.
 const textures = [
-  {
-    texture: screen.texture,
-    patch: screen.patch,
+  // The three read-point screens (iostat / df / iostat -x), each a CPU-wing-style
+  // simulated terminal so they match the rest of the game's terminals.
+  ...[screen, usageScreen, iopsScreen].map((s) => ({
+    texture: s.texture,
+    patch: s.patch,
     width: terminalTextureSize.width,
     height: terminalTextureSize.height,
-    build: () => buildTerminalPatch(screen),
-  },
+    build: () => buildTerminalPatch(s),
+  })),
   ...Object.values(signs).map((sign) => ({
     texture: sign.texture,
     patch: sign.patch,
@@ -486,8 +655,8 @@ const textures = [
   },
 ];
 
-// Floor-name inscription flat, generated once ("IO VAULT" — placed in a follow-up).
-const flats = [...ioInscription.flats];
+// Floor-name inscription flat ("IO VAULT") + the cistern fluid flat.
+const flats = [...ioInscription.flats, buildCisternFlat()];
 
 const toWorld = ([u, v]) => [-u, -v];
 const segment = (a, b) => {
@@ -495,16 +664,19 @@ const segment = (a, b) => {
   const [bx, by] = toWorld(b);
   return { ax, ay, bx, by };
 };
-// The iostat read-point. Storage is the SOUTH wing, so the builder rotates local
-// (u,v) -> world (-u,-v); the central terminalSegment helper assumes the identity
-// (north) rotation, so we emit the screen face in WORLD coords directly. The face
-// is the terminal recess's far wall (local v = TP_TERM_WALL), centred on u=0 and
-// one screen wide, so the browser's USE-distance check lines up with the screen.
-const terminals = ({ terminalHalfWidth }) => {
-  const [ax, ay] = toWorld([-terminalHalfWidth, TP_TERM_WALL]);
-  const [bx, by] = toWorld([terminalHalfWidth, TP_TERM_WALL]);
-  return [{ sign: "storage", segments: [{ ax, ay, bx, by }] }];
-};
+// The three read-points (iostat / df / iostat -x). Storage is the SOUTH wing, so
+// the builder rotates local (u,v) -> world (-u,-v); the central terminalSegment
+// helper assumes the identity (north) rotation, so we emit each screen face in
+// WORLD coords directly (via segment(), which applies toWorld). Each face is the
+// terminal recess's far wall, one screen wide, centred on its chamber so the
+// browser's USE-distance check lines up with the screen. The cistern and IOPS
+// screens are off-centre (their chambers sit to the +u/-u side), so they run
+// terminalHalfWidth either side of the chamber's u-centre, not of u=0.
+const terminals = ({ terminalHalfWidth }) => [
+  { sign: "storage", segments: [segment([-terminalHalfWidth, TP_TERM_WALL], [terminalHalfWidth, TP_TERM_WALL])] },
+  { sign: "storage-usage", segments: [segment([CIST_TERM_CX - terminalHalfWidth, CIST_TERM_V], [CIST_TERM_CX + terminalHalfWidth, CIST_TERM_V])] },
+  { sign: "storage-iops", segments: [segment([IOPS_TERM_CX - terminalHalfWidth, IOPS_TERM_V], [IOPS_TERM_CX + terminalHalfWidth, IOPS_TERM_V])] },
+];
 
 const easterEggs = () => {
   // The disk-server rack panel lives on the throughput hall's east wall.

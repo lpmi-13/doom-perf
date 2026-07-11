@@ -50,6 +50,26 @@ extern int doomperf_storage_queue;
 // graph while it is non-zero.
 extern int doomperf_storage_iops_spike;
 
+// Root-filesystem usage (`df /`) as a permille of capacity, set from the browser
+// telemetry stream and read by the disk-usage cistern's fluid level
+// (p_tick.c DoomPerf_UpdateDiskUsage).
+extern int doomperf_storage_usage;
+
+// Aggregate completed-operations rate (reads+writes/s) as a permille of a full
+// scale, set from the browser stream and read by the metrics-dashboard IOPS graph
+// (p_tick.c DoomPerf_UpdateDiskDashboard) — the real signal replacing the old
+// queue-derived proxy.
+extern int doomperf_storage_iops;
+
+// Doom Perf: the per-device IOPS "counter bank" — the busiest block devices from
+// diskstats stand as a row of standpipe columns whose floors rise with each
+// device's completed-operations rate (permille of a per-device full scale), column
+// 0 being the busiest. doomperf_storage_dev_count is how many columns carry a live
+// device. Set from the browser telemetry stream; read by DoomPerf_UpdateDiskDevices.
+#define DOOMPERF_STORAGE_DEV_SLOTS 4
+extern int doomperf_storage_dev_count;
+extern int doomperf_storage_dev_iops[DOOMPERF_STORAGE_DEV_SLOTS];
+
 // Width (samples) of the metrics-dashboard graph ring. Shared so p_tick.c (which
 // owns/advances the ring) and r_draw.c (which plots it) agree on the row stride.
 #define DOOMPERF_DASH_SAMPLES 15

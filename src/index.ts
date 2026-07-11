@@ -206,6 +206,16 @@ type DoomPerfEngine = {
   // egg). The engine decays the spike over a few seconds and scrolls it across
   // the IOPS section.
   _DoomPerf_TriggerStorageIopsSpike?: () => void;
+  // Root-filesystem usage (`df /`) as permille of capacity, driving the disk-usage
+  // cistern's fluid level.
+  _DoomPerf_SetStorageUsage?: (permille: number) => void;
+  // Aggregate completed-operations rate (reads+writes/s) as permille of a full
+  // scale, driving the metrics-dashboard IOPS graph with the real signal.
+  _DoomPerf_SetStorageIops?: (permille: number) => void;
+  // Per-device IOPS counter bank: how many columns carry a live device, and each
+  // busiest-first device's ops/s as permille of a per-device full scale.
+  _DoomPerf_SetStorageDeviceCount?: (count: number) => void;
+  _DoomPerf_SetStorageDeviceIops?: (index: number, permille: number) => void;
   _DoomPerf_SetMemoryUtil?: (permille: number) => void;
   _DoomPerf_SetMemorySaturation?: (permille: number) => void;
   _DoomPerf_SetMemoryErrors?: (permille: number) => void;
@@ -248,6 +258,14 @@ const getEngine = () =>
 
 const clampRatio = (value: number) => Math.max(0, Math.min(1, value));
 
+// Display full-scale references for the disk IOPS instruments (ops/s at a full
+// bar). Unlike %util/await/queue these have no natural 0..1 scale, so we pick a
+// reference: the aggregate dashboard graph tops out at STORAGE_IOPS_FULLSCALE and
+// each per-device column at STORAGE_DEVICE_IOPS_FULLSCALE. Tunable — raise these if
+// a fast NVMe pins the meters; the disk sims give a fixed preview regardless.
+const STORAGE_IOPS_FULLSCALE = 10000;
+const STORAGE_DEVICE_IOPS_FULLSCALE = 5000;
+
 // Cumulative oom_kill count from the previous LIVE sample. When it rises we fire
 // the in-world Baron OOM-kill event once per new kill (pushTelemetryToEngine only
 // ever runs on live telemetry, so a scenario's synthetic values never leak in;
@@ -275,6 +293,24 @@ const pushTelemetryToEngine = (engine: DoomPerfEngine | undefined, telemetry: Te
   engine?._DoomPerf_SetStorageAwait?.(Math.round(clampRatio((telemetry.storage.awaitMillis ?? 0) / 250) * 1000));
   engine?._DoomPerf_SetStorageUtil?.(Math.round(clampRatio(telemetry.storage.utilization) * 1000));
   engine?._DoomPerf_SetStorageQueue?.(Math.round(clampRatio((telemetry.storage.queueDepth ?? 0) / 24) * 1000));
+  // Root-filesystem usage (`df /`) fills the disk-usage cistern.
+  engine?._DoomPerf_SetStorageUsage?.(Math.round(clampRatio(telemetry.storage.usedRatio ?? 0) * 1000));
+  // Aggregate IOPS drives the dashboard's (now real) IOPS graph; the per-device
+  // breakdown (busiest first) drives the IOPS counter bank's columns. Sims 3/4
+  // synthesize their own values engine-side, so these live values are ignored then.
+  engine?._DoomPerf_SetStorageIops?.(
+    Math.round(clampRatio((telemetry.storage.iops ?? 0) / STORAGE_IOPS_FULLSCALE) * 1000)
+  );
+  const diskDevices = telemetry.storage.devices ?? [];
+  const diskDeviceSlots = 4;
+  engine?._DoomPerf_SetStorageDeviceCount?.(Math.min(diskDevices.length, diskDeviceSlots));
+  for (let slot = 0; slot < diskDeviceSlots; slot += 1) {
+    const device = diskDevices[slot];
+    engine?._DoomPerf_SetStorageDeviceIops?.(
+      slot,
+      device ? Math.round(clampRatio(device.iops / STORAGE_DEVICE_IOPS_FULLSCALE) * 1000) : 0
+    );
+  }
   engine?._DoomPerf_SetMemoryUtil?.(Math.round(clampRatio(telemetry.memory.utilization) * 1000));
   engine?._DoomPerf_SetMemorySaturation?.(Math.round(clampRatio(telemetry.memory.saturation) * 1000));
   engine?._DoomPerf_SetMemoryErrors?.(Math.round(clampRatio(telemetry.memory.errors) * 1000));

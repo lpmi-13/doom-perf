@@ -11,6 +11,7 @@
 #   (+)   memory-rss-barrels (RSS reliquary: per-process OOM-glow barrel pads)
 #   (+)   network-packets (RX/TX packet grove streams)
 #   (+)   memory-wing-rework (paging minor/major fault meters + OOM-killer Baron)
+#   (+)   disk-wing-rework (df / usage cistern + per-device IOPS bank + real dashboard IOPS)
 #
 # Order-independent: this is the only Doom Perf patch that touches p_tick.c.
 # Regenerate by diffing a clean tree against the staged build tree;
@@ -24,7 +25,7 @@
  //-----------------------------------------------------------------------------
  //
  // $Id:$
-@@ -30,9 +30,1377 @@ rcsid[] = "$Id: p_tick.c,v 1.4 1997/02/03 16:47:55 b1 Exp $";
+@@ -30,9 +30,1508 @@
  
  #include "doomstat.h"
  
@@ -158,6 +159,7 @@
 +    int		wob;
 +    int		latency;
 +    int		iops;
++    int		iops_sig;
 +    int		read;
 +    int		s;
 +    int		i;
@@ -186,25 +188,30 @@
 +	await = 60;
 +	queue = 80;
 +	util = 910;
++	iops_sig = 320;
 +    }
 +    else if (doomperf_sim_mode == 4)
 +    {
 +	await = 720;
 +	queue = 640;
 +	util = 975;
++	iops_sig = 880;
 +    }
 +    else
 +    {
 +	await = doomperf_storage_await;
 +	queue = doomperf_storage_queue;
 +	util = doomperf_storage_util;
++	iops_sig = doomperf_storage_iops;
 +    }
 +
 +    // A small wobble keeps an idle signal breathing instead of flatlining.
 +    wob = (leveltime / DOOMPERF_DASH_ADVANCE_TICS) & 3;
 +
++    // IOPS now plots the REAL aggregate operations/s (doomperf_storage_iops, or the
++    // sim's synthetic value) rather than the old queue-derived proxy.
 +    latency = 150 + (await * 3) / 4 + wob * 12;
-+    iops    = 150 + (queue * 3) / 5 + util / 8 + wob * 14;
++    iops    = 150 + (iops_sig * 4) / 5 + wob * 14;
 +    read    = 140 + (util * 3) / 5 + wob * 12;
 +
 +    // Easter egg: while a spike is live, slam the freshest IOPS samples to the
@@ -224,6 +231,131 @@
 +    doomperf_disk_dashboard[0][DOOMPERF_DASH_SAMPLES - 1] = latency;
 +    doomperf_disk_dashboard[1][DOOMPERF_DASH_SAMPLES - 1] = iops;
 +    doomperf_disk_dashboard[2][DOOMPERF_DASH_SAMPLES - 1] = read;
++}
++
++// Doom Perf: the disk-usage CISTERN (storage wing). A recessed fluid tank whose
++// floor rises with root-filesystem usage (`df /`): an empty disk reads as a
++// near-dry basin, a full one brims just under the rim. Sector tag
++// DOOMPERF_DISK_CISTERN_TAG. Heights are computed in map units (then shifted to
++// fixed-point) so the permille scale can't overflow a 32-bit intermediate, and the
++// fill EASES toward its target so a slow df change reads as a rising tide. The disk
++// sims synthesize a plausible fill; live uses the browser-pushed value.
++// Heights sit within one step (24) of the surrounding rim (floor 24) so the basin
++// is escapable: LOW 0 is a shallow dry basin, HIGH 22 brims just under the rim.
++#define DOOMPERF_DISK_CISTERN_TAG	616
++#define DOOMPERF_DISK_CISTERN_LOW	(0)		// dry basin floor (map units)
++#define DOOMPERF_DISK_CISTERN_HIGH	(22)		// brimming, just under the rim
++#define DOOMPERF_DISK_CISTERN_STEP	(2 * FRACUNIT)	// ease per tic
++
++void DoomPerf_UpdateDiskUsage (void)
++{
++    int		usage;
++    int		fill;
++    int		i;
++    fixed_t	target_h;
++    fixed_t	cur;
++
++    if (doomperf_sim_mode == 3)
++	usage = 610 + (leveltime % 16);
++    else if (doomperf_sim_mode == 4)
++	usage = 930 + (leveltime % 12);
++    else
++	usage = doomperf_storage_usage;
++    if (usage < 0)
++	usage = 0;
++    if (usage > 1000)
++	usage = 1000;
++
++    fill = DOOMPERF_DISK_CISTERN_LOW
++	+ ((DOOMPERF_DISK_CISTERN_HIGH - DOOMPERF_DISK_CISTERN_LOW) * usage) / 1000;
++    target_h = fill * FRACUNIT;
++
++    for (i = 0; i < numsectors; i++)
++    {
++	if (sectors[i].tag != DOOMPERF_DISK_CISTERN_TAG)
++	    continue;
++	cur = sectors[i].floorheight;
++	if (cur < target_h)
++	{
++	    cur += DOOMPERF_DISK_CISTERN_STEP;
++	    if (cur > target_h)
++		cur = target_h;
++	}
++	else if (cur > target_h)
++	{
++	    cur -= DOOMPERF_DISK_CISTERN_STEP;
++	    if (cur < target_h)
++		cur = target_h;
++	}
++	sectors[i].floorheight = cur;
++	// Glow a touch brighter as the tank fills (kept clear of the 130/134
++	// storage sentinels and the 144/160 CPU sentinels).
++	sectors[i].lightlevel = (short)(164 + (usage * 40) / 1000);
++    }
++}
++
++// Doom Perf: the per-device IOPS COUNTER BANK (storage wing). The busiest block
++// devices from diskstats stand as a row of standpipe columns (sector tags
++// DOOMPERF_DISK_DEV_TAG_BASE .. +SLOTS-1, column 0 the busiest); each column's
++// floor rises with that device's completed-operations rate, so the bank reads as a
++// live row of bar meters. Columns past the active device count rest deep and dim.
++// The disk sims synthesize a full, staggered bank; live uses the per-device values
++// the browser pushes. Tags start at 630 to stay clear of the (now dead) ring-
++// platter tags 620..622 still scanned by DoomPerf_UpdatePlatter.
++// LOW (76) rests one step (20) below the surrounding walkway (floor 96) so an idle
++// column is an escapable shallow slot; HIGH (160) rises well above the walk as a
++// clear riser bar (a busy column is a step-up wall, not a pit).
++#define DOOMPERF_DISK_DEV_TAG_BASE	630
++#define DOOMPERF_DISK_DEV_LOW		(76)	// idle/inactive column floor (map units)
++#define DOOMPERF_DISK_DEV_HIGH		(160)	// busy column floor (a clear riser bar)
++
++void DoomPerf_UpdateDiskDevices (void)
++{
++    int		count;
++    int		slot;
++    int		iops;
++    int		floor_units;
++    int		i;
++
++    if (doomperf_sim_mode == 3 || doomperf_sim_mode == 4)
++	count = DOOMPERF_STORAGE_DEV_SLOTS;
++    else
++	count = doomperf_storage_dev_count;
++    if (count < 0)
++	count = 0;
++    if (count > DOOMPERF_STORAGE_DEV_SLOTS)
++	count = DOOMPERF_STORAGE_DEV_SLOTS;
++
++    for (i = 0; i < numsectors; i++)
++    {
++	slot = sectors[i].tag - DOOMPERF_DISK_DEV_TAG_BASE;
++	if (slot < 0 || slot >= DOOMPERF_STORAGE_DEV_SLOTS)
++	    continue;
++
++	if (slot >= count)
++	{
++	    // Inactive column: rest deep and dim.
++	    sectors[i].floorheight = DOOMPERF_DISK_DEV_LOW * FRACUNIT;
++	    sectors[i].lightlevel = 150;
++	    continue;
++	}
++
++	if (doomperf_sim_mode == 3)
++	    iops = 220 + slot * 120 + (leveltime * (slot + 2)) % 90;
++	else if (doomperf_sim_mode == 4)
++	    iops = 520 + slot * 90 + (leveltime * (slot + 3)) % 150;
++	else
++	    iops = doomperf_storage_dev_iops[slot];
++	if (iops < 0)
++	    iops = 0;
++	if (iops > 1000)
++	    iops = 1000;
++
++	floor_units = DOOMPERF_DISK_DEV_LOW
++	    + ((DOOMPERF_DISK_DEV_HIGH - DOOMPERF_DISK_DEV_LOW) * iops) / 1000;
++	sectors[i].floorheight = floor_units * FRACUNIT;
++	sectors[i].lightlevel = (short)(172 + (iops * 52) / 1000);
++    }
 +}
 +
 +// Doom Perf: MEMORY page-bank instruments, one independent station per USE
@@ -1402,7 +1534,7 @@
  //
  // THINKERS
  // All thinkers should be allocated by Z_Malloc
-@@ -130,11 +1498,11 @@ void P_RunThinkers (void)
+@@ -130,11 +1629,11 @@
  void P_Ticker (void)
  {
      int		i;
@@ -1416,7 +1548,7 @@
      // pause if in menu and at least one tic has been run
      if ( !netgame
  	 && menuactive
-@@ -143,16 +1511,24 @@ void P_Ticker (void)
+@@ -143,16 +1642,26 @@
      {
  	return;
      }
@@ -1427,6 +1559,8 @@
 +    DoomPerf_UpdatePillars ();
 +    DoomPerf_UpdatePlatter ();
 +    DoomPerf_UpdateDiskDashboard ();
++    DoomPerf_UpdateDiskUsage ();
++    DoomPerf_UpdateDiskDevices ();
 +    DoomPerf_UpdateMemoryWing ();
 +    DoomPerf_UpdateOomBaron ();
 +    DoomPerf_UpdateRunQueueParticles ();

@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -121,6 +122,23 @@ type storageTelemetry struct {
 	AwaitMillis         float64 `json:"awaitMillis"`
 	ReadBytesPerSecond  float64 `json:"readBytesPerSecond"`
 	WriteBytesPerSecond float64 `json:"writeBytesPerSecond"`
+	// IOPS is the aggregate completed-operations rate (reads+writes/s) across all
+	// real block devices; Devices carries the per-device breakdown (busiest first)
+	// that feeds the per-device IOPS counter bank and its `iostat -x` terminal.
+	IOPS    float64               `json:"iops"`
+	Devices []diskDeviceTelemetry `json:"devices,omitempty"`
+	// Root-filesystem capacity (`df /`): the disk-usage cistern. UsedRatio matches
+	// df's capacity% (reserved blocks excluded from the denominator).
+	UsedBytes  uint64  `json:"usedBytes"`
+	TotalBytes uint64  `json:"totalBytes"`
+	AvailBytes uint64  `json:"availBytes"`
+	UsedRatio  float64 `json:"usedRatio"`
+}
+
+type diskDeviceTelemetry struct {
+	Name        string  `json:"name"`
+	IOPS        float64 `json:"iops"`
+	Utilization float64 `json:"utilization"`
 }
 
 type networkTelemetry struct {
@@ -914,12 +932,24 @@ func readKeyValues(path string) (map[string]uint64, error) {
 	return values, scanner.Err()
 }
 
+// maxDiskDevices caps the per-device breakdown to the busiest few, matching the
+// engine's fixed IOPS counter-bank column count (DOOMPERF_STORAGE_DEV_SLOTS).
+const maxDiskDevices = 4
+
 func sampleStorage(previous map[string]diskCounter, elapsed float64) (storageTelemetry, map[string]diskCounter, error) {
 	disks, err := readDiskCounters()
 	if err != nil {
 		return storageTelemetry{}, nil, err
 	}
+	result, current := reduceStorage(disks, previous, elapsed)
+	result.UsedBytes, result.TotalBytes, result.AvailBytes, result.UsedRatio = sampleRootFilesystem()
+	return result, current, nil
+}
 
+// reduceStorage folds per-device diskstats deltas into the aggregate USE signals,
+// aggregate IOPS, and a per-device breakdown (busiest first, capped). Pure (no
+// /proc or statfs read) so it is unit-testable with fixture counters.
+func reduceStorage(disks []diskCounter, previous map[string]diskCounter, elapsed float64) (storageTelemetry, map[string]diskCounter) {
 	current := make(map[string]diskCounter, len(disks))
 	var result storageTelemetry
 	for _, disk := range disks {
@@ -940,15 +970,46 @@ func sampleStorage(previous map[string]diskCounter, elapsed float64) (storageTel
 		}
 		util := clamp(float64(ioMillis) / (elapsed * 1000))
 		queueDepth := float64(weightedIO) / (elapsed * 1000)
+		iops := float64(ios) / elapsed
 
 		result.Utilization = maxFloat(result.Utilization, util)
 		result.QueueDepth = maxFloat(result.QueueDepth, queueDepth)
 		result.AwaitMillis = maxFloat(result.AwaitMillis, await)
 		result.ReadBytesPerSecond += float64(disk.readSectors-old.readSectors) * 512 / elapsed
 		result.WriteBytesPerSecond += float64(disk.writeSectors-old.writeSectors) * 512 / elapsed
+		result.IOPS += iops
+		result.Devices = append(result.Devices, diskDeviceTelemetry{
+			Name:        disk.name,
+			IOPS:        iops,
+			Utilization: util,
+		})
 	}
 	result.Saturation = clamp(result.QueueDepth/8 + result.AwaitMillis/250)
-	return result, current, nil
+	sort.SliceStable(result.Devices, func(i, j int) bool {
+		return result.Devices[i].IOPS > result.Devices[j].IOPS
+	})
+	if len(result.Devices) > maxDiskDevices {
+		result.Devices = result.Devices[:maxDiskDevices]
+	}
+	return result, current
+}
+
+// sampleRootFilesystem reports `df /` capacity for the disk-usage cistern. On any
+// statfs error it returns zeros (the cistern simply reads empty). UsedRatio
+// matches df's capacity% by excluding root-reserved blocks from the denominator.
+func sampleRootFilesystem() (used, total, avail uint64, usedRatio float64) {
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs("/", &stat); err != nil {
+		return 0, 0, 0, 0
+	}
+	bsize := uint64(stat.Bsize)
+	total = stat.Blocks * bsize
+	avail = stat.Bavail * bsize
+	used = (stat.Blocks - stat.Bfree) * bsize
+	if used+avail > 0 {
+		usedRatio = clamp(float64(used) / float64(used+avail))
+	}
+	return used, total, avail, usedRatio
 }
 
 func readDiskCounters() ([]diskCounter, error) {

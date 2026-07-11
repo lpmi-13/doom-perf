@@ -31,6 +31,10 @@ int doomperf_storage_await = 0;
 int doomperf_storage_util = 0;
 int doomperf_storage_queue = 0;
 int doomperf_storage_iops_spike = 0;
+int doomperf_storage_usage = 0;                              // df / used fraction (permille)
+int doomperf_storage_iops = 0;                               // aggregate ops/s (permille of full scale)
+int doomperf_storage_dev_count = 0;                          // active devices in the IOPS counter bank
+int doomperf_storage_dev_iops[DOOMPERF_STORAGE_DEV_SLOTS];   // per-device ops/s (permille of full scale)
 int doomperf_memory_util = 0;
 int doomperf_memory_saturation = 0;
 int doomperf_memory_errors = 0;
@@ -194,6 +198,49 @@ EMSCRIPTEN_KEEPALIVE
 void DoomPerf_TriggerStorageIopsSpike(void)
 {
     doomperf_storage_iops_spike = DOOMPERF_DASH_SPIKE_TICS;
+}
+
+// Root-filesystem usage (`df /`) as a permille of capacity. Drives the disk-usage
+// cistern's fluid level in the storage wing (p_tick.c DoomPerf_UpdateDiskUsage);
+// ignored there in a disk sim, which synthesizes its own fill.
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_SetStorageUsage(int permille)
+{
+    doomperf_storage_usage = DoomPerf_ClampPermille(permille);
+}
+
+// Aggregate completed-operations rate (reads+writes/s) as a permille of a full
+// scale (see IOPS_FULLSCALE in index.ts). Feeds the metrics-dashboard IOPS graph
+// (p_tick.c DoomPerf_UpdateDiskDashboard) with a real signal instead of the old
+// queue-derived proxy; sims keep their synthetic value.
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_SetStorageIops(int permille)
+{
+    doomperf_storage_iops = DoomPerf_ClampPermille(permille);
+}
+
+// How many of the per-device IOPS counter-bank columns carry a live device this
+// frame (the browser pushes the busiest N from diskstats, N<=DOOMPERF_STORAGE_DEV_SLOTS).
+// Columns past the count rest flat/dark.
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_SetStorageDeviceCount(int count)
+{
+    if (count < 0)
+        count = 0;
+    if (count > DOOMPERF_STORAGE_DEV_SLOTS)
+        count = DOOMPERF_STORAGE_DEV_SLOTS;
+    doomperf_storage_dev_count = count;
+}
+
+// Completed-operations rate (permille of a per-device full scale) for counter-bank
+// column `index`, column 0 being the busiest device. Read by DoomPerf_UpdateDiskDevices,
+// which raises that column's floor with its I/O activity.
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_SetStorageDeviceIops(int index, int permille)
+{
+    if (index < 0 || index >= DOOMPERF_STORAGE_DEV_SLOTS)
+        return;
+    doomperf_storage_dev_iops[index] = DoomPerf_ClampPermille(permille);
 }
 
 // Memory utilization is 1 - MemAvailable/MemTotal. It drives the memory wing's
