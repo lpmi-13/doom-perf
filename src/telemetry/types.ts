@@ -148,6 +148,52 @@ export interface NetworkTelemetry extends ResourceTelemetry {
   topSockets?: SocketTelemetry[];
 }
 
+// --- Simulation completeness guards -----------------------------------------
+// A sim scenario (src/index.ts `scenarioTelemetry`) hand-builds a snapshot that
+// the instrument terminals (src/ui/terminalOverlay.ts) render. If a terminal
+// reads a field the sim forgot to set, it reads 0/blank in EVERY sim mode — the
+// way the disk df/capacity + IOPS terminals silently regressed when those
+// instruments were added. Each alias below pins every field its wing's terminals
+// read as REQUIRED, so a synthesized sim branch that omits one fails to compile.
+// When a `format*` renderer starts reading a new field, add it to that wing's
+// alias here and TS will flag every synth branch that must now set it. (The
+// "background" branches for storage/network instead carry the WHOLE live resource
+// object, so they're complete by construction and keep the plain interface.)
+
+// Read by formatCores, formatRunQueue, formatUptime.
+export type SimCpuTelemetry = CpuTelemetry &
+  Required<Pick<CpuTelemetry,
+    | "runQueue" | "blocked" | "user" | "system" | "idle" | "iowait" | "steal"
+    | "contextSwitchesPerSecond" | "interruptsPerSecond">>;
+
+// Read by formatMemory, formatMemoryRss, formatMemorySwap, formatMemoryFaults,
+// formatMemoryOom.
+export type SimMemoryTelemetry = MemoryTelemetry &
+  Required<Pick<MemoryTelemetry,
+    | "totalBytes" | "availableBytes" | "freeBytes" | "buffersBytes" | "cachedBytes"
+    | "swapTotalBytes" | "swapFreeBytes" | "swapUsedBytes"
+    | "swapInPagesPerSecond" | "swapOutPagesPerSecond" | "swapPagesPerSecond"
+    | "minorFaultsPerSecond" | "majorFaultsPerSecond" | "pressureAvailable"
+    | "pressureSomeAvg10" | "pressureSomeAvg60" | "pressureSomeAvg300"
+    | "pressureFullAvg10" | "pressureFullAvg60" | "pressureFullAvg300"
+    | "oomKills" | "oomKillsPerSecond" | "topRss">>;
+
+// Read by formatStorage, formatStorageUsage, formatStorageIops. Applies to the
+// disk-sim branch only; the background branch carries live storage.
+export type SimStorageTelemetry = StorageTelemetry &
+  Required<Pick<StorageTelemetry,
+    | "queueDepth" | "awaitMillis" | "readBytesPerSecond" | "writeBytesPerSecond"
+    | "iops" | "devices"
+    | "usedBytes" | "totalBytes" | "availBytes" | "usedRatio">>;
+
+// Read by formatNetwork, formatNetworkSockets, formatNetworkQueues. Applies to
+// the network-sim branch only; the background branch carries live network.
+export type SimNetworkTelemetry = NetworkTelemetry &
+  Required<Pick<NetworkTelemetry,
+    | "rxBytesPerSecond" | "txBytesPerSecond"
+    | "primaryInterface" | "interfaces" | "tcp"
+    | "recvQueueBytes" | "sendQueueBytes" | "backloggedSockets" | "topSockets">>;
+
 export interface TelemetrySnapshot {
   status: TelemetryStatus;
   source: string;

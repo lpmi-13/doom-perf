@@ -1,7 +1,14 @@
 import { bootstrapEngine } from "./engine_bootstrap";
 import { D_DoomMain } from "./d_main";
 import { createTelemetryClient, createTerminalOverlay, resolveTelemetrySource } from "./telemetry";
-import type { TelemetrySnapshot, TerminalSign } from "./telemetry";
+import type {
+  TelemetrySnapshot,
+  TerminalSign,
+  SimCpuTelemetry,
+  SimMemoryTelemetry,
+  SimStorageTelemetry,
+  SimNetworkTelemetry,
+} from "./telemetry";
 import { createInteractPrompt } from "./interact";
 import { createMovementPad } from "./ui/movementPad";
 import { createMenuControls, type MenuAction } from "./ui/menuControls";
@@ -267,12 +274,25 @@ const STORAGE_IOPS_FULLSCALE = 10000;
 const STORAGE_DEVICE_IOPS_FULLSCALE = 5000;
 
 // Cumulative oom_kill count from the previous LIVE sample. When it rises we fire
-// the in-world Baron OOM-kill event once per new kill (pushTelemetryToEngine only
-// ever runs on live telemetry, so a scenario's synthetic values never leak in;
-// the memory saturation sim self-fires the event engine-side instead).
+// the in-world Baron OOM-kill event once per new kill. This is gated on `isLive`:
+// in a scenario we push simulated telemetry (below), whose synthetic oom_kill
+// count must never fire the event — the memory saturation sim self-fires it
+// engine-side instead.
 let lastOomKills: number | undefined;
 
-const pushTelemetryToEngine = (engine: DoomPerfEngine | undefined, telemetry: TelemetrySnapshot) => {
+// Drives the in-world instruments. `telemetry` is the LIVE snapshot in live mode
+// and the SIMULATED snapshot in a scenario (stressed active wing + baseline
+// others), so the non-active wings' instruments show a simulated baseline rather
+// than live host values — the same self-containment the terminals have. Every
+// instrument reads a global set below, and the active wing synthesizes its own
+// stress engine-side (ignoring the push), so feeding baseline here is what keeps
+// the other wings quiet. `isLive` is false in a scenario and gates the one
+// side-effecting call (the OOM-kill Baron) to live telemetry only.
+const pushTelemetryToEngine = (
+  engine: DoomPerfEngine | undefined,
+  telemetry: TelemetrySnapshot,
+  isLive: boolean
+) => {
   const displayCores = telemetry.cpu.cores.filter(({ id }) => id < doomPerfCpuCoreCapacity);
   const lastDisplayCore = displayCores.reduce((largest, { id }) => Math.max(largest, id), -1);
   engine?._DoomPerf_SetCpuCoreCount?.(lastDisplayCore + 1);
@@ -351,19 +371,23 @@ const pushTelemetryToEngine = (engine: DoomPerfEngine | undefined, telemetry: Te
   );
   // OOM-kill event: when the live oom_kill counter rises, send the Baron after the
   // hottest resident-set barrel (highest oom_score = the kernel's likeliest victim).
-  const oomKills = telemetry.memory.oomKills ?? 0;
-  if (lastOomKills !== undefined && oomKills > lastOomKills) {
-    let victim = 0;
-    let worst = -1;
-    topRss.slice(0, barrelSlots).forEach((proc, slot) => {
-      if ((proc.oomScore ?? 0) > worst) {
-        worst = proc.oomScore ?? 0;
-        victim = slot;
-      }
-    });
-    engine?._DoomPerf_TriggerMemoryOomKill?.(victim);
+  // Live-only: a scenario's synthetic oom_kill count must not fire it, and we leave
+  // lastOomKills tracking the live series so it resumes correctly after the sim.
+  if (isLive) {
+    const oomKills = telemetry.memory.oomKills ?? 0;
+    if (lastOomKills !== undefined && oomKills > lastOomKills) {
+      let victim = 0;
+      let worst = -1;
+      topRss.slice(0, barrelSlots).forEach((proc, slot) => {
+        if ((proc.oomScore ?? 0) > worst) {
+          worst = proc.oomScore ?? 0;
+          victim = slot;
+        }
+      });
+      engine?._DoomPerf_TriggerMemoryOomKill?.(victim);
+    }
+    lastOomKills = oomKills;
   }
-  lastOomKills = oomKills;
   // Network RX/TX throughput as a fraction of a 1 Gbit reference link, pushed as
   // permille. The engine maps it through a sqrt gradient to the packet-orb density
   // in the grove's two lanes — a representative abstraction, not one orb per
@@ -379,15 +403,20 @@ const pushTelemetryToEngine = (engine: DoomPerfEngine | undefined, telemetry: Te
   );
 };
 
+// A scenario is a SELF-CONTAINED simulation: every resource is synthesized here,
+// never read from the host. Only the chosen wing shows its stressed signal; the
+// other three show a quiet simulated baseline (identical across scenarios). Live
+// host telemetry appears only in live mode (mode 0), which never calls this — so
+// this function deliberately takes no live snapshot to read from.
 const scenarioTelemetry = (
-  engine: DoomPerfEngine | undefined,
-  liveTelemetry: TelemetrySnapshot | undefined
+  engine: DoomPerfEngine | undefined
 ): TelemetrySnapshot | undefined => {
   const mode = engine?._DoomPerf_GetSimMode?.() ?? 0;
   if (mode < 1 || mode > 8) {
     return undefined;
   }
 
+  const cpuMode = mode === 1 || mode === 2;
   const diskMode = mode === 3 || mode === 4;
   const diskSaturated = mode === 4;
   const memoryMode = mode === 5 || mode === 6;
@@ -396,17 +425,21 @@ const scenarioTelemetry = (
   const networkSaturated = mode === 8;
   const count = Math.max(1, Math.min(doomPerfCpuCoreCapacity, engine?._DoomPerf_GetEffectiveCpuCoreCount?.() ?? 8));
   const now = Date.now();
+  // CPU is the stressed signal only in the CPU scenario, where the engine
+  // synthesizes the per-core / load / run-queue values and we read them back so
+  // the terminal matches the CPU room. In every OTHER scenario those same getters
+  // would return the live browser-pushed values, so we synthesize a quiet baseline
+  // instead — keeping the scenario free of host telemetry.
   const cores = Array.from({ length: count }, (_, id) => ({
     id,
-    utilization: memoryMode
-      ? clampRatio(0.09 + 0.035 * Math.abs(Math.sin(now / 1800 + id)))
-      : clampRatio((engine?._DoomPerf_GetEffectiveCpuCore?.(id) ?? 0) / 1000),
+    utilization: cpuMode
+      ? clampRatio((engine?._DoomPerf_GetEffectiveCpuCore?.(id) ?? 0) / 1000)
+      : clampRatio(0.09 + 0.035 * Math.abs(Math.sin(now / 1800 + id))),
   }));
   const utilization = cores.reduce((sum, { utilization: core }) => sum + core, 0) / cores.length;
-  const runQueuePressure = memoryMode ? 0 : clampRatio((engine?._DoomPerf_GetEffectiveCpuRunQueuePressure?.() ?? 0) / 1000);
-  const loadPressure = memoryMode ? 0 : clampRatio((engine?._DoomPerf_GetEffectiveCpuLoadPressure?.() ?? 0) / 1000);
+  const runQueuePressure = cpuMode ? clampRatio((engine?._DoomPerf_GetEffectiveCpuRunQueuePressure?.() ?? 0) / 1000) : 0;
+  const loadPressure = cpuMode ? clampRatio((engine?._DoomPerf_GetEffectiveCpuLoadPressure?.() ?? 0) / 1000) : 0;
   const cpuPressure = mode === 2 ? Math.max(runQueuePressure, loadPressure) : runQueuePressure;
-  const quietResource = { utilization: 0.08, saturation: 0, errors: 0 };
   const source =
     mode === 1 ? "sim: high CPU utilization"
     : mode === 2 ? "sim: high CPU saturation"
@@ -438,7 +471,7 @@ const scenarioTelemetry = (
     : (96 + 48 * memoryWave) * 1024 ** 2;
   const memorySwapIn = memorySaturated ? 260 + 220 * memoryWave : 0;
   const memorySwapOut = memorySaturated ? 520 + 360 * Math.abs(Math.sin(now / 1900)) : 0;
-  const simMemory = memoryMode
+  const simMemory: SimMemoryTelemetry = memoryMode
     ? {
         utilization: clampRatio(1 - memoryAvailableBytes / memoryTotalBytes),
         saturation: memorySaturated ? clampRatio(0.76 + 0.18 * memoryWave) : 0.04,
@@ -520,49 +553,97 @@ const scenarioTelemetry = (
           { pid: 914, rssBytes: 140 * 1024 ** 2, command: "journald", oomScore: 70 },
         ],
       };
-  const ioBeat = 1 + Math.abs(Math.sin(now / 1300));
-  // Storage: a light I/O background under the CPU sims; the disk sims drive the
-  // media to high utilization (mode 3 — pinned busy, but the queue and service
-  // time stay low) or full saturation (mode 4 — the request queue and await
-  // blow out while throughput plateaus under contention). The fields map
-  // straight onto the iostat terminal's columns (rkB/s, wkB/s, await, aqu-sz,
-  // %util) and its queue/await/util/saturation bars.
+  // Storage: the disk sims drive the media to high utilization (mode 3 — pinned
+  // busy, but the queue and service time stay low) or full saturation (mode 4 —
+  // the request queue and await blow out while throughput plateaus under
+  // contention), and also stand up the two other USE axes with their own in-world
+  // instruments: root-filesystem capacity (`df /`, the disk-usage CISTERN, sector
+  // tag 616) and per-device IOPS (the IOPS BANK, tags 630-633). In the disk sims
+  // the engine synthesizes ALL of these instruments itself (DoomPerf_UpdateDisk*),
+  // so the terminal mirrors those synthesized values to tell the same story:
+  // mode 3 is ~61% full with a busy-but-healthy bank, mode 4 ~93% full with a
+  // saturated one. Every OTHER scenario shows `storageBase` — a quiet, healthy
+  // simulated disk (same across all non-disk scenarios), never the host's real
+  // stats. Fields map onto the iostat terminal's columns (rkB/s, wkB/s, await,
+  // aqu-sz, %util) plus the df / per-device-IOPS terminals.
   const mib = 1024 * 1024;
   const wobble = 0.85 + 0.3 * Math.abs(Math.sin(now / 900));
-  const simStorage = diskMode
-    ? {
-        utilization: diskSaturated
-          ? clampRatio(0.985 + 0.012 * Math.sin(now / 2000))
-          : clampRatio(0.93 + 0.045 * Math.sin(now / 2000)),
-        // Saturation (not raw utilization) is the health signal: ~100% busy is
-        // fine until the queue and await pile up, which only mode 4 does.
-        saturation: diskSaturated
-          ? clampRatio(0.6 + 0.4 * Math.abs(Math.sin(now / 2300)))
-          : clampRatio(0.05 + 0.04 * Math.abs(Math.sin(now / 1900))),
-        errors: 0,
-        // aqu-sz: mode 4 backs up well past the iostat bar's 8.0 full-scale.
-        queueDepth: diskSaturated ? 13 + 6 * Math.abs(Math.sin(now / 1700)) : 1.3 + 0.6 * Math.abs(Math.sin(now / 1500)),
-        // await (ms): mode 4 climbs toward a quarter-second; mode 3 stays single digit.
-        awaitMillis: diskSaturated ? 165 + 55 * Math.abs(Math.sin(now / 1300)) : 6.5 + 3 * Math.abs(Math.sin(now / 1100)),
-        // Contention makes the saturated media serve a little slower per request,
-        // so its throughput is lower than the merely-busy case.
-        readBytesPerSecond: (diskSaturated ? 96 : 168) * mib * wobble,
-        writeBytesPerSecond: (diskSaturated ? 64 : 120) * mib * wobble,
-      }
-    : {
-        utilization: clampRatio(0.04 + utilization * 0.12),
-        saturation: 0,
-        errors: 0,
-        readBytesPerSecond: (18 + utilization * 180) * ioBeat * 1024,
-        writeBytesPerSecond: (26 + utilization * 260) * ioBeat * 1024,
-      };
+  const diskSimTotalBytes = 512 * gib;
+  const diskSimUsedRatio = diskSaturated
+    ? clampRatio(0.93 + 0.008 * Math.abs(Math.sin(now / 2100)))
+    : clampRatio(0.61 + 0.012 * Math.abs(Math.sin(now / 2100)));
+  // Four block devices, busiest first, in the same ops/s range the engine's bank
+  // columns rise to (mode 4 runs hotter than mode 3); the terminal's aggregate is
+  // their sum so its rows and its total stay self-consistent.
+  const diskSimDevices = ["nvme0n1", "sda", "sdb", "dm-0"].map((name, slot) => ({
+    name,
+    iops: Math.max(
+      0,
+      (diskSaturated ? 3950 - slot * 450 : 2900 - slot * 600) +
+        (diskSaturated ? 120 : 80) * Math.abs(Math.sin(now / 1400 + slot))
+    ),
+    utilization: diskSaturated ? clampRatio(0.9 - slot * 0.05) : clampRatio(0.7 - slot * 0.08),
+  }));
+  // The disk-sim branch is guarded by SimStorageTelemetry, so omitting any field a
+  // storage terminal reads is a compile error (see src/telemetry/types.ts).
+  const storageSim: SimStorageTelemetry = {
+    utilization: diskSaturated
+      ? clampRatio(0.985 + 0.012 * Math.sin(now / 2000))
+      : clampRatio(0.93 + 0.045 * Math.sin(now / 2000)),
+    // Saturation (not raw utilization) is the health signal: ~100% busy is fine
+    // until the queue and await pile up, which only mode 4 does.
+    saturation: diskSaturated
+      ? clampRatio(0.6 + 0.4 * Math.abs(Math.sin(now / 2300)))
+      : clampRatio(0.05 + 0.04 * Math.abs(Math.sin(now / 1900))),
+    errors: 0,
+    // aqu-sz: mode 4 backs up well past the iostat bar's 8.0 full-scale.
+    queueDepth: diskSaturated ? 13 + 6 * Math.abs(Math.sin(now / 1700)) : 1.3 + 0.6 * Math.abs(Math.sin(now / 1500)),
+    // await (ms): mode 4 climbs toward a quarter-second; mode 3 stays single digit.
+    awaitMillis: diskSaturated ? 165 + 55 * Math.abs(Math.sin(now / 1300)) : 6.5 + 3 * Math.abs(Math.sin(now / 1100)),
+    // Contention makes the saturated media serve a little slower per request, so
+    // its throughput is lower than the merely-busy case.
+    readBytesPerSecond: (diskSaturated ? 96 : 168) * mib * wobble,
+    writeBytesPerSecond: (diskSaturated ? 64 : 120) * mib * wobble,
+    iops: diskSimDevices.reduce((sum, d) => sum + d.iops, 0),
+    devices: diskSimDevices,
+    totalBytes: diskSimTotalBytes,
+    usedBytes: diskSimTotalBytes * diskSimUsedRatio,
+    availBytes: diskSimTotalBytes * (1 - diskSimUsedRatio),
+    usedRatio: diskSimUsedRatio,
+  };
+  // Quiet baseline disk for every non-disk scenario: ~45% full, light I/O, low
+  // await, a calm 4-device bank. Also SimStorageTelemetry-guarded, so it can never
+  // silently drop a field a storage terminal reads.
+  const baseDiskUsedRatio = 0.45;
+  const baseDiskDevices = ["nvme0n1", "sda", "sdb", "dm-0"].map((name, slot) => ({
+    name,
+    iops: Math.max(0, 240 - slot * 55 + 40 * Math.abs(Math.sin(now / 1600 + slot))),
+    utilization: clampRatio(0.06 - slot * 0.012 + 0.02 * Math.abs(Math.sin(now / 1500 + slot))),
+  }));
+  const storageBase: SimStorageTelemetry = {
+    utilization: clampRatio(0.05 + 0.03 * Math.abs(Math.sin(now / 1700))),
+    saturation: 0,
+    errors: 0,
+    queueDepth: 0.2 + 0.2 * Math.abs(Math.sin(now / 1500)),
+    awaitMillis: 1.6 + 1.2 * Math.abs(Math.sin(now / 1300)),
+    readBytesPerSecond: (7 + 5 * Math.abs(Math.sin(now / 1100))) * mib,
+    writeBytesPerSecond: (5 + 4 * Math.abs(Math.sin(now / 1250))) * mib,
+    iops: baseDiskDevices.reduce((sum, d) => sum + d.iops, 0),
+    devices: baseDiskDevices,
+    totalBytes: diskSimTotalBytes,
+    usedBytes: diskSimTotalBytes * baseDiskUsedRatio,
+    availBytes: diskSimTotalBytes * (1 - baseDiskUsedRatio),
+    usedRatio: baseDiskUsedRatio,
+  };
+  const simStorage: SimStorageTelemetry = diskMode ? storageSim : storageBase;
 
-  // Network: a quiet background under the other sims; the network sims drive the
-  // link to high utilization (mode 7 — throughput pinned near line rate, but
-  // drops stay near zero) or full saturation (mode 8 — the link is maxed and
-  // packets start dropping while throughput plateaus under contention). The
-  // fields map straight onto the /proc/net/dev terminal's columns (rx/tx kB/s,
-  // drops/s, errs/s) and its util/saturation/errors bars.
+  // Network: the network scenario drives the link to high utilization (mode 7 —
+  // throughput pinned near line rate, but drops stay near zero) or full saturation
+  // (mode 8 — the link is maxed and packets start dropping while throughput
+  // plateaus under contention); every other scenario shows `networkBase`, a quiet
+  // simulated link (same across all non-network scenarios), never the host's real
+  // stats. The fields map straight onto the /proc/net/dev terminal's columns
+  // (rx/tx kB/s, drops/s, errs/s) and its util/saturation/errors bars.
   const linkBeat = 0.85 + 0.3 * Math.abs(Math.sin(now / 1000));
   const netWave = Math.abs(Math.sin(now / 1700));
   // Two interfaces: eth0 carries the bulk, eth1 idles alongside. The grove reflects
@@ -598,8 +679,9 @@ const scenarioTelemetry = (
   // peer-drain lag. Drives the twin RecvQ/SendQ standpipe gauges.
   const netRecvQ = networkSaturated ? (2.4 + 0.6 * netWave) * mib : 12 * 1024;
   const netSendQ = networkSaturated ? (3.4 + 0.8 * netWave) * mib : 48 * 1024;
-  const simNetwork = networkMode
-    ? {
+  // The network-sim branch is guarded by SimNetworkTelemetry, so omitting any
+  // field a network terminal reads is a compile error (see src/telemetry/types.ts).
+  const networkSim: SimNetworkTelemetry = {
         utilization: networkSaturated
           ? clampRatio(0.965 + 0.03 * Math.sin(now / 2100))
           : clampRatio(0.9 + 0.06 * Math.sin(now / 2100)),
@@ -638,8 +720,76 @@ const scenarioTelemetry = (
           : [
               { local: "10.0.0.5:443", remote: "203.0.113.9:52344", state: "ESTAB", recvQueueBytes: 0, sendQueueBytes: 24 * 1024 },
             ],
-      }
-    : (liveTelemetry?.network ?? quietResource);
+  };
+  // Calm baseline link for every non-network scenario: a lightly-used eth0 (~11%
+  // of a 1 GbE link) with eth1 idle, a small healthy TCP census, empty queues. The
+  // level matches the packet grove's own engine-side ambient stream in non-network
+  // sims (DoomPerf_EffectiveNetworkValue default) so the grove and this terminal
+  // agree. SimNetworkTelemetry-guarded so it can't silently drop a read field.
+  const baseEth0Rx = (12 + 3 * netWave) * mib;
+  const baseEth0Tx = (9 + 3 * netWave) * mib;
+  const baseEth1Rx = 0.6 * mib;
+  const baseEth1Tx = 0.4 * mib;
+  const baseEstab = 42 + Math.round(6 * netWave);
+  const baseTimeWait = 18 + Math.round(4 * netWave);
+  const baseListen = 12;
+  const networkBase: SimNetworkTelemetry = {
+    utilization: clampRatio(0.11 + 0.025 * Math.abs(Math.sin(now / 1900))),
+    saturation: 0,
+    errors: 0,
+    rxBytesPerSecond: baseEth0Rx + baseEth1Rx,
+    txBytesPerSecond: baseEth0Tx + baseEth1Tx,
+    dropsPerSecond: 0,
+    errorsPerSecond: 0,
+    primaryInterface: "eth0",
+    interfaces: [
+      { name: "eth0", rxBytesPerSecond: baseEth0Rx, txBytesPerSecond: baseEth0Tx },
+      { name: "eth1", rxBytesPerSecond: baseEth1Rx, txBytesPerSecond: baseEth1Tx },
+    ],
+    tcp: {
+      established: baseEstab,
+      timeWait: baseTimeWait,
+      listen: baseListen,
+      total: baseEstab + baseTimeWait + baseListen,
+    },
+    recvQueueBytes: 4 * 1024,
+    sendQueueBytes: 12 * 1024,
+    backloggedSockets: 0,
+    topSockets: [
+      { local: "10.0.0.5:443", remote: "203.0.113.9:52344", state: "ESTAB", recvQueueBytes: 0, sendQueueBytes: 8 * 1024 },
+    ],
+  };
+  const simNetwork: SimNetworkTelemetry = networkMode ? networkSim : networkBase;
+
+  // Guarded by SimCpuTelemetry: omitting any field the CPU terminals read is a
+  // compile error (see src/telemetry/types.ts). CPU is always fully synthesized —
+  // even under the other wings' sims it is the coherent background, never live.
+  const simCpu: SimCpuTelemetry = {
+    utilization,
+    saturation: cpuPressure,
+    errors: 0,
+    logicalCpus: count,
+    runQueuePressure,
+    loadPressure,
+    load1: cpuMode ? Math.max(0, (engine?._DoomPerf_GetEffectiveLoad?.(0) ?? 0) / 1000) : count * 0.18,
+    load5: cpuMode ? Math.max(0, (engine?._DoomPerf_GetEffectiveLoad?.(1) ?? 0) / 1000) : count * 0.16,
+    load15: cpuMode ? Math.max(0, (engine?._DoomPerf_GetEffectiveLoad?.(2) ?? 0) / 1000) : count * 0.14,
+    cores,
+    // vmstat r/b track the CPU room's run-queue reservoir and D-state orb stack
+    // exactly (the engine's single source of truth in sim mode): r derives from the
+    // same run-queue pressure the reservoir uses (baseline 0 → one runnable per
+    // core), and b reads the engine's D-state count directly — both are sim-safe
+    // (synthesized for the CPU scenario, a flat baseline otherwise, never live).
+    runQueue: Math.max(count, Math.round(count * (1 + runQueuePressure))),
+    blocked: Math.max(0, engine?._DoomPerf_GetEffectiveCpuBlockedCount?.() ?? 0),
+    user: clampRatio(utilization * 0.7),
+    system: clampRatio(utilization * 0.3),
+    idle: clampRatio(1 - utilization),
+    iowait: 0,
+    steal: 0,
+    contextSwitchesPerSecond: Math.round(1200 + cpuPressure * 28000 + utilization * 6000 + (memorySaturated ? 4200 : 0)),
+    interruptsPerSecond: Math.round(800 + utilization * 7000 + (memorySaturated ? 1800 : 0)),
+  };
 
   return {
     status: "live",
@@ -654,33 +804,10 @@ const scenarioTelemetry = (
       networkMode ? Math.max(simNetwork.utilization, simNetwork.saturation) : 0
     )),
     uptimeSeconds: 3 * 86400 + performance.now() / 1000,
-    cpu: {
-      utilization,
-      saturation: cpuPressure,
-      errors: 0,
-      logicalCpus: count,
-      runQueuePressure,
-      loadPressure,
-      load1: memoryMode ? count * 0.18 : Math.max(0, (engine?._DoomPerf_GetEffectiveLoad?.(0) ?? 0) / 1000),
-      load5: memoryMode ? count * 0.16 : Math.max(0, (engine?._DoomPerf_GetEffectiveLoad?.(1) ?? 0) / 1000),
-      load15: memoryMode ? count * 0.14 : Math.max(0, (engine?._DoomPerf_GetEffectiveLoad?.(2) ?? 0) / 1000),
-      cores,
-      // vmstat detail derived from the simulated CPU state (no live source).
-      runQueue: memoryMode ? 1 : Math.max(count, Math.round(count * (1 + runQueuePressure))),
-      // Read the engine's effective D-state count (the same value that drives the
-      // green I/O-wait orb stack) so the vmstat `b` column tracks the orbs exactly.
-      blocked: memorySaturated ? 2 : (memoryMode ? 0 : Math.max(0, engine?._DoomPerf_GetEffectiveCpuBlockedCount?.() ?? 0)),
-      user: clampRatio(utilization * 0.7),
-      system: clampRatio(utilization * 0.3),
-      idle: clampRatio(1 - utilization),
-      iowait: 0,
-      steal: 0,
-      contextSwitchesPerSecond: Math.round(1200 + cpuPressure * 28000 + utilization * 6000 + (memorySaturated ? 4200 : 0)),
-      interruptsPerSecond: Math.round(800 + utilization * 7000 + (memorySaturated ? 1800 : 0)),
-    },
-    // A scenario is a self-contained simulation, so its memory/io are the
-    // simulated background (not the host's real stats) -- keeping the whole
-    // picture coherent with the simulated CPU.
+    // Every resource is simulated: the chosen scenario's wing carries the stressed
+    // signal, the other three a quiet simulated baseline. Nothing here reads host
+    // telemetry — live stats appear only in live mode.
+    cpu: simCpu,
     memory: simMemory,
     storage: simStorage,
     network: simNetwork,
@@ -833,20 +960,24 @@ const start = async () => {
 
     const refreshEffectiveTelemetry = (forceScenarioSample = false) => {
       const engine = getEngine();
-      if (lastLiveTelemetry) {
-        pushTelemetryToEngine(engine, lastLiveTelemetry);
-      }
       const mode = engine?._DoomPerf_GetSimMode?.() ?? 0;
       const inScenario = mode >= 1 && mode <= 8;
       const now = Date.now();
       if (!inScenario) {
         lastScenario = undefined;
       } else if (forceScenarioSample || !lastScenario || now - lastScenarioAt >= scenarioSampleMs) {
-        lastScenario = scenarioTelemetry(engine, lastLiveTelemetry);
+        lastScenario = scenarioTelemetry(engine);
         lastScenarioAt = now;
       }
       lastEffectiveTelemetry = lastScenario ?? lastLiveTelemetry;
+      // Drive both the terminals AND the in-world instruments from the effective
+      // snapshot: in a scenario that's the simulated telemetry, so the physical
+      // instruments in the non-active wings show a simulated baseline instead of
+      // live host values (the active wing synthesizes its own stress engine-side).
+      // Live host values reach the engine only in live mode. isLive tracks which
+      // snapshot we actually push, so the OOM-kill event stays tied to live data.
       if (lastEffectiveTelemetry) {
+        pushTelemetryToEngine(engine, lastEffectiveTelemetry, lastScenario === undefined);
         terminal.update(lastEffectiveTelemetry);
       }
     };
