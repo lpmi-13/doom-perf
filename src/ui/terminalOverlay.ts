@@ -228,10 +228,11 @@ const formatMemoryRss = (telemetry: TelemetrySnapshot): string => {
     // oom_score isn't a `ps -eo` field, so it is read straight from /proc.
     lines.push("");
     lines.push("$ for p in <pids>; do cat /proc/$p/oom_score; done   # OOM killer badness");
-    lines.push(padStart("PID", 8) + padStart("OOM", 8) + "   0 .. 1000 (higher = killed sooner)");
-    rows.forEach(({ pid, oomScore }) => {
+    lines.push(padStart("PID", 8) + padStart("COMMAND", 16) + padStart("OOM", 8) + "   0 .. 1000 (higher = killed sooner)");
+    rows.forEach(({ pid, command, oomScore }) => {
       const score = Math.max(0, Math.round(oomScore ?? 0));
-      lines.push(padStart(String(pid), 8) + padStart(String(score), 8) + `   ${bar(score / 1000)}`);
+      const name = command.length > 15 ? `${command.slice(0, 12)}...` : command;
+      lines.push(padStart(String(pid), 8) + padStart(name, 16) + padStart(String(score), 8) + `   ${bar(score / 1000)}`);
     });
   }
   return lines.join("\n");

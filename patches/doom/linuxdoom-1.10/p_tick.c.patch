@@ -12,6 +12,7 @@
 #   (+)   network-packets (RX/TX packet grove streams)
 #   (+)   memory-wing-rework (paging minor/major fault meters + OOM-killer Baron)
 #   (+)   disk-wing-rework (df / usage cistern + per-device IOPS bank + real dashboard IOPS)
+#   (+)   memory-well-spire (green/blue book-sprite fill on the central spire)
 #
 # Order-independent: this is the only Doom Perf patch that touches p_tick.c.
 # Regenerate by diffing a clean tree against the staged build tree;
@@ -25,7 +26,7 @@
  //-----------------------------------------------------------------------------
  //
  // $Id:$
-@@ -30,9 +30,1508 @@
+@@ -30,9 +30,1724 @@
  
  #include "doomstat.h"
  
@@ -33,6 +34,7 @@
 +#include "m_random.h"
 +#include "p_mobj.h"
 +#include "r_state.h"
++#include "tables.h"
 +#include "sounds.h"
 +#include "s_sound.h"
 +
@@ -1497,6 +1499,221 @@
 +    }
 +}
 +
++// Doom Perf: THE MEMORY WELL SPIRE (memory wing hero). The central bookcase
++// cylinder fills with book-sprites as physical memory is allocated, straight
++// from the live `free -m` composition: green (working-set) books fill the lowest
++// rings, blue (reclaimable-cache) books sit above them, empty slots above that.
++// The spire has RINGS x PER slots (reading order, bottom-up); a slot is a fixed
++// point on a ring around the cylinder (world centre matches build-doomperf-map's
++// east wing: local (0,1600) -> world (1600,0)). When a slot should fill, a COURIER
++// book spawns out in the dark and the driver glides it home (direct reposition,
++// like the OOM baron); when a slot should empty, its book is lifted out (rises +
++// vanishes). The eased target (<=1 slot/tic) turns the jittery sims into a calm
++// courier stream rather than a per-tic spawn/despawn storm. No sector tags and no
++// new telemetry: green<-util, blue<-cache (the same setters the retired page grid
++// used). See MEMORY_WING_REDESIGN_PLAN.md, [[memory-wing-well-redesign]].
++#define DOOMPERF_SPIRE_CX	(1600 * FRACUNIT)	// spire world centre x
++#define DOOMPERF_SPIRE_CY	(0 * FRACUNIT)		// spire world centre y
++#define DOOMPERF_SPIRE_RINGS	9
++#define DOOMPERF_SPIRE_PER	14		// slots around each ring (dense shelf)
++#define DOOMPERF_SPIRE_SLOTS	(DOOMPERF_SPIRE_RINGS * DOOMPERF_SPIRE_PER)	// 126
++#define DOOMPERF_SPIRE_R	116		// book ring radius (just off the shelf wall)
++#define DOOMPERF_SPIRE_R_DARK	480		// courier spawn radius (out in the shaft)
++#define DOOMPERF_SPIRE_RING0	(0 * FRACUNIT)		// lowest ring z (book base)
++// Books just touch (no gaps) so the shelf still reads as full/dense, but the whole
++// gauge -- working set + cache + free headroom + the amber cap -- is TALLER (the
++// cap sits ~75% higher than the first cut) so the fill has more vertical presence
++// while still landing inside the player's fixed vertical viewport (no free look).
++#define DOOMPERF_SPIRE_RSTEP	(31 * FRACUNIT)		// z per ring up the readable band
++#define DOOMPERF_SPIRE_STEP	(14 * FRACUNIT)		// courier lateral glide / tic
++#define DOOMPERF_SPIRE_ZSTEP	(10 * FRACUNIT)		// courier vertical glide / tic
++#define DOOMPERF_SPIRE_LIFTZ	(6 * FRACUNIT)		// freed-book rise / tic
++#define DOOMPERF_SPIRE_MAXSPAWN	3			// couriers launched per tic (perf + cadence)
++#define DOOMPERF_SPIRE_MAXFREE	3			// books lifted per tic
++#define DOOMPERF_SPIRE_DEADBAND	3			// slots of jitter the fill ignores
++// The "100% full" cap: a dense, overlapping ring of amber marker sprites just
++// above the top slot, so they merge into one continuous amber band (not discrete
++// planks) marking the top-of-gauge line.
++#define DOOMPERF_SPIRE_CAP_COUNT	30
++#define DOOMPERF_SPIRE_CAP_R		120				// cap ring radius
++#define DOOMPERF_SPIRE_CAP_Z		\
++    (DOOMPERF_SPIRE_RING0 + (DOOMPERF_SPIRE_RINGS - 1) * DOOMPERF_SPIRE_RSTEP + 34 * FRACUNIT)
++
++// World (x,y,z) of shelf slot `k` (ring = k/PER bottom-up, position = k%PER around
++// the cylinder). Uses the fine trig tables (no libm in the WASM build).
++static void DoomPerf_SpireSlot (int k, fixed_t* tx, fixed_t* ty, fixed_t* tz)
++{
++    int	ring = k / DOOMPERF_SPIRE_PER;
++    int	pos = k % DOOMPERF_SPIRE_PER;
++    int	fa = (pos * (FINEANGLES / DOOMPERF_SPIRE_PER)) & FINEMASK;
++
++    *tx = DOOMPERF_SPIRE_CX + FixedMul (DOOMPERF_SPIRE_R << FRACBITS, finecosine[fa]);
++    *ty = DOOMPERF_SPIRE_CY + FixedMul (DOOMPERF_SPIRE_R << FRACBITS, finesine[fa]);
++    *tz = DOOMPERF_SPIRE_RING0 + ring * DOOMPERF_SPIRE_RSTEP;
++}
++
++// Glide book `mo` toward its shelf slot `k` by at most STEP laterally / ZSTEP
++// vertically this tic (direct reposition; the book's momentum stays zero and its
++// state is static, so P_MobjThinker never fights this). Snaps on arrival.
++static void DoomPerf_SpireFly (mobj_t* mo, int k)
++{
++    fixed_t	tx, ty, tz, dx, dy, adx, ady, dist;
++
++    DoomPerf_SpireSlot (k, &tx, &ty, &tz);
++    dx = tx - mo->x;
++    dy = ty - mo->y;
++    adx = dx < 0 ? -dx : dx;
++    ady = dy < 0 ? -dy : dy;
++    dist = adx > ady ? adx + (ady >> 1) : ady + (adx >> 1);
++    P_UnsetThingPosition (mo);
++    if (dist <= DOOMPERF_SPIRE_STEP || dist == 0)
++    {
++	mo->x = tx;
++	mo->y = ty;
++    }
++    else
++    {
++	mo->x += FixedMul (dx, FixedDiv (DOOMPERF_SPIRE_STEP, dist));
++	mo->y += FixedMul (dy, FixedDiv (DOOMPERF_SPIRE_STEP, dist));
++    }
++    P_SetThingPosition (mo);
++    if (mo->z < tz)
++    {
++	mo->z += DOOMPERF_SPIRE_ZSTEP;
++	if (mo->z > tz) mo->z = tz;
++    }
++    else if (mo->z > tz)
++    {
++	mo->z -= DOOMPERF_SPIRE_ZSTEP;
++	if (mo->z < tz) mo->z = tz;
++    }
++}
++
++// Free a shelved book: it rises into the dark and removes itself (LIFT -> S_NULL).
++static void DoomPerf_SpireLift (mobj_t* mo)
++{
++    mo->momx = mo->momy = 0;
++    mo->momz = DOOMPERF_SPIRE_LIFTZ;
++    P_SetMobjState (mo, (mo->type == MT_DP_MEMBOOK) ? S_DP_MEMBOOK_LIFT : S_DP_MEMBOOKC_LIFT);
++}
++
++// Spawn a courier book for slot `k`, out in the dark at the slot's angle and
++// higher up, so the glide reads as a book flying in and settling onto the shelf.
++static mobj_t* DoomPerf_SpireCourier (int k, mobjtype_t type)
++{
++    fixed_t	tx, ty, tz, sx, sy, sz;
++    int		pos = k % DOOMPERF_SPIRE_PER;
++    int		fa = (pos * (FINEANGLES / DOOMPERF_SPIRE_PER)) & FINEMASK;
++    mobj_t*	mo;
++
++    DoomPerf_SpireSlot (k, &tx, &ty, &tz);
++    sx = DOOMPERF_SPIRE_CX + FixedMul (DOOMPERF_SPIRE_R_DARK << FRACBITS, finecosine[fa]);
++    sy = DOOMPERF_SPIRE_CY + FixedMul (DOOMPERF_SPIRE_R_DARK << FRACBITS, finesine[fa]);
++    sz = tz + (200 * FRACUNIT);
++    mo = P_SpawnMobj (sx, sy, sz, type);
++    mo->momx = mo->momy = mo->momz = 0;
++    return mo;
++}
++
++void DoomPerf_UpdateMemorySpire (void)
++{
++    static mobj_t*	books[DOOMPERF_SPIRE_SLOTS];
++    static int		cur_green = 0;
++    static int		cur_blue = 0;
++    static int		cap_ready = 0;
++    int			util, cache, green, blue, filled;
++    int			k, spawned, freed;
++
++    // Level (re)load frees every mobj and zeroes leveltime: drop the dangling
++    // shelf refs and reset the eased composition + the cap ring.
++    if (leveltime == 0)
++    {
++	for (k = 0; k < DOOMPERF_SPIRE_SLOTS; k++)
++	    books[k] = NULL;
++	cur_green = 0;
++	cur_blue = 0;
++	cap_ready = 0;
++    }
++
++    // Pin the amber "100% full" ring once (static markers just above the top ring).
++    if (!cap_ready)
++    {
++	for (k = 0; k < DOOMPERF_SPIRE_CAP_COUNT; k++)
++	{
++	    int fa = (k * (FINEANGLES / DOOMPERF_SPIRE_CAP_COUNT)) & FINEMASK;
++	    P_SpawnMobj (DOOMPERF_SPIRE_CX + FixedMul (DOOMPERF_SPIRE_CAP_R << FRACBITS, finecosine[fa]),
++			 DOOMPERF_SPIRE_CY + FixedMul (DOOMPERF_SPIRE_CAP_R << FRACBITS, finesine[fa]),
++			 DOOMPERF_SPIRE_CAP_Z, MT_DP_MEMCAP);
++	}
++	cap_ready = 1;
++    }
++
++    util = DoomPerf_Clamp1000 (DoomPerf_EffectiveMemoryUtil ());
++    cache = DoomPerf_Clamp1000 (DoomPerf_EffectiveMemoryCache ());
++    green = (util * DOOMPERF_SPIRE_SLOTS + 500) / 1000;
++    if (green > DOOMPERF_SPIRE_SLOTS)
++	green = DOOMPERF_SPIRE_SLOTS;
++    blue = (cache * DOOMPERF_SPIRE_SLOTS + 500) / 1000;
++    if (blue > DOOMPERF_SPIRE_SLOTS - green)
++	blue = DOOMPERF_SPIRE_SLOTS - green;
++
++    // Ease the target composition toward the live value, but only once it has
++    // moved beyond a DEADBAND -- the memory sims synthesize the utilization with a
++    // few-percent per-tic jitter (e.g. `970 + leveltime%20`) that, at 126 slots,
++    // would otherwise cross the green/blue boundary every tic and thrash the
++    // boundary books (endless lift + re-courier). The deadband absorbs that jitter
++    // so the fill only animates on a REAL change; steady-state saturation is calm,
++    // and the boundary creeps (never flickers). Live mode updates ~1/s, well clear
++    // of the band.
++    if (green - cur_green > DOOMPERF_SPIRE_DEADBAND) cur_green++;
++    else if (cur_green - green > DOOMPERF_SPIRE_DEADBAND) cur_green--;
++    if (blue - cur_blue > DOOMPERF_SPIRE_DEADBAND) cur_blue++;
++    else if (cur_blue - blue > DOOMPERF_SPIRE_DEADBAND) cur_blue--;
++    if (cur_blue > DOOMPERF_SPIRE_SLOTS - cur_green)
++	cur_blue = DOOMPERF_SPIRE_SLOTS - cur_green;
++    filled = cur_green + cur_blue;
++
++    // Fly the live books to their slots; lift the overflow and any mis-coloured
++    // book at the shifting green/blue boundary (it re-spawns the right colour).
++    freed = 0;
++    for (k = DOOMPERF_SPIRE_SLOTS - 1; k >= 0; k--)
++    {
++	mobjtype_t want;
++
++	if (!books[k])
++	    continue;
++	want = (k < cur_green) ? MT_DP_MEMBOOK : MT_DP_MEMBOOKC;
++	if (k >= filled)
++	{
++	    if (freed < DOOMPERF_SPIRE_MAXFREE)
++	    {
++		DoomPerf_SpireLift (books[k]);
++		books[k] = NULL;
++		freed++;
++		continue;
++	    }
++	}
++	else if (books[k]->type != want && freed < DOOMPERF_SPIRE_MAXFREE)
++	{
++	    DoomPerf_SpireLift (books[k]);
++	    books[k] = NULL;
++	    freed++;
++	    continue;
++	}
++	DoomPerf_SpireFly (books[k], k);
++    }
++
++    // Launch couriers for the lowest empty slots that should be filled.
++    spawned = 0;
++    for (k = 0; k < filled && spawned < DOOMPERF_SPIRE_MAXSPAWN; k++)
++    {
++	if (books[k])
++	    continue;
++	books[k] = DoomPerf_SpireCourier (k, (k < cur_green) ? MT_DP_MEMBOOK : MT_DP_MEMBOOKC);
++	spawned++;
++    }
++}
++
 +void DoomPerf_UpdateNetworkPackets (void)
 +{
 +    int		rx;
@@ -1534,7 +1751,7 @@
  //
  // THINKERS
  // All thinkers should be allocated by Z_Malloc
-@@ -130,11 +1629,11 @@
+@@ -130,11 +1845,11 @@
  void P_Ticker (void)
  {
      int		i;
@@ -1548,7 +1765,7 @@
      // pause if in menu and at least one tic has been run
      if ( !netgame
  	 && menuactive
-@@ -143,16 +1642,26 @@
+@@ -143,16 +1858,27 @@
      {
  	return;
      }
@@ -1563,6 +1780,7 @@
 +    DoomPerf_UpdateDiskDevices ();
 +    DoomPerf_UpdateMemoryWing ();
 +    DoomPerf_UpdateOomBaron ();
++    DoomPerf_UpdateMemorySpire ();
 +    DoomPerf_UpdateRunQueueParticles ();
 +    DoomPerf_UpdateNetworkPackets ();
 +

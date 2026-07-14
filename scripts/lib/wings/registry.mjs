@@ -49,7 +49,11 @@ export const reserved = {
     namePrefix: "DPM", // DPMEM (label) + DPM... for banks/swap/oom/fault/barrel-pad art
     // The RSS reliquary's barrels (thing 2035) render an OVERSIZED replacement of
     // the IWAD BAR1 sprite (both existing frames) so they read across the plaza.
-    spriteReplacements: ["BAR1A0", "BAR1B0"],
+    // The Memory Well spire's fill books reuse two otherwise-unused single-frame
+    // item sprites: SUITA0 (radsuit) -> green working-set book (MT_DP_MEMBOOK),
+    // PSTRA0 (berserk) -> blue reclaimable-cache book (MT_DP_MEMBOOKC). See
+    // [[pwad-sprite-override-constraint]].
+    spriteReplacements: ["BAR1A0", "BAR1B0", "SUITA0", "PSTRA0", "PVISA0"],
   },
   storage: {
     sectorTags: [600, 659],

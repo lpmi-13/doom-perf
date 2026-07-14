@@ -41,10 +41,10 @@ export const mapManifest = {
       "sign": "memory",
       "segments": [
         {
-          "ax": 1200,
-          "ay": 128,
-          "bx": 1200,
-          "by": -128
+          "ax": 768,
+          "ay": 272,
+          "bx": 1024,
+          "by": 272
         }
       ]
     },
@@ -52,10 +52,10 @@ export const mapManifest = {
       "sign": "memory-rss",
       "segments": [
         {
-          "ax": 1616,
-          "ay": 736,
-          "bx": 1616,
-          "by": 576
+          "ax": 2149,
+          "ay": 304,
+          "bx": 2405,
+          "by": 304
         }
       ]
     },
@@ -63,10 +63,10 @@ export const mapManifest = {
       "sign": "memory-oom",
       "segments": [
         {
-          "ax": 1616,
-          "ay": 320,
-          "bx": 1616,
-          "by": 160
+          "ax": 2149,
+          "ay": -304,
+          "bx": 2405,
+          "by": -304
         }
       ]
     },
@@ -74,10 +74,10 @@ export const mapManifest = {
       "sign": "memory-swap",
       "segments": [
         {
-          "ax": 912,
-          "ay": -416,
-          "bx": 912,
-          "by": -608
+          "ax": 1472,
+          "ay": 853,
+          "bx": 1728,
+          "by": 853
         }
       ]
     },
@@ -85,10 +85,10 @@ export const mapManifest = {
       "sign": "memory-faults",
       "segments": [
         {
-          "ax": 912,
-          "ay": -160,
-          "bx": 912,
-          "by": -352
+          "ax": 1472,
+          "ay": -853,
+          "bx": 1728,
+          "by": -853
         }
       ]
     },

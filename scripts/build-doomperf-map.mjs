@@ -532,6 +532,12 @@ const lineFlagsFor = (front, back) => {
   if (back && (front.kind === "outside" || back.kind === "outside")) {
     flags |= lineFlags.blocking | lineFlags.lowerUnpegged;
   }
+  // Any two-sided edge onto the memory-well abyss stays SEE-THROUGH (two-sided, so
+  // the player looks over into the void) but is flagged impassable — a brass
+  // reading-rail that blocks the fall the -2048 well would otherwise soft-lock on.
+  if (back && (front.kind === "void" || back.kind === "void")) {
+    flags |= lineFlags.blocking;
+  }
   if (back && isDoorPair(front, back)) {
     flags |= lineFlags.lowerUnpegged;
     special = 1;

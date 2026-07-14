@@ -5,6 +5,7 @@
 #   0018  run-queue-particles
 #   0037  orb-spawn-despawn-polish
 #   (+)   network-packets (cyan RX / violet TX packet orbs)
+#   (+)   memory-well-spire (green/blue book fill on the central spire)
 #
 # Order-independent: this is the only Doom Perf patch that touches info.h.
 # Regenerate by diffing a clean tree against the staged build tree;
@@ -12,7 +13,7 @@
 
 --- a/info.h
 +++ b/info.h
-@@ -1140,6 +1140,42 @@
+@@ -1140,6 +1140,56 @@
      S_TECH2LAMP2,
      S_TECH2LAMP3,
      S_TECH2LAMP4,
@@ -52,10 +53,24 @@
 +    S_DP_NETTX_BLOOM3,
 +    S_DP_NETTX_FADE1,
 +    S_DP_NETTX_FADE2,
++    // Doom Perf memory-well spire books (memory-wing-well-redesign). Each colour
++    // has a STATIC shelved state (a fullbright billboard the driver glides into a
++    // slot on the spire; tics -1 so p_tick.c owns its motion) and a LIFT state (a
++    // freed book rises + vanishes to S_NULL on its own thinker). Green rides the
++    // radsuit lump (SPR_SUIT), blue the berserk lump (SPR_PSTR); both are PWAD-
++    // replaced with book art (frame A only) and unused elsewhere in the lab.
++    S_DP_MEMBOOK,
++    S_DP_MEMBOOK_LIFT,
++    S_DP_MEMBOOKC,
++    S_DP_MEMBOOKC_LIFT,
++    // A static amber marker ringing the spire at the gauge's top (the "100% full"
++    // line), so the fill level reads against a fixed cap. Rides the unused
++    // light-amp visor lump (SPR_PVIS), PWAD-replaced with a brass rail segment.
++    S_DP_MEMCAP,
      NUMSTATES
  } statenum_t;
  
-@@ -1298,6 +1334,11 @@
+@@ -1298,6 +1348,14 @@
      MT_MISC84,
      MT_MISC85,
      MT_MISC86,
@@ -64,6 +79,9 @@
 +    MT_DP_SPARK,
 +    MT_DP_NETRX,
 +    MT_DP_NETTX,
++    MT_DP_MEMBOOK,
++    MT_DP_MEMBOOKC,
++    MT_DP_MEMCAP,
      NUMMOBJTYPES
  
  } mobjtype_t;
