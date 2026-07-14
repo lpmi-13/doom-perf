@@ -166,6 +166,15 @@ const attachAudioUnlock = () => {
   }
 };
 
+// ?psi=off renders the terminals as if this kernel had no /proc/pressure/memory,
+// so the memory-faults terminal's vmstat-derived fallback can be checked without
+// finding a CONFIG_PSI=n host. Display only — the collector still reports PSI.
+const psiDisabled = new URLSearchParams(window.location.search).get("psi") === "off";
+const applyPsiOverride = (telemetry: TelemetrySnapshot): TelemetrySnapshot =>
+  psiDisabled
+    ? { ...telemetry, memory: { ...telemetry.memory, pressureAvailable: false } }
+    : telemetry;
+
 const wadParam = new URLSearchParams(window.location.search).get("wad")?.toLowerCase();
 const wadMap: Record<string, string> = {
   freedoom1: "/wads/freedoom1.wad",
@@ -500,6 +509,16 @@ const scenarioTelemetry = (
         pressureFullAvg60: memorySaturated ? 0.8 + 0.8 * memoryWave : 0,
         pressureFullAvg300: memorySaturated ? 0.15 + 0.25 * memoryWave : 0,
         pressureFullTotal: memorySaturated ? 144000 + Math.round(2600 * memoryWave) : 0,
+        // vmstat reclaim counters — what the PSI-less fallback reads (?psi=off). A
+        // thrashing host refaults hard and drives the allocator into direct reclaim;
+        // stallEstimate mirrors the collector's model at a ~1.2ms nominal await.
+        refaultPagesPerSecond: memorySaturated ? 2400 + 1400 * memoryWave : 40 + 30 * memoryWave,
+        directReclaimsPerSecond: memorySaturated ? 38 + 22 * memoryWave : 0,
+        directScanPagesPerSecond: memorySaturated ? 5200 + 2600 * memoryWave : 0,
+        compactStallsPerSecond: memorySaturated ? 3 + 2 * memoryWave : 0,
+        stallEstimate: clampRatio(
+          ((memorySaturated ? 150 + 90 * memoryWave : 2 + 3 * memoryWave) + memorySwapIn) * 0.0012
+        ),
         oomKills: 0,
         oomKillsPerSecond: 0,
         // oomScore mirrors the engine's barrel-glow synthesis for modes 5/6
@@ -545,6 +564,11 @@ const scenarioTelemetry = (
         pressureFullAvg60: 0,
         pressureFullAvg300: 0,
         pressureFullTotal: 0,
+        refaultPagesPerSecond: 20 + utilization * 60,
+        directReclaimsPerSecond: 0,
+        directScanPagesPerSecond: 0,
+        compactStallsPerSecond: 0,
+        stallEstimate: 0,
         oomKills: 0,
         oomKillsPerSecond: 0,
         topRss: [
@@ -978,7 +1002,7 @@ const start = async () => {
       // snapshot we actually push, so the OOM-kill event stays tied to live data.
       if (lastEffectiveTelemetry) {
         pushTelemetryToEngine(engine, lastEffectiveTelemetry, lastScenario === undefined);
-        terminal.update(lastEffectiveTelemetry);
+        terminal.update(applyPsiOverride(lastEffectiveTelemetry));
       }
     };
 

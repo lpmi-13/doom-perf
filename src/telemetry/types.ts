@@ -51,7 +51,7 @@ export interface MemoryTelemetry extends ResourceTelemetry {
   minorFaultsPerSecond?: number;
   majorFaultsPerSecond?: number;
   // False on kernels without /proc/pressure/memory (no PSI), so the faults
-  // terminal can say "unavailable" instead of showing zeroed stall figures.
+  // terminal can omit the stall census instead of showing zeroed figures.
   pressureAvailable?: boolean;
   pressureSomeAvg10?: number;
   pressureSomeAvg60?: number;
@@ -61,6 +61,17 @@ export interface MemoryTelemetry extends ResourceTelemetry {
   pressureFullAvg60?: number;
   pressureFullAvg300?: number;
   pressureFullTotal?: number;
+  // /proc/vmstat rates for the events the kernel charges PSI memory-stall time to
+  // (thrashing refaults, direct reclaim, its scan work, direct compaction). They
+  // stand in for the stall census on kernels where pressureAvailable is false.
+  refaultPagesPerSecond?: number;
+  directReclaimsPerSecond?: number;
+  directScanPagesPerSecond?: number;
+  compactStallsPerSecond?: number;
+  // Modelled 0..1 stand-in for PSI some/avg10 — (majflt/s + swapin/s) x disk await,
+  // an upper bound on the real stall share. An estimate: never present it as a
+  // kernel-reported PSI figure.
+  stallEstimate?: number;
   oomKills?: number;
   oomKillsPerSecond?: number;
   topRss?: MemoryProcessTelemetry[];
@@ -176,6 +187,8 @@ export type SimMemoryTelemetry = MemoryTelemetry &
     | "minorFaultsPerSecond" | "majorFaultsPerSecond" | "pressureAvailable"
     | "pressureSomeAvg10" | "pressureSomeAvg60" | "pressureSomeAvg300"
     | "pressureFullAvg10" | "pressureFullAvg60" | "pressureFullAvg300"
+    | "refaultPagesPerSecond" | "directReclaimsPerSecond" | "directScanPagesPerSecond"
+    | "compactStallsPerSecond" | "stallEstimate"
     | "oomKills" | "oomKillsPerSecond" | "topRss">>;
 
 // Read by formatStorage, formatStorageUsage, formatStorageIops. Applies to the

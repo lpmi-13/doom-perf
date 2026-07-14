@@ -270,8 +270,10 @@ const formatMemorySwap = (telemetry: TelemetrySnapshot): string => {
 // a MAJOR fault had to read the page back from disk or swap — the refault/thrash
 // signal, so majflt/s is what drives saturation. Rates come from `sar -B`
 // (fault/s, majflt/s) or the /proc/vmstat pgfault/pgmajfault counters. The PSI
-// reclaim-stall census folds in here, but only when the kernel exposes
-// /proc/pressure/memory (older kernels / no CONFIG_PSI report nothing).
+// reclaim-stall census folds in here when the kernel exposes
+// /proc/pressure/memory; where it doesn't (older kernels / no CONFIG_PSI), the
+// same phenomena are rebuilt from the vmstat reclaim counters instead — measured
+// event rates plus one clearly-labelled modelled stall estimate.
 const formatMemoryFaults = (telemetry: TelemetrySnapshot): string => {
   const m = telemetry.memory;
   const minor = Math.max(0, rate(m.minorFaultsPerSecond));
@@ -291,7 +293,6 @@ const formatMemoryFaults = (telemetry: TelemetrySnapshot): string => {
   lines.push(`major faults ${bar(clamp(major / 200))} ${Math.round(major)} /s   refault from disk/swap`);
   lines.push(`saturation   ${bar(m.saturation)} ${pctText(m.saturation)}%`);
   lines.push("");
-  // PSI reclaim stalls fold in here, gated on the kernel actually exposing them.
   if (m.pressureAvailable) {
     const some = rate(m.pressureSomeAvg10);
     const full = rate(m.pressureFullAvg10);
@@ -301,9 +302,28 @@ const formatMemoryFaults = (telemetry: TelemetrySnapshot): string => {
     lines.push(`some stalls   ${bar(clamp(some / 20))} ${some.toFixed(2)}% of last 10s   (>10% = sustained)`);
     lines.push(`full stalls   ${bar(clamp(full / 5))} ${full.toFixed(2)}% of last 10s   (>0 = severe)`);
   } else {
-    lines.push("$ cat /proc/pressure/memory");
-    lines.push("cat: /proc/pressure/memory: No such file or directory");
-    lines.push("PSI reclaim stalls unavailable on this kernel (needs CONFIG_PSI).");
+    // No PSI here, so the stall census is rebuilt from the /proc/vmstat events the
+    // kernel would have charged that stall time to. The counters are measured; the
+    // stall bar is the collector's model — (majflt/s + swapin/s) x disk await, an
+    // upper bound on PSI "some" — so it is labelled "est." and never dressed up as
+    // kernel output. PSI "full" has no counter-based equivalent at all.
+    const refault = rate(m.refaultPagesPerSecond);
+    const stall = clamp(rate(m.stallEstimate));
+    const counters: [string, number, string][] = [
+      ["workingset_refault", refault, "evicted page faulted back (thrash)"],
+      ["allocstall", rate(m.directReclaimsPerSecond), "allocator forced into direct reclaim"],
+      ["pgscan_direct", rate(m.directScanPagesPerSecond), "pages scanned in direct reclaim"],
+      ["pswpin", rate(m.swapInPagesPerSecond), "swap-in reads"],
+      ["compact_stall", rate(m.compactStallsPerSecond), "direct-compaction stalls"],
+    ];
+    lines.push("$ grep -E 'workingset_refault|allocstall|pgscan_direct|pswpin|compact_stall' /proc/vmstat");
+    counters.forEach(([name, value, note]) => {
+      lines.push(`${name.padEnd(19)}${padStart(String(Math.round(value)), 9)} /s   ${note}`);
+    });
+    lines.push("");
+    lines.push(`reclaim stall ${bar(stall)} ${pctText(stall)}% est.   (majflt+swpin) x await`);
+    lines.push(`thrash        ${bar(clamp(refault / 3000))} ${Math.round(refault)} /s   refaults vs 3000/s reference`);
+    lines.push("no /proc/pressure/memory on this kernel — PSI stall shares unavailable");
   }
   return lines.join("\n");
 };

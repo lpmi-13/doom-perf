@@ -97,6 +97,17 @@ type memoryTelemetry struct {
 	OOMKills           uint64                `json:"oomKills"`
 	OOMKillsPerSecond  float64               `json:"oomKillsPerSecond"`
 	TopRSS             []rssProcessTelemetry `json:"topRss,omitempty"`
+	// Rates of the /proc/vmstat events the kernel charges PSI memory-stall time
+	// to. Always emitted (they are worth having on their own), but they carry the
+	// whole reclaim story on hosts where PressureAvailable is false.
+	RefaultPagesPerSecond    float64 `json:"refaultPagesPerSecond"`
+	DirectReclaimsPerSecond  float64 `json:"directReclaimsPerSecond"`
+	DirectScanPagesPerSecond float64 `json:"directScanPagesPerSecond"`
+	CompactStallsPerSecond   float64 `json:"compactStallsPerSecond"`
+	// StallEstimate is a modelled 0..1 stand-in for PSI some/avg10 on PSI-less
+	// hosts (see the derivation at its assignment). It is an estimate, never a
+	// kernel-reported figure, and consumers must label it as one.
+	StallEstimate float64 `json:"stallEstimate"`
 }
 
 type rssProcessTelemetry struct {
@@ -257,8 +268,14 @@ type sampler struct {
 	minFaults uint64
 	majFaults uint64
 	oomKills  uint64
-	ctxt      uint64
-	intr      uint64
+	// Reclaim-stall event counters (see readReclaimCounters): the vmstat side of
+	// the PSI story, kept so PSI-less hosts still get rates rather than nothing.
+	refaults      uint64
+	allocStalls   uint64
+	directScan    uint64
+	compactStalls uint64
+	ctxt          uint64
+	intr          uint64
 }
 
 type telemetryHub struct {
@@ -531,16 +548,41 @@ func (s *sampler) sample(now time.Time) (telemetry, error) {
 	minFaultRate := counterRate(minFaults, s.minFaults, elapsed)
 	majFaultRate := counterRate(majFaults, s.majFaults, elapsed)
 	psiSome, psiFull, psiAvailable := readPressure("/proc/pressure/memory")
+	refaults, allocStalls, directScan, compactStalls := readReclaimCounters(vmstat)
+	refaultRate := counterRate(refaults, s.refaults, elapsed)
+	allocStallRate := counterRate(allocStalls, s.allocStalls, elapsed)
+	directScanRate := counterRate(directScan, s.directScan, elapsed)
+	compactStallRate := counterRate(compactStalls, s.compactStalls, elapsed)
 	topRSS := readTopRSSProcesses(5)
-	// Major faults contribute to saturation (thrashing refaults from disk/swap);
-	// ~200 majflt/s reads as fully saturated, alongside swap churn and PSI.
-	memSaturation := clamp(maxFloat(swapRate/2500, maxFloat(majFaultRate/200, maxFloat(psiSome.Avg10/100, maxFloat(psiFull.Avg10/20, maxFloat(memUtil-0.90, 0)*5)))))
 	memErrors := clamp(oomRate)
 
 	storage, disks, err := sampleStorage(s.disk, elapsed)
 	if err != nil {
 		return telemetry{}, err
 	}
+	// Modelled stand-in for PSI some/avg10 where the kernel has no PSI. A major
+	// fault or a swap-in parks the faulting task for about one disk I/O, and the
+	// storage sampler already measures that service time (await), so
+	// (majflt/s + swpin/s) * await is seconds stalled per second of wall clock.
+	// It is an UPPER BOUND on PSI "some": it sums stalls across tasks, where PSI
+	// counts wall-clock windows in which any task was stalled, and it cannot model
+	// "full" at all. When no block device reported a service time this sample
+	// (zram/tmpfs swap, or an idle disk between faults) fall back to a nominal 1ms
+	// so a genuine fault storm still registers instead of collapsing to zero.
+	awaitSeconds := storage.AwaitMillis / 1000
+	if awaitSeconds <= 0 {
+		awaitSeconds = 0.001
+	}
+	stallEstimate := clamp((majFaultRate + swapInRate) * awaitSeconds)
+	// Major faults contribute to saturation (thrashing refaults from disk/swap);
+	// ~200 majflt/s reads as fully saturated, alongside swap churn and PSI. PSI-less
+	// hosts substitute the modelled stall share for the two PSI terms, so the wing's
+	// gauges don't under-read there; hosts with PSI use the kernel's own figures.
+	memPressure := maxFloat(psiSome.Avg10/100, psiFull.Avg10/20)
+	if !psiAvailable {
+		memPressure = stallEstimate
+	}
+	memSaturation := clamp(maxFloat(swapRate/2500, maxFloat(majFaultRate/200, maxFloat(memPressure, maxFloat(memUtil-0.90, 0)*5))))
 	network, nets, err := sampleNetwork(s.net, elapsed)
 	if err != nil {
 		return telemetry{}, err
@@ -561,6 +603,10 @@ func (s *sampler) sample(now time.Time) (telemetry, error) {
 	s.minFaults = minFaults
 	s.majFaults = majFaults
 	s.oomKills = oomKills
+	s.refaults = refaults
+	s.allocStalls = allocStalls
+	s.directScan = directScan
+	s.compactStalls = compactStalls
 	s.ctxt = ctxt
 	s.intr = intr
 	s.disk = disks
@@ -624,6 +670,12 @@ func (s *sampler) sample(now time.Time) (telemetry, error) {
 			OOMKills:              oomKills,
 			OOMKillsPerSecond:     oomRate,
 			TopRSS:                topRSS,
+
+			RefaultPagesPerSecond:    refaultRate,
+			DirectReclaimsPerSecond:  allocStallRate,
+			DirectScanPagesPerSecond: directScanRate,
+			CompactStallsPerSecond:   compactStallRate,
+			StallEstimate:            stallEstimate,
 		},
 		Storage: storage,
 		Network: network,
@@ -667,6 +719,21 @@ func readPressure(path string) (some, full pressureLineTelemetry, available bool
 		}
 	}
 	return some, full, available
+}
+
+// readReclaimCounters pulls the /proc/vmstat events the kernel charges PSI
+// memory-stall time to, so a host without /proc/pressure/memory can still report
+// the same phenomena as rates: a refault is a page that was evicted and then
+// faulted straight back in (thrashing), an allocstall is an allocation forced
+// into direct reclaim, pgscan_direct is the scanning work that reclaim did, and
+// compact_stall is a direct-compaction stall. The names moved across kernels —
+// workingset_refault split into anon/file in 5.9, allocstall split per-zone in
+// 4.16 — and a kernel only ever exposes one spelling, so summing both is safe.
+func readReclaimCounters(vmstat map[string]uint64) (refaults, allocStalls, directScan, compactStalls uint64) {
+	refaults = vmstat["workingset_refault"] + vmstat["workingset_refault_anon"] + vmstat["workingset_refault_file"]
+	allocStalls = vmstat["allocstall"] + vmstat["allocstall_dma"] + vmstat["allocstall_dma32"] +
+		vmstat["allocstall_normal"] + vmstat["allocstall_movable"] + vmstat["allocstall_device"]
+	return refaults, allocStalls, vmstat["pgscan_direct"], vmstat["compact_stall"]
 }
 
 func readTopRSSProcesses(limit int) []rssProcessTelemetry {
