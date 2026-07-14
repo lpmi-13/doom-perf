@@ -26,7 +26,7 @@
  //-----------------------------------------------------------------------------
  //
  // $Id:$
-@@ -30,9 +30,1724 @@
+@@ -30,9 +30,1864 @@
  
  #include "doomstat.h"
  
@@ -1515,29 +1515,56 @@
 +#define DOOMPERF_SPIRE_CX	(1600 * FRACUNIT)	// spire world centre x
 +#define DOOMPERF_SPIRE_CY	(0 * FRACUNIT)		// spire world centre y
 +#define DOOMPERF_SPIRE_RINGS	9
-+#define DOOMPERF_SPIRE_PER	14		// slots around each ring (dense shelf)
-+#define DOOMPERF_SPIRE_SLOTS	(DOOMPERF_SPIRE_RINGS * DOOMPERF_SPIRE_PER)	// 126
-+#define DOOMPERF_SPIRE_R	116		// book ring radius (just off the shelf wall)
++#define DOOMPERF_SPIRE_PER	20		// slots around each ring
++#define DOOMPERF_SPIRE_SLOTS	(DOOMPERF_SPIRE_RINGS * DOOMPERF_SPIRE_PER)	// 180
++#define DOOMPERF_SPIRE_R	116		// book ring radius (just off the rack wall)
 +#define DOOMPERF_SPIRE_R_DARK	480		// courier spawn radius (out in the shaft)
 +#define DOOMPERF_SPIRE_RING0	(0 * FRACUNIT)		// lowest ring z (book base)
-+// Books just touch (no gaps) so the shelf still reads as full/dense, but the whole
-+// gauge -- working set + cache + free headroom + the amber cap -- is TALLER (the
-+// cap sits ~75% higher than the first cut) so the fill has more vertical presence
-+// while still landing inside the player's fixed vertical viewport (no free look).
-+#define DOOMPERF_SPIRE_RSTEP	(31 * FRACUNIT)		// z per ring up the readable band
-+#define DOOMPERF_SPIRE_STEP	(14 * FRACUNIT)		// courier lateral glide / tic
-+#define DOOMPERF_SPIRE_ZSTEP	(10 * FRACUNIT)		// courier vertical glide / tic
++// PER x R sets how densely a full ring reads: 20 books of 26 units on a radius-116
++// ring sit ~36 apart, so a filled shelf is a row of books with a hairline of rack
++// showing between them, not a smear and not a sparse scatter. 180 slots also makes
++// the gauge finer (~0.5% of memory per book).
++//
++// RSTEP is the shelf pitch and it is NOT free: the rack texture (DPMRACK, built by
++// memory-wing.mjs) draws a board every RING_PITCH=32 rows, a one-sided wall is
++// pegged to its ceiling, and the spire's ceiling is 768 = 6 x 128 (the texture's
++// tiling height). So texture rows land on exact multiples of 32 in z, and a ring at
++// a multiple of 32 lands exactly ON a drawn board. Change one of the two and the
++// books float off their shelves.
++#define DOOMPERF_SPIRE_RSTEP	(32 * FRACUNIT)		// z per ring == the rack's board pitch
++// The flight is eased in POLAR space around the spire (radius / angle / height all
++// closing on the slot at ~1/EASE of what is left, with a floor so they always
++// arrive): the book sweeps in on a decelerating spiral instead of sliding down a
++// straight line. LEAD is how far around the spire it enters -- an eighth of a turn
++// "upwind" of its slot, alternating side by slot, so books curve in from both ways.
++#define DOOMPERF_SPIRE_EASE	6			// close 1/6 of what's left per tic
++#define DOOMPERF_SPIRE_RMAX	(24 * FRACUNIT)		// cap on the inward sweep / tic
++#define DOOMPERF_SPIRE_RMIN	(2 * FRACUNIT)		// floor, so it always lands
++#define DOOMPERF_SPIRE_ZMAX	(16 * FRACUNIT)		// cap on the descent / tic
++#define DOOMPERF_SPIRE_ZMIN	(FRACUNIT)		// floor, so it always lands
++#define DOOMPERF_SPIRE_AMAX	(ANG45 / 4)		// cap on the swing round / tic
++#define DOOMPERF_SPIRE_AMIN	(ANG45 / 32)		// floor, so it always lands
++#define DOOMPERF_SPIRE_LEAD	(ANG45)			// entry angle, upwind of the slot
++#define DOOMPERF_SPIRE_RISE	(260 * FRACUNIT)	// courier spawn height above its slot
 +#define DOOMPERF_SPIRE_LIFTZ	(6 * FRACUNIT)		// freed-book rise / tic
 +#define DOOMPERF_SPIRE_MAXSPAWN	3			// couriers launched per tic (perf + cadence)
 +#define DOOMPERF_SPIRE_MAXFREE	3			// books lifted per tic
 +#define DOOMPERF_SPIRE_DEADBAND	3			// slots of jitter the fill ignores
++// Baseline page churn: even at a STEADY fill level, pages are constantly mapped in
++// and reclaimed. We recycle one shelved book (lift it out, fly a fresh one in) on a
++// timer whose interval shrinks with live page-fault activity -- a gentle trickle at
++// idle up to a busy stream under load. Recycles hit the top CHURN_BAND-th of the
++// fill (the hot working-set edge), so the churn reads without disturbing the level.
++#define DOOMPERF_SPIRE_CHURN_SLOW	50		// idle recycle interval (tics)
++#define DOOMPERF_SPIRE_CHURN_FAST	5		// max-load recycle interval (tics)
++#define DOOMPERF_SPIRE_CHURN_BAND	3		// recycle within the top 1/BAND of the fill
 +// The "100% full" cap: a dense, overlapping ring of amber marker sprites just
 +// above the top slot, so they merge into one continuous amber band (not discrete
 +// planks) marking the top-of-gauge line.
 +#define DOOMPERF_SPIRE_CAP_COUNT	30
 +#define DOOMPERF_SPIRE_CAP_R		120				// cap ring radius
 +#define DOOMPERF_SPIRE_CAP_Z		\
-+    (DOOMPERF_SPIRE_RING0 + (DOOMPERF_SPIRE_RINGS - 1) * DOOMPERF_SPIRE_RSTEP + 34 * FRACUNIT)
++    (DOOMPERF_SPIRE_RING0 + (DOOMPERF_SPIRE_RINGS - 1) * DOOMPERF_SPIRE_RSTEP + 32 * FRACUNIT)
 +
 +// World (x,y,z) of shelf slot `k` (ring = k/PER bottom-up, position = k%PER around
 +// the cylinder). Uses the fine trig tables (no libm in the WASM build).
@@ -1552,66 +1579,148 @@
 +    *tz = DOOMPERF_SPIRE_RING0 + ring * DOOMPERF_SPIRE_RSTEP;
 +}
 +
-+// Glide book `mo` toward its shelf slot `k` by at most STEP laterally / ZSTEP
-+// vertically this tic (direct reposition; the book's momentum stays zero and its
-+// state is static, so P_MobjThinker never fights this). Snaps on arrival.
-+static void DoomPerf_SpireFly (mobj_t* mo, int k)
++// The angle of slot `k` around the spire, derived from the SAME fine angle
++// DoomPerf_SpireSlot uses, so a book that has closed on this angle is standing
++// exactly on that slot.
++static angle_t DoomPerf_SpireAngle (int k)
 +{
-+    fixed_t	tx, ty, tz, dx, dy, adx, ady, dist;
++    int	fa = ((k % DOOMPERF_SPIRE_PER) * (FINEANGLES / DOOMPERF_SPIRE_PER)) & FINEMASK;
++
++    return (angle_t)fa << ANGLETOFINESHIFT;
++}
++
++// A courier's polar flight state lives on the mobj: `angle` is where it is around
++// the spire and `movecount` how far out. Neither field means anything else for a
++// book (no AI, and the sprites are rot-0, so `angle` never reaches the renderer),
++// and they must be TRACKED rather than re-derived each tic -- P_AproxDistance is an
++// approximation, so a radius read back from x/y would never converge on the slot.
++#define DoomPerf_SpireRadius(mo)	((fixed_t)(mo)->movecount)
++#define DoomPerf_SpireSetRadius(mo, r)	((mo)->movecount = (int)(r))
++
++// Is this book still on the wing? (Its flight PATH is ours to drive; once it has
++// landed it is a static billboard and must not be touched again.)
++static boolean DoomPerf_SpireInFlight (mobj_t* mo)
++{
++    statenum_t	st = (statenum_t)(mo->state - states);
++
++    return (st >= S_DP_MEMBOOK_FLY1 && st <= S_DP_MEMBOOK_FLY4)
++	|| (st >= S_DP_MEMBOOKC_FLY1 && st <= S_DP_MEMBOOKC_FLY4);
++}
++
++// Ease a scalar toward its target: close 1/EASE of the gap, but never less than
++// `min` (so it always arrives) and never more than `max` (so it never lurches).
++// Lands exactly on the target rather than hunting around it.
++static fixed_t DoomPerf_SpireEase (fixed_t cur, fixed_t target, fixed_t min, fixed_t max)
++{
++    fixed_t	gap = target - cur;
++    fixed_t	step;
++
++    if (gap == 0)
++	return cur;
++    step = (gap < 0 ? -gap : gap) / DOOMPERF_SPIRE_EASE;
++    if (step > max) step = max;
++    if (step < min) step = min;
++    if (step >= (gap < 0 ? -gap : gap))
++	return target;
++    return gap < 0 ? cur - step : cur + step;
++}
++
++// Fly book `mo` toward its shelf slot `k`. The path is eased in POLAR space around
++// the spire -- radius, angle and height each close on the slot independently -- so
++// the book sweeps IN and AROUND on a decelerating spiral and settles onto its board
++// rather than sliding down a straight line. Direct reposition: momentum stays zero
++// and P_MobjThinker only drives the wingbeat, so it never fights this.
++//
++// Returns true once the book is home (all three axes exact), at which point the
++// caller hands it to the landing states: it snaps shut and becomes a shelved book.
++static boolean DoomPerf_SpireFly (mobj_t* mo, int k)
++{
++    fixed_t	tx, ty, tz, r;
++    angle_t	ang, target, delta;
++    boolean	landed;
 +
 +    DoomPerf_SpireSlot (k, &tx, &ty, &tz);
-+    dx = tx - mo->x;
-+    dy = ty - mo->y;
-+    adx = dx < 0 ? -dx : dx;
-+    ady = dy < 0 ? -dy : dy;
-+    dist = adx > ady ? adx + (ady >> 1) : ady + (adx >> 1);
++    target = DoomPerf_SpireAngle (k);
++    ang = mo->angle;
++    r = DoomPerf_SpireRadius (mo);
++
++    // Swing round the spire the short way, easing as the angle closes.
++    delta = target - ang;
++    if (delta != 0)
++    {
++	angle_t	step;
++	angle_t	remaining = (delta <= ANG180) ? delta : (angle_t)(0 - delta);
++
++	step = remaining / DOOMPERF_SPIRE_EASE;
++	if (step > DOOMPERF_SPIRE_AMAX) step = DOOMPERF_SPIRE_AMAX;
++	if (step < DOOMPERF_SPIRE_AMIN) step = DOOMPERF_SPIRE_AMIN;
++	if (step >= remaining)
++	    ang = target;
++	else
++	    ang = (delta <= ANG180) ? ang + step : ang - step;
++    }
++
++    r = DoomPerf_SpireEase (r, DOOMPERF_SPIRE_R << FRACBITS,
++			    DOOMPERF_SPIRE_RMIN, DOOMPERF_SPIRE_RMAX);
++    mo->z = DoomPerf_SpireEase (mo->z, tz, DOOMPERF_SPIRE_ZMIN, DOOMPERF_SPIRE_ZMAX);
++    mo->angle = ang;
++    DoomPerf_SpireSetRadius (mo, r);
++
++    landed = (ang == target && r == (DOOMPERF_SPIRE_R << FRACBITS) && mo->z == tz);
++
 +    P_UnsetThingPosition (mo);
-+    if (dist <= DOOMPERF_SPIRE_STEP || dist == 0)
++    if (landed)
 +    {
 +	mo->x = tx;
 +	mo->y = ty;
 +    }
 +    else
 +    {
-+	mo->x += FixedMul (dx, FixedDiv (DOOMPERF_SPIRE_STEP, dist));
-+	mo->y += FixedMul (dy, FixedDiv (DOOMPERF_SPIRE_STEP, dist));
++	unsigned int fa = ang >> ANGLETOFINESHIFT;
++
++	mo->x = DOOMPERF_SPIRE_CX + FixedMul (r, finecosine[fa]);
++	mo->y = DOOMPERF_SPIRE_CY + FixedMul (r, finesine[fa]);
 +    }
 +    P_SetThingPosition (mo);
-+    if (mo->z < tz)
-+    {
-+	mo->z += DOOMPERF_SPIRE_ZSTEP;
-+	if (mo->z > tz) mo->z = tz;
-+    }
-+    else if (mo->z > tz)
-+    {
-+	mo->z -= DOOMPERF_SPIRE_ZSTEP;
-+	if (mo->z < tz) mo->z = tz;
-+    }
++
++    if (landed)
++	P_SetMobjState (mo, (mo->type == MT_DP_MEMBOOK)
++			? S_DP_MEMBOOK_LAND1 : S_DP_MEMBOOKC_LAND1);
++    return landed;
 +}
 +
-+// Free a shelved book: it rises into the dark and removes itself (LIFT -> S_NULL).
++// Free a shelved book: it re-opens its pages and flutters up into the dark, taking
++// itself out of the world at the end of the LIFT chain (S_NULL).
 +static void DoomPerf_SpireLift (mobj_t* mo)
 +{
 +    mo->momx = mo->momy = 0;
 +    mo->momz = DOOMPERF_SPIRE_LIFTZ;
-+    P_SetMobjState (mo, (mo->type == MT_DP_MEMBOOK) ? S_DP_MEMBOOK_LIFT : S_DP_MEMBOOKC_LIFT);
++    P_SetMobjState (mo, (mo->type == MT_DP_MEMBOOK)
++		    ? S_DP_MEMBOOK_LIFT1 : S_DP_MEMBOOKC_LIFT1);
 +}
 +
-+// Spawn a courier book for slot `k`, out in the dark at the slot's angle and
-+// higher up, so the glide reads as a book flying in and settling onto the shelf.
++// Spawn a courier book for slot `k`: out in the dark of the well, high above its
++// shelf, and a LEAD angle round the spire from it (which way round alternates by
++// slot, so the couriers don't all bank the same way). It spawns already in flight,
++// wings beating, and DoomPerf_SpireFly spirals it home from there.
 +static mobj_t* DoomPerf_SpireCourier (int k, mobjtype_t type)
 +{
 +    fixed_t	tx, ty, tz, sx, sy, sz;
-+    int		pos = k % DOOMPERF_SPIRE_PER;
-+    int		fa = (pos * (FINEANGLES / DOOMPERF_SPIRE_PER)) & FINEMASK;
++    angle_t	entry;
++    unsigned int fa;
 +    mobj_t*	mo;
 +
 +    DoomPerf_SpireSlot (k, &tx, &ty, &tz);
++    entry = DoomPerf_SpireAngle (k)
++	+ ((k & 1) ? DOOMPERF_SPIRE_LEAD : (angle_t)(0 - DOOMPERF_SPIRE_LEAD));
++    fa = entry >> ANGLETOFINESHIFT;
 +    sx = DOOMPERF_SPIRE_CX + FixedMul (DOOMPERF_SPIRE_R_DARK << FRACBITS, finecosine[fa]);
 +    sy = DOOMPERF_SPIRE_CY + FixedMul (DOOMPERF_SPIRE_R_DARK << FRACBITS, finesine[fa]);
-+    sz = tz + (200 * FRACUNIT);
++    sz = tz + DOOMPERF_SPIRE_RISE;
 +    mo = P_SpawnMobj (sx, sy, sz, type);
 +    mo->momx = mo->momy = mo->momz = 0;
++    mo->angle = entry;
++    DoomPerf_SpireSetRadius (mo, DOOMPERF_SPIRE_R_DARK << FRACBITS);
 +    return mo;
 +}
 +
@@ -1621,7 +1730,9 @@
 +    static int		cur_green = 0;
 +    static int		cur_blue = 0;
 +    static int		cap_ready = 0;
++    static int		churn_timer = DOOMPERF_SPIRE_CHURN_SLOW;
 +    int			util, cache, green, blue, filled;
++    int			churn, interval;
 +    int			k, spawned, freed;
 +
 +    // Level (re)load frees every mobj and zeroes leveltime: drop the dangling
@@ -1633,6 +1744,7 @@
 +	cur_green = 0;
 +	cur_blue = 0;
 +	cap_ready = 0;
++	churn_timer = DOOMPERF_SPIRE_CHURN_SLOW;
 +    }
 +
 +    // Pin the amber "100% full" ring once (static markers just above the top ring).
@@ -1700,7 +1812,35 @@
 +	    freed++;
 +	    continue;
 +	}
-+	DoomPerf_SpireFly (books[k], k);
++	// Only books still on the wing need driving; a landed book is a static
++	// billboard on its board, and re-flying it every tic would just churn the
++	// blockmap for nothing.
++	if (DoomPerf_SpireInFlight (books[k]))
++	    DoomPerf_SpireFly (books[k], k);
++    }
++
++    // Baseline page churn: recycle one shelved book from the top of the fill on a
++    // fault-driven timer (lift it out -> the spawn pass below flies a replacement
++    // in), so the working set visibly churns even when its LEVEL is steady.
++    churn = DoomPerf_Clamp1000 (DoomPerf_EffectiveMemoryMinFlt ()
++			      + DoomPerf_EffectiveMemoryMajFlt ());
++    interval = DOOMPERF_SPIRE_CHURN_SLOW
++	- ((DOOMPERF_SPIRE_CHURN_SLOW - DOOMPERF_SPIRE_CHURN_FAST) * churn) / 1000;
++    if (--churn_timer <= 0)
++    {
++	if (filled > 0)
++	{
++	    int band = filled / DOOMPERF_SPIRE_CHURN_BAND;
++	    if (band < 1)
++		band = 1;
++	    k = filled - 1 - (P_Random () % band);
++	    if (k >= 0 && k < DOOMPERF_SPIRE_SLOTS && books[k])
++	    {
++		DoomPerf_SpireLift (books[k]);
++		books[k] = NULL;
++	    }
++	}
++	churn_timer = interval;
 +    }
 +
 +    // Launch couriers for the lowest empty slots that should be filled.
@@ -1751,7 +1891,7 @@
  //
  // THINKERS
  // All thinkers should be allocated by Z_Malloc
-@@ -130,11 +1845,11 @@
+@@ -130,11 +1985,11 @@
  void P_Ticker (void)
  {
      int		i;
@@ -1765,7 +1905,7 @@
      // pause if in menu and at least one tic has been run
      if ( !netgame
  	 && menuactive
-@@ -143,16 +1858,27 @@
+@@ -143,16 +1998,27 @@
      {
  	return;
      }

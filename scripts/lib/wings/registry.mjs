@@ -50,10 +50,19 @@ export const reserved = {
     // The RSS reliquary's barrels (thing 2035) render an OVERSIZED replacement of
     // the IWAD BAR1 sprite (both existing frames) so they read across the plaza.
     // The Memory Well spire's fill books reuse two otherwise-unused single-frame
-    // item sprites: SUITA0 (radsuit) -> green working-set book (MT_DP_MEMBOOK),
-    // PSTRA0 (berserk) -> blue reclaimable-cache book (MT_DP_MEMBOOKC). See
-    // [[pwad-sprite-override-constraint]].
-    spriteReplacements: ["BAR1A0", "BAR1B0", "SUITA0", "PSTRA0", "PVISA0"],
+    // item sprites for their SHELVED state: SUITA0 (radsuit) -> green working-set
+    // book (MT_DP_MEMBOOK), PSTRA0 (berserk) -> blue reclaimable-cache book
+    // (MT_DP_MEMBOOKC). Their FLIGHT animation needs five frames apiece, which no
+    // item sprite has: BAL1 (imp fireball) and BAL2 (cacodemon fireball) are the
+    // last unused multi-frame rot-0 names in the IWAD — nothing in the map fires
+    // them (the OOM Baron uses BAL7). See [[pwad-sprite-override-constraint]].
+    spriteReplacements: [
+      "BAR1A0", "BAR1B0",
+      "SUITA0", "PSTRA0",
+      "BAL1A0", "BAL1B0", "BAL1C0", "BAL1D0", "BAL1E0",
+      "BAL2A0", "BAL2B0", "BAL2C0", "BAL2D0", "BAL2E0",
+      "PVISA0",
+    ],
   },
   storage: {
     sectorTags: [600, 659],

@@ -1,0 +1,28 @@
+# Doom Perf engine patch: r_things.h
+#
+# Cumulative Doom Perf changes to r_things.h, consolidated from the original
+# per-feature patch series. Bundles (original patch -> feature):
+#   (+)   raise-vissprite-limit (the memory well's spire is 180 book sprites)
+#
+# Order-independent: this is the only Doom Perf patch that touches r_things.h.
+# Regenerate by diffing a clean tree against the staged build tree;
+# see scripts/build-doom-wasm.sh.
+
+--- a/r_things.h
++++ b/r_things.h
+@@ -28,7 +28,14 @@
+ #pragma interface
+ #endif
+ 
+-#define MAXVISSPRITES  	128
++// Doom Perf: vanilla's 128 is a 1993 memory budget, and it FAILS SILENTLY -- past
++// the limit R_NewVisSprite hands back a scratch sprite that is never drawn, so the
++// excess simply vanishes. The lab routinely puts far more than 128 sprites in one
++// view (the memory well's spire alone is 180 book sprites plus a 30-segment cap
++// ring, and the CPU/network wings stream orbs), and a shelf whose books blink out
++// as you turn toward it is worse than no shelf. The array is ~60 bytes an entry, so
++// this costs tens of kilobytes and nothing else.
++#define MAXVISSPRITES  	1024
+ 
+ extern vissprite_t	vissprites[MAXVISSPRITES];
+ extern vissprite_t*	vissprite_p;

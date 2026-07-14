@@ -40,7 +40,7 @@
      {SPR_SMBT,32768,4,{NULL},S_BTORCHSHRT2,0,0},	// S_BTORCHSHRT
      {SPR_SMBT,32769,4,{NULL},S_BTORCHSHRT3,0,0},	// S_BTORCHSHRT2
      {SPR_SMBT,32770,4,{NULL},S_BTORCHSHRT4,0,0},	// S_BTORCHSHRT3
-@@ -1099,7 +1110,62 @@
+@@ -1099,7 +1110,91 @@
      {SPR_TLP2,32768,4,{NULL},S_TECH2LAMP2,0,0},	// S_TECH2LAMP
      {SPR_TLP2,32769,4,{NULL},S_TECH2LAMP3,0,0},	// S_TECH2LAMP2
      {SPR_TLP2,32770,4,{NULL},S_TECH2LAMP4,0,0},	// S_TECH2LAMP3
@@ -92,19 +92,48 @@
 +    {SPR_PMAP,32769,2,{NULL},S_DP_NETTX,0,0},		// S_DP_NETTX_BLOOM3 (settle -> orb)
 +    {SPR_PMAP,32770,3,{NULL},S_DP_NETTX_FADE2,0,0},	// S_DP_NETTX_FADE1 (flash)
 +    {SPR_PMAP,32771,4,{NULL},S_NULL,0,0},		// S_DP_NETTX_FADE2 (ring out)
-+    // Doom Perf memory-well spire books. Frame A fullbright (32768). The shelved
-+    // states are static (tics -1); DoomPerf_UpdateMemorySpire glides each book to
-+    // its slot and, on a free, hands it to the LIFT state (rises a few tics, then
-+    // S_NULL removes it). SUIT = green working-set book, PSTR = blue cache book.
++    // Doom Perf memory-well spire books. All fullbright; the frame letter is the
++    // low bits (A=0 .. E=4, so 32768+n). BAL1/BAL2 carry the five FLIGHT frames
++    // (A upbeat, B level, C downbeat, D half-shut, E shut) and SUIT/PSTR the single
++    // SHELVED frame -- which is the same art as frame E, so the swap on landing is
++    // invisible. DoomPerf_UpdateMemorySpire owns the flight PATH; these tics only
++    // drive the wingbeat, the snap shut on arrival, and the flutter away on a free.
++    // Green = working set, blue = reclaimable cache.
++    {SPR_BAL1,32768,3,{NULL},S_DP_MEMBOOK_FLY2,0,0},	// S_DP_MEMBOOK_FLY1 (upbeat)
++    {SPR_BAL1,32769,3,{NULL},S_DP_MEMBOOK_FLY3,0,0},	// S_DP_MEMBOOK_FLY2 (level)
++    {SPR_BAL1,32770,3,{NULL},S_DP_MEMBOOK_FLY4,0,0},	// S_DP_MEMBOOK_FLY3 (downbeat)
++    {SPR_BAL1,32769,3,{NULL},S_DP_MEMBOOK_FLY1,0,0},	// S_DP_MEMBOOK_FLY4 (level)
++    {SPR_BAL1,32771,2,{NULL},S_DP_MEMBOOK_LAND2,0,0},	// S_DP_MEMBOOK_LAND1 (half-shut)
++    {SPR_BAL1,32772,2,{NULL},S_DP_MEMBOOK,0,0},		// S_DP_MEMBOOK_LAND2 (shut)
 +    {SPR_SUIT,32768,-1,{NULL},S_NULL,0,0},		// S_DP_MEMBOOK (green, shelved)
-+    {SPR_SUIT,32768,14,{NULL},S_NULL,0,0},		// S_DP_MEMBOOK_LIFT (freed -> rise/vanish)
++    {SPR_BAL1,32772,2,{NULL},S_DP_MEMBOOK_LIFT2,0,0},	// S_DP_MEMBOOK_LIFT1 (shut)
++    {SPR_BAL1,32771,2,{NULL},S_DP_MEMBOOK_LIFT3,0,0},	// S_DP_MEMBOOK_LIFT2 (re-opening)
++    {SPR_BAL1,32768,3,{NULL},S_DP_MEMBOOK_LIFT4,0,0},	// S_DP_MEMBOOK_LIFT3 (upbeat)
++    {SPR_BAL1,32769,3,{NULL},S_DP_MEMBOOK_LIFT5,0,0},	// S_DP_MEMBOOK_LIFT4 (level)
++    {SPR_BAL1,32770,3,{NULL},S_DP_MEMBOOK_LIFT6,0,0},	// S_DP_MEMBOOK_LIFT5 (downbeat)
++    {SPR_BAL1,32769,3,{NULL},S_DP_MEMBOOK_LIFT7,0,0},	// S_DP_MEMBOOK_LIFT6 (level)
++    {SPR_BAL1,32768,3,{NULL},S_DP_MEMBOOK_LIFT8,0,0},	// S_DP_MEMBOOK_LIFT7 (upbeat)
++    {SPR_BAL1,32769,3,{NULL},S_NULL,0,0},		// S_DP_MEMBOOK_LIFT8 (gone into the dark)
++    {SPR_BAL2,32768,3,{NULL},S_DP_MEMBOOKC_FLY2,0,0},	// S_DP_MEMBOOKC_FLY1 (upbeat)
++    {SPR_BAL2,32769,3,{NULL},S_DP_MEMBOOKC_FLY3,0,0},	// S_DP_MEMBOOKC_FLY2 (level)
++    {SPR_BAL2,32770,3,{NULL},S_DP_MEMBOOKC_FLY4,0,0},	// S_DP_MEMBOOKC_FLY3 (downbeat)
++    {SPR_BAL2,32769,3,{NULL},S_DP_MEMBOOKC_FLY1,0,0},	// S_DP_MEMBOOKC_FLY4 (level)
++    {SPR_BAL2,32771,2,{NULL},S_DP_MEMBOOKC_LAND2,0,0},	// S_DP_MEMBOOKC_LAND1 (half-shut)
++    {SPR_BAL2,32772,2,{NULL},S_DP_MEMBOOKC,0,0},	// S_DP_MEMBOOKC_LAND2 (shut)
 +    {SPR_PSTR,32768,-1,{NULL},S_NULL,0,0},		// S_DP_MEMBOOKC (blue, shelved)
-+    {SPR_PSTR,32768,14,{NULL},S_NULL,0,0},		// S_DP_MEMBOOKC_LIFT (freed -> rise/vanish)
++    {SPR_BAL2,32772,2,{NULL},S_DP_MEMBOOKC_LIFT2,0,0},	// S_DP_MEMBOOKC_LIFT1 (shut)
++    {SPR_BAL2,32771,2,{NULL},S_DP_MEMBOOKC_LIFT3,0,0},	// S_DP_MEMBOOKC_LIFT2 (re-opening)
++    {SPR_BAL2,32768,3,{NULL},S_DP_MEMBOOKC_LIFT4,0,0},	// S_DP_MEMBOOKC_LIFT3 (upbeat)
++    {SPR_BAL2,32769,3,{NULL},S_DP_MEMBOOKC_LIFT5,0,0},	// S_DP_MEMBOOKC_LIFT4 (level)
++    {SPR_BAL2,32770,3,{NULL},S_DP_MEMBOOKC_LIFT6,0,0},	// S_DP_MEMBOOKC_LIFT5 (downbeat)
++    {SPR_BAL2,32769,3,{NULL},S_DP_MEMBOOKC_LIFT7,0,0},	// S_DP_MEMBOOKC_LIFT6 (level)
++    {SPR_BAL2,32768,3,{NULL},S_DP_MEMBOOKC_LIFT8,0,0},	// S_DP_MEMBOOKC_LIFT7 (upbeat)
++    {SPR_BAL2,32769,3,{NULL},S_NULL,0,0},		// S_DP_MEMBOOKC_LIFT8 (gone into the dark)
 +    {SPR_PVIS,32768,-1,{NULL},S_NULL,0,0}		// S_DP_MEMCAP (amber gauge-top ring, static)
  };
  
  
-@@ -4665,6 +4731,218 @@
+@@ -4665,6 +4760,218 @@
  	sfx_None,		// activesound
  	MF_NOBLOCKMAP,		// flags
  	S_NULL		// raisestate
@@ -244,7 +273,7 @@
 +
 +    {		// MT_DP_MEMBOOK -- green working-set book (scripted glide, non-blocking)
 +	-1,		// doomednum (runtime-spawned only)
-+	S_DP_MEMBOOK,		// spawnstate (static shelved; the driver glides it in)
++	S_DP_MEMBOOK_FLY1,		// spawnstate (a courier: it spawns IN FLIGHT, wings beating)
 +	1000,		// spawnhealth
 +	S_NULL,		// seestate
 +	sfx_None,		// seesound
@@ -272,7 +301,7 @@
 +
 +    {		// MT_DP_MEMBOOKC -- blue reclaimable-cache book (scripted glide)
 +	-1,		// doomednum (runtime-spawned only)
-+	S_DP_MEMBOOKC,		// spawnstate (static shelved; the driver glides it in)
++	S_DP_MEMBOOKC_FLY1,		// spawnstate (a courier: it spawns IN FLIGHT, wings beating)
 +	1000,		// spawnhealth
 +	S_NULL,		// seestate
 +	sfx_None,		// seesound

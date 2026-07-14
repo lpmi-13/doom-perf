@@ -150,7 +150,17 @@ const barrelTag = (index) => tagBase + 51 + index; // 551..555
 // ===== Art (all under the reserved DPM prefix) =====
 const barrelPadFlatName = wingName("memory", "BPAD");
 const pageFlatNames = { used: wingName("memory", "USED"), cache: wingName("memory", "CACH"), free: wingName("memory", "FREE") };
-const bookshelfTexture = { texture: wingName("memory", "SHLF"), patch: wingName("memory", "PSHLF"), width: 64, height: 128 };
+const bookshelfTexture = { texture: wingName("memory", "SHLF"), patch: wingName("memory", "PSHLF"), width: 128, height: 128 };
+const abyssWallTexture = { texture: wingName("memory", "VOID"), patch: wingName("memory", "PVOID"), width: 64, height: 128 };
+const rackTexture = { texture: wingName("memory", "RACK"), patch: wingName("memory", "PRACK"), width: 128, height: 128 };
+// The spire's shelf pitch, in map units. The engine stacks the book sprites in
+// rings this far apart (DOOMPERF_SPIRE_RSTEP in p_tick.c) and the rack texture
+// draws a board every RING_PITCH rows; the two MUST agree or the books float.
+// The alignment works because a one-sided wall is pegged to its ceiling, the spire
+// ceiling is 768 = 6 x 128 (the texture's tiling height), and 128 / RING_PITCH is a
+// whole number — so texture row 0 lands exactly on z=768 and every board lands on
+// an exact multiple of RING_PITCH.
+const RING_PITCH = 32;
 
 const flatRect = (pixels, size, x1, y1, x2, y2, color) => {
   for (let y = Math.max(0, y1); y < Math.min(size, y2); y += 1) {
@@ -263,32 +273,6 @@ const buildBarrelSprite = () => {
 // (p_tick.c DoomPerf_UpdateMemorySpire) glides them into slots. Frame A only,
 // authored fullbright so the green/blue bands read in the dim shaft. See
 // [[pwad-sprite-override-constraint]].
-const buildBookSprite = ({ cover, light, dark, page }) => {
-  const W = 26;
-  const H = 34;
-  const T = 247; // transparent key (matches the barrel sprite)
-  const px = new Uint8Array(W * H).fill(T);
-  const rect = (x1, y1, x2, y2, c) => {
-    for (let y = Math.max(0, y1); y < Math.min(H, y2); y += 1) {
-      for (let x = Math.max(0, x1); x < Math.min(W, x2); x += 1) px[y * W + x] = c;
-    }
-  };
-  rect(3, 2, W - 2, H - 2, cover); // cover
-  rect(3, 2, W - 2, 3, dark); // top board
-  rect(3, H - 3, W - 2, H - 2, dark); // bottom board
-  rect(3, 2, 4, H - 2, dark); // spine outer
-  rect(W - 3, 2, W - 2, H - 2, dark); // fore edge
-  rect(4, 3, 8, H - 3, dark); // spine band
-  rect(6, 4, 7, H - 4, light); // spine rule
-  rect(W - 6, 3, W - 3, H - 3, page); // page edges (cream)
-  rect(W - 7, 3, W - 6, H - 3, dark); // shadow beside the pages
-  rect(8, 3, W - 7, 5, light); // top-cover highlight
-  rect(11, 12, W - 9, 14, light); // title band
-  rect(11, 17, W - 10, 18, light);
-  rect(11, 21, W - 11, 22, light);
-  return buildPatch(px, W, H, { leftOffset: Math.floor(W / 2), topOffset: H, transparent: T });
-};
-
 // Gauge-cap ring marker: one segment of a continuous amber band. The driver pins
 // a DENSE, overlapping ring of these just above the spire's top slot; each segment
 // is a clean full-width amber bar (NO end caps or rivets — those cues read as
@@ -313,39 +297,412 @@ const buildCapSprite = () => {
   return buildPatch(px, W, H, { leftOffset: Math.floor(W / 2), topOffset: H, transparent: T });
 };
 
-// Bookshelf wall texture, worn by the spire and the receding shaft walls. Muted
-// warm/grey spines (bright green/cyan stay reserved for the metric books); a dark
-// wood cabinet interior so distant undersampling lands on warm brown, not mud.
-const buildBookshelfPatch = () => {
-  const W = bookshelfTexture.width;
-  const H = bookshelfTexture.height;
-  const px = new Uint8Array(W * H).fill(78);
+// A spine's palette: base plus its ramp neighbours (the Doom palette runs each
+// 16-entry ramp bright -> dark, so base-2 lights an edge and base+2 shades one),
+// the colour its title is stamped in (gilt on dark bindings, ink on pale ones)
+// and the shade of its sunken title panel. Muted warm/grey bindings only — bright
+// green/cyan stay reserved for the metric books on the spire.
+const spineStyles = [
+  { base: 71, light: 69, dark: 73, ink: 162, panel: 73 }, //  brown leather, gilt
+  { base: 36, light: 34, dark: 38, ink: 162, panel: 38 }, //  dark red, gilt
+  { base: 163, light: 162, dark: 165, ink: 0, panel: 165 }, // ochre cloth, black stamp
+  { base: 88, light: 86, dark: 91, ink: 7, panel: 91 }, //    pale grey, ink
+  { base: 129, light: 128, dark: 131, ink: 73, panel: 131 }, // cream, brown ink
+  { base: 154, light: 152, dark: 156, ink: 162, panel: 156 }, // olive, gilt
+  { base: 30, light: 28, dark: 32, ink: 162, panel: 32 }, //  rust, gilt
+  { base: 102, light: 100, dark: 104, ink: 162, panel: 104 }, // slate, gilt
+  { base: 67, light: 65, dark: 70, ink: 162, panel: 70 }, //  tan, gilt
+  { base: 75, light: 73, dark: 77, ink: 164, panel: 77 }, //  dark brown, dim gilt
+];
+
+// Deterministic PRNG (mulberry32). The shelf art is generated, but the WAD must be
+// byte-reproducible build to build, so nothing here may reach for Math.random.
+const mulberry32 = (seed) => () => {
+  seed = (seed + 0x6d2b79f5) >>> 0;
+  let t = seed;
+  t = Math.imul(t ^ (t >>> 15), t | 1);
+  t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+};
+
+// A pixel canvas and the drawing vocabulary the shelf texture and the book SPRITES
+// share, so a book is recognisably the same object whether it is painted on a wall
+// or flying across the well.
+const canvas = (W, H, fill) => {
+  const px = new Uint8Array(W * H).fill(fill);
   const rect = (x, y, w, h, c) => {
     for (let yy = Math.max(0, y); yy < Math.min(H, y + h); yy += 1) {
       for (let xx = Math.max(0, x); xx < Math.min(W, x + w); xx += 1) px[yy * W + xx] = c;
     }
   };
-  rect(0, 0, 2, H, 96);
-  rect(W - 2, 0, 2, H, 96);
-  const spineColors = [88, 71, 163, 36, 128, 102, 215, 30, 64, 154];
-  [6, 46, 86].forEach((sy, shelf) => {
+  const dot = (x, y, c) => {
+    if (x >= 0 && x < W && y >= 0 && y < H) px[y * W + x] = c;
+  };
+  return { px, rect, dot };
+};
+
+const dice = (rnd) => ({
+  between: (lo, hi) => lo + Math.floor(rnd() * (hi - lo + 1)),
+  pick: (list) => list[Math.floor(rnd() * list.length)],
+});
+
+// "Writing" at 1 pixel per map unit: 1-3px words separated by a space, sometimes
+// stopping short of the margin so no two lines look like the same word. Illegible
+// by construction, unmistakably lettering at the range you read a book from.
+const lettering = (rnd, dot) => {
+  const { between } = dice(rnd);
+  return {
+    row: (x0, y, width, color) => {
+      let x = x0 + (rnd() < 0.4 ? 1 : 0);
+      const end = x0 + width;
+      while (x < end) {
+        const word = between(1, 3);
+        for (let k = 0; k < word && x < end; k += 1, x += 1) dot(x, y, color);
+        x += 1;
+        if (rnd() < 0.25) break; // a title that doesn't fill its panel
+      }
+    },
+    // The same, read top-to-bottom (how a thick book is lettered down its spine).
+    column: (x, y0, height, color) => {
+      let y = y0;
+      const end = y0 + height;
+      while (y < end) {
+        const word = between(2, 4);
+        for (let k = 0; k < word && y < end; k += 1, y += 1) dot(x, y, color);
+        y += 2;
+      }
+    },
+  };
+};
+
+// Bookshelf wall texture, worn by the SHAFT walls (the library's static stacks) and
+// the pods. NOT by the spire: the spire is the live gauge and its only books are
+// the sprites that fly in (see rackTexture).
+//
+// The texture is authored at 1 pixel per MAP UNIT, which fixes how much detail a
+// book can hold: a spine is ~10 units wide, so a title cannot be lettering — it is
+// drawn as pseudo-glyph dashes, gilt on dark bindings and ink on pale ones, with a
+// shorter author line under the lower band. Each spine also gets a rounded profile
+// (lit edge / shaded edge), raised leather bands, and some get a stamped panel or a
+// library call-number sticker; rows are broken up by borrowed-volume gaps and
+// stacks lying flat. The tile is 128 wide (a bay either side of a centre post, so
+// the bookcase still posts every 64 units as before) purely to halve the visible
+// tiling repeat. The cabinet interior stays dark warm wood so distant undersampling
+// lands on brown, not mud.
+const buildBookshelfPatch = () => {
+  const W = bookshelfTexture.width;
+  const H = bookshelfTexture.height;
+  const { px, rect, dot } = canvas(W, H, 78);
+  const rnd = mulberry32(0xb0045);
+  const { between, pick } = dice(rnd);
+  const { row: glyphRow, column: glyphColumn } = lettering(rnd, dot);
+
+  // Cabinet grain: a few darker/lighter columns so the dark behind the books isn't
+  // a flat field.
+  for (let x = 0; x < W; x += 1) {
+    if ((x * 7) % 11 === 0) rect(x, 0, 1, H, 79);
+    else if ((x * 5) % 13 === 0) rect(x, 0, 1, H, 77);
+  }
+
+  const shelfBays = [[2, 61], [66, 125]];
+  [6, 46, 86].forEach((sy) => {
     const boardY = sy + 32;
-    let x = 4;
-    let i = 0;
-    while (x < W - 5) {
-      const bw = 8 + ((i * 3 + shelf) % 5);
-      const bh = 22 + ((i * 5 + shelf * 3) % 9);
-      const c = spineColors[(i + shelf) % spineColors.length];
-      rect(x, boardY - bh, bw, bh, c);
-      rect(x, boardY - bh, 1, bh, 0);
-      rect(x + bw - 1, boardY - bh, 1, bh, 0);
-      rect(x + 1, boardY - bh + 2, bw - 2, 1, 8);
-      x += bw + 1;
-      i += 1;
+    for (const [bayStart, bayEnd] of shelfBays) {
+      let x = bayStart;
+      while (x < bayEnd) {
+        const room = bayEnd - x;
+        const roll = rnd();
+
+        if (room >= 5 && roll < 0.06) {
+          // A borrowed volume: an empty slot, shadow pooling on the board.
+          const gap = between(3, Math.min(6, room));
+          rect(x, boardY - 22, gap, 22, 79);
+          rect(x, boardY - 4, gap, 4, 8);
+          x += gap;
+          continue;
+        }
+
+        if (room >= 15 && roll < 0.13) {
+          // A stack lying flat: fore-edges out, so these read as cream page blocks
+          // between the coloured spines.
+          const w = between(11, Math.min(17, room - 1));
+          let y = boardY - 1;
+          for (let k = between(2, 3); k > 0; k -= 1) {
+            const thickness = between(3, 4);
+            y -= thickness;
+            const s = pick(spineStyles);
+            rect(x, y, w, thickness, 128);
+            rect(x, y, w, 1, s.base); // the cover, seen edge-on
+            rect(x, y + thickness - 1, w, 1, s.dark);
+            rect(x, y, 1, thickness, s.dark);
+            rect(x + w - 1, y, 1, thickness, s.dark);
+            if (thickness === 4) rect(x + 1, y + 2, w - 2, 1, 131); // page shadow
+          }
+          x += w + 1;
+          continue;
+        }
+
+        const w = Math.min(between(7, 13), room);
+        if (w < 5) break;
+        const bh = between(20, 30);
+        const s = pick(spineStyles);
+        const top = boardY - bh;
+
+        // Body + rounded profile: the lit edge and the shaded edge are what make a
+        // row of flat rectangles read as a row of separate objects.
+        rect(x, top, w, bh, s.base);
+        rect(x, top, 1, bh, s.light);
+        rect(x + w - 1, top, 1, bh, s.dark);
+        rect(x, top, w, 1, s.dark); // head
+        rect(x + 1, top + 1, w - 2, 1, s.light);
+        rect(x, boardY - 1, w, 1, s.dark); // tail, standing on the board
+
+        // Raised leather bands bracketing the title panel.
+        const bandA = top + between(5, 7);
+        const bandB = Math.min(boardY - 7, bandA + between(9, 14));
+        const inner = w - 2;
+        for (const by of [bandA, bandB]) {
+          rect(x + 1, by - 1, inner, 1, s.light);
+          rect(x + 1, by, inner, 1, s.dark);
+        }
+
+        // The title: stamped straight onto the binding, into a sunken panel, or
+        // lettered down the spine on the wider volumes.
+        const panelTop = bandA + 2;
+        const panelHeight = bandB - panelTop - 1;
+        if (panelHeight >= 3) {
+          const lettering = rnd();
+          if (inner >= 6 && lettering < 0.3) {
+            glyphColumn(x + Math.floor(w / 2), panelTop, panelHeight, s.ink);
+            if (inner >= 8 && rnd() < 0.5) glyphColumn(x + Math.floor(w / 2) + 2, panelTop + 1, panelHeight - 2, s.ink);
+          } else {
+            if (lettering > 0.55) rect(x + 1, panelTop - 1, inner, panelHeight + 1, s.panel);
+            glyphRow(x + 1, panelTop, inner, s.ink);
+            if (panelHeight >= 5) glyphRow(x + 1, panelTop + 2, inner, s.ink);
+          }
+        }
+        // The author, below the lower band: one shorter line, always inset.
+        if (inner >= 5 && boardY - bandB >= 5 && rnd() < 0.75) {
+          glyphRow(x + 2, bandB + 3, inner - 2, s.ink);
+        }
+        // An aged library call-number sticker near the tail. Cream, not white —
+        // pure white is the hottest entry in the palette and a row of them reads as
+        // a row of beacons rather than paper.
+        if (inner >= 5 && rnd() < 0.25) {
+          const sw = Math.min(4, inner - 1);
+          rect(x + 2, boardY - 5, sw, 3, 129);
+          rect(x + 2, boardY - 5, sw, 1, 128);
+          glyphRow(x + 2, boardY - 4, sw, 7);
+        }
+
+        x += w + 1;
+      }
     }
+
+    // The board itself: lit top edge, shaded lip, and the shadow it throws.
     rect(2, boardY, W - 4, 4, 96);
+    rect(2, boardY, W - 4, 1, 94);
+    rect(2, boardY + 3, W - 4, 1, 100);
     rect(2, boardY + 4, W - 4, 1, 0);
   });
+
+  // Steel posts last, so any book running long is clipped by the upright rather
+  // than colliding with it. The tile seam (W-2, W-1 | 0, 1) and the centre post are
+  // drawn as the same 4px bevel, so both read identically once the tile repeats.
+  const post = (columns) => {
+    const shades = [94, 96, 97, 100];
+    columns.forEach((cx, i) => rect(cx, 0, 1, H, shades[i]));
+  };
+  post([W - 2, W - 1, 0, 1]);
+  post([62, 63, 64, 65]);
+
+  return buildPatch(px, W, H);
+};
+
+// The SPIRE's rack: an EMPTY bookcase. This is the live memory gauge, so the only
+// books on it are the sprites the engine flies in — a painted-on book here would
+// read as "already allocated" and steal the fill's whole point. What's left is the
+// case itself: a board every RING_PITCH rows (each ring of book sprites lands
+// exactly on one — see RING_PITCH), a dark cabinet recess between the boards for
+// the books to stand against, and the wear of a shelf that is constantly emptied
+// and refilled. Deliberately dim: the books are fullbright, so every unit of
+// contrast here is a unit stolen from them.
+const buildRackPatch = () => {
+  const W = rackTexture.width;
+  const H = rackTexture.height;
+  const { px, rect, dot } = canvas(W, H, 79);
+  const rnd = mulberry32(0x4ac4);
+  const { between } = dice(rnd);
+
+  // Cabinet back: a shallow vertical grain, darkest at the back of each bay.
+  for (let x = 0; x < W; x += 1) {
+    if ((x * 7) % 13 === 0) rect(x, 0, 1, H, 78);
+    else if ((x * 5) % 17 === 0) rect(x, 0, 1, H, 8);
+  }
+
+  for (let boardTop = 0; boardTop < H; boardTop += RING_PITCH) {
+    // A board's TOP EDGE is the line a ring of books stands on; its face hangs
+    // below (rows increase downward = z decreases), and it throws a shadow into
+    // the bay beneath.
+    rect(0, boardTop, W, 1, 96); // the lit lip the books rest on
+    rect(0, boardTop + 1, W, 3, 77); // the board's front face (wood)
+    rect(0, boardTop + 1, W, 1, 75);
+    rect(0, boardTop + 4, W, 2, 8); // the shadow it casts into the bay below
+    // Empty-slot wear along the lip: the ghosts of books that have stood here.
+    for (let x = 2; x < W - 2; x += between(5, 11)) {
+      rect(x, boardTop + 1, between(2, 5), 1, 76);
+      if (rnd() < 0.35) dot(x + 1, boardTop, 97);
+    }
+    // Dust and grit settled at the back of the empty bay.
+    for (let k = between(3, 6); k > 0; k -= 1) {
+      dot(between(1, W - 2), boardTop + between(7, RING_PITCH - 3), rnd() < 0.5 ? 77 : 8);
+    }
+  }
+
+  return buildPatch(px, W, H);
+};
+
+// ===== The spire's books (sprites) =====
+// The two metric bindings: green = working set, blue = reclaimable cache. Both are
+// authored FULLBRIGHT, so they must carry the whole read against a deliberately dim
+// rack. Colours are ramp-correct (the Doom palette runs each ramp bright -> dark),
+// and the cache blue is pulled well up its ramp from the old near-navy so it still
+// reads as blue in the well's gloom.
+const bookSkins = {
+  working: { cover: 114, light: 112, dark: 119, deep: 123, page: 128, leaf: 131, gilt: 161, seed: 0x9704 },
+  cache: { cover: 197, light: 194, dark: 201, deep: 204, page: 128, leaf: 131, gilt: 161, seed: 0xcac4 },
+};
+const BOOK_T = 247; // transparent key (matches the barrel sprite)
+const BOOK_W = 26;
+const BOOK_H = 30; // < RING_PITCH, so the board under each ring stays visible
+
+// A SHELVED book: standing on its board, front cover to the player, spine to the
+// left. Same binding vocabulary as the wall books — rounded spine, raised bands,
+// gilt pseudo-glyph title + author, page edges, call-number sticker — but at 2.5x
+// the pixel budget, because this is the one book the player gets close to.
+const buildShelvedBookSprite = (skin) => {
+  const W = BOOK_W;
+  const H = BOOK_H;
+  const { px, rect, dot } = canvas(W, H, BOOK_T);
+  const rnd = mulberry32(skin.seed);
+  const { row, column } = lettering(rnd, dot);
+
+  rect(2, 0, W - 4, H, skin.cover); // the cover
+  rect(2, 0, W - 4, 2, skin.deep); // head
+  rect(2, H - 2, W - 4, 2, skin.deep); // tail
+  rect(3, 2, W - 6, 1, skin.light); // the lit top face of the cover
+
+  // Spine: the rounded, banded edge of the binding.
+  rect(2, 0, 5, H, skin.dark);
+  rect(3, 1, 1, H - 2, skin.light); // the light rolling off the curve
+  rect(7, 0, 1, H, skin.deep); // hinge shadow
+  for (const by of [7, H - 9]) {
+    rect(2, by, 5, 1, skin.light); // raised band
+    rect(2, by + 1, 5, 1, skin.deep);
+  }
+  column(5, 11, H - 22, skin.gilt); // the title, lettered down the spine
+
+  // Fore edge: the page block, with visible leaves.
+  rect(W - 5, 2, 3, H - 4, skin.page);
+  for (let y = 3; y < H - 3; y += 2) rect(W - 5, y, 3, 1, skin.leaf);
+  rect(W - 6, 2, 1, H - 4, skin.deep); // shadow beside the pages
+
+  // The cover: a gilt rule, the title, the author.
+  rect(9, 4, W - 15, 1, skin.gilt);
+  row(9, 8, W - 15, skin.gilt);
+  row(9, 10, W - 16, skin.gilt);
+  row(10, H - 9, W - 18, skin.gilt); // the author, always inset and shorter
+  // Call-number sticker, aged cream.
+  rect(9, H - 6, 4, 3, skin.page);
+  row(9, H - 5, 4, 7);
+
+  return buildPatch(px, W, H, { leftOffset: Math.floor(W / 2), topOffset: H, transparent: BOOK_T });
+};
+
+// A book IN FLIGHT: open, flying on its own pages. The spine is the body, held at
+// the bottom (so the sprite stays base-aligned with the shelved frame and lands
+// without a pop), and the two halves of the book are wings that beat through the
+// cycle. `lift` is the height of the wing tip above the spine — positive on the
+// upbeat, negative on the downbeat — and `span` how far the wings are spread, so
+// folding them in (small span, high lift) is the book snapping shut.
+//
+// Frame budget is exactly five (BAL1/BAL2 A-E, the only unused multi-frame rot-0
+// sprite names left in the IWAD; see [[pwad-sprite-override-constraint]]), spent as
+// A=upbeat, B=level, C=downbeat, D=half-shut, E=shut. The engine flaps A-B-C-B and
+// lands through D-E into the static shelved sprite.
+const buildFlyingBookSprite = (skin, { lift, span, thick }) => {
+  const W = 44;
+  const H = BOOK_H;
+  const { px, rect, dot } = canvas(W, H, BOOK_T);
+  const cx = Math.floor(W / 2);
+  const pivot = H - 11; // where the wings hinge: the top of the spine block
+
+  for (const side of [-1, 1]) {
+    for (let d = 3; d <= span; d += 1) {
+      const f = (d - 3) / Math.max(1, span - 3); // 0 at the hinge .. 1 at the tip
+      const y = pivot - Math.round(lift * f);
+      const x = cx + side * d;
+      // The cover is a flat BOARD: constant thickness, square-edged. A wing that
+      // tapers to a point reads as a bird, which is exactly the wrong animal.
+      rect(x, y - thick, 1, thick, skin.cover);
+      dot(x, y - thick, skin.light); // the lit top face of the board
+      dot(x, y - 1, skin.deep); // the cover's edge, in its own shadow
+      rect(x, y, 1, 2, skin.page); // the page block hanging under the cover
+      dot(x, y + 1, skin.leaf);
+      if (d % 6 === 3) dot(x, y + 2, skin.page); // a leaf loose in the slipstream
+      if (d % 5 === 0) dot(x, y - thick + 2, skin.gilt); // gilt catching the light
+    }
+    // The board's outer edge, squared off.
+    const tipX = cx + side * span;
+    const tipY = pivot - lift;
+    rect(tipX, tipY - thick, 1, thick + 2, skin.dark);
+  }
+
+  // The spine block: the bound edge of the book, which is what actually flies.
+  rect(cx - 4, pivot - 2, 8, 13, skin.dark);
+  rect(cx - 4, pivot - 2, 1, 13, skin.light);
+  rect(cx + 3, pivot - 2, 1, 13, skin.deep);
+  rect(cx - 3, pivot + 1, 6, 1, skin.gilt); // a band, so the gilt reads in flight
+  rect(cx - 3, pivot + 6, 6, 1, skin.gilt);
+
+  return buildPatch(px, W, H, { leftOffset: cx, topOffset: H, transparent: BOOK_T });
+};
+
+// The flight cycle. E (shut) is drawn by the shelved builder itself, so the moment
+// the book lands and swaps to its static sprite there is no visible change of image.
+const flightFrames = {
+  A: { lift: 9, span: 18, thick: 7 }, // upbeat
+  B: { lift: 0, span: 19, thick: 6 }, // level: the widest silhouette
+  C: { lift: -8, span: 18, thick: 7 }, // downbeat
+  D: { lift: 13, span: 9, thick: 9 }, // half-shut, wings folding in
+};
+
+// Abyss wall: the riser every catwalk / platform / pod turns to the void — i.e.
+// everything the eye finds BELOW the shelves. Every colour is drawn from the
+// palette's darkest greys (mortar in pure black, slab faces at 8/7, a 6 catch-
+// light on each course lip), so the drop reads as shadow rather than furniture,
+// while the pilasters + running-bond courses keep it unmistakably a built wall
+// and not a hole in the world. The shaft's bookshelves are one-sided mid
+// textures and are untouched by this.
+const buildAbyssWallPatch = () => {
+  const W = abyssWallTexture.width;
+  const H = abyssWallTexture.height;
+  const px = new Uint8Array(W * H).fill(8);
+  const rect = (x, y, w, h, c) => {
+    for (let yy = Math.max(0, y); yy < Math.min(H, y + h); yy += 1) {
+      for (let xx = Math.max(0, x); xx < Math.min(W, x + w); xx += 1) px[yy * W + xx] = c;
+    }
+  };
+  for (let course = 0, y = 0; y < H; y += 32, course += 1) {
+    rect(0, y, W, 1, 6); // the only light in the well catches the course lip
+    rect(0, y + 1, W, 2, 0); // mortar
+    rect(course % 2 === 0 ? 20 : 44, y + 3, 2, 29, 0); // running-bond joint
+    rect(4, y + 3, W - 8, 1, 7); // slab face, a shade off the base
+  }
+  rect(0, 0, 4, H, 7); // pilasters at the tile seams
+  rect(W - 4, 0, 4, H, 7);
+  rect(1, 0, 1, H, 5);
+  rect(W - 2, 0, 1, H, 5);
   return buildPatch(px, W, H);
 };
 
@@ -359,9 +716,16 @@ const build = (ctx) => {
   // and swap to a dim ceiling flat, while pods/vestibule stay room-height.
   const mbase = { ...base, wall: shelfWall, floorFlat: "FLOOR5_1", ceilingFlat: "CEIL5_1", ceiling: ROOM_CEIL };
   const shaft = { ...mbase, ceiling: SHAFT_CEIL, ceilingFlat: "CEIL5_2" };
-  const platStyle = { ...shaft, kind: "memory-walk", floor: WALK, light: 168 };
+  // The platform ring's `wall` is worn by exactly one thing: the spire's one-sided
+  // inner octagon (every other plat edge is a flush two-sided seam). So this is the
+  // spire's skin — and it is the EMPTY rack, not the bookshelf. The spire's books
+  // are the sprites that fly to it.
+  const platStyle = { ...shaft, kind: "memory-walk", floor: WALK, light: 168, wall: rackTexture.texture };
   const catwalkStyle = { ...shaft, kind: "memory-walk", floor: WALK, light: 150 };
-  const voidStyle = { ...shaft, kind: "void", floor: ABYSS, floorFlat: "FLOOR7_2", light: 112 };
+  // `wall` stays the shelf: the well's one-sided outer wall is books top to
+  // bottom. `riserWall` is what the void shows on the *other* sectors' undersides
+  // — every catwalk/platform/pod edge that falls away into it.
+  const voidStyle = { ...shaft, kind: "void", floor: ABYSS, floorFlat: "FLOOR7_2", light: 112, riserWall: abyssWallTexture.texture };
   const podStyle = { ...mbase, kind: "memory-walk", floor: WALK, light: 180 };
 
   // A shallow control-panel terminal recess whose one-sided far wall is the
@@ -389,9 +753,9 @@ const build = (ctx) => {
   addAreaThing(direction, 2028, VEST.u2 - 40, VEST.v1 + 64);
 
   // ===== SPIRE + PLATFORM RING: the platform is eight convex trapezoids between
-  // the spire octagon (a solid HOLE — its edges become one-sided shelf walls) and
-  // the platform octagon. All floor 0, so the ring is one continuous walk around
-  // the cylinder where the four catwalks meet. =====
+  // the spire octagon (a solid HOLE — its edges become the one-sided rack walls the
+  // books fly to) and the platform octagon. All floor 0, so the ring is one
+  // continuous walk around the cylinder where the four catwalks meet. =====
   for (let i = 0; i < 8; i += 1) {
     areaPoly(direction, `plat-${i}`, ensureCW(ringTrap(spireOct, platOct, i)), platStyle);
   }
@@ -516,6 +880,20 @@ const textures = [
     height: bookshelfTexture.height,
     build: buildBookshelfPatch,
   },
+  {
+    texture: abyssWallTexture.texture,
+    patch: abyssWallTexture.patch,
+    width: abyssWallTexture.width,
+    height: abyssWallTexture.height,
+    build: buildAbyssWallPatch,
+  },
+  {
+    texture: rackTexture.texture,
+    patch: rackTexture.patch,
+    width: rackTexture.width,
+    height: rackTexture.height,
+    build: buildRackPatch,
+  },
 ];
 
 const flats = [...pageFlats, buildBarrelPadFlat()];
@@ -536,15 +914,34 @@ const terminals = () => {
   }));
 };
 
-// Oversized barrel overrides the IWAD BAR1 (both existing frames; the barrels
-// stand static, so A0/B0 share one image).
+// Every sprite here PWAD-overrides an IWAD lump by name and frame letter — new
+// names and new frame letters are silently ignored, so the flight animation had to
+// be fitted into sprite names the IWAD already animates. See
+// [[pwad-sprite-override-constraint]].
+//
+//   BAR1 A-B   the RSS reliquary's oversized barrels (both frames, one image)
+//   SUIT / PSTR (frame A only)  the SHELVED books: green working set / blue cache
+//   BAL1 / BAL2 (A-E)  the same two books IN FLIGHT. These are the imp and
+//     cacodemon fireballs: five rot-0 frames each, and nothing in the map fires
+//     them (our Baron uses BAL7), which makes them the last unused multi-frame
+//     sprite names in the IWAD. A-C are the wingbeat, D-E the book snapping shut;
+//     E is drawn by the shelved builder, so the swap to the static sprite on
+//     landing is invisible.
+//   PVIS A     the amber "100% full" gauge-cap ring
+const flightSprites = (name, skin) => [
+  ...Object.entries(flightFrames).map(([frame, shape]) => ({
+    name: `${name}${frame}0`,
+    build: () => buildFlyingBookSprite(skin, shape),
+  })),
+  { name: `${name}E0`, build: () => buildShelvedBookSprite(skin) },
+];
 const sprites = [
   { name: "BAR1A0", build: buildBarrelSprite },
   { name: "BAR1B0", build: buildBarrelSprite },
-  // Spire fill books (frame A): green working-set (SUIT) / blue cache (PSTR).
-  { name: "SUITA0", build: () => buildBookSprite({ cover: 114, light: 112, dark: 123, page: 4 }) },
-  { name: "PSTRA0", build: () => buildBookSprite({ cover: 202, light: 200, dark: 205, page: 4 }) },
-  // Gauge-cap ring marker (frame A): amber rail (PVIS).
+  { name: "SUITA0", build: () => buildShelvedBookSprite(bookSkins.working) },
+  { name: "PSTRA0", build: () => buildShelvedBookSprite(bookSkins.cache) },
+  ...flightSprites("BAL1", bookSkins.working),
+  ...flightSprites("BAL2", bookSkins.cache),
   { name: "PVISA0", build: buildCapSprite },
 ];
 

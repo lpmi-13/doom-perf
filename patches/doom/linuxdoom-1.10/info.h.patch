@@ -13,7 +13,7 @@
 
 --- a/info.h
 +++ b/info.h
-@@ -1140,6 +1140,56 @@
+@@ -1140,6 +1140,97 @@
      S_TECH2LAMP2,
      S_TECH2LAMP3,
      S_TECH2LAMP4,
@@ -53,16 +53,57 @@
 +    S_DP_NETTX_BLOOM3,
 +    S_DP_NETTX_FADE1,
 +    S_DP_NETTX_FADE2,
-+    // Doom Perf memory-well spire books (memory-wing-well-redesign). Each colour
-+    // has a STATIC shelved state (a fullbright billboard the driver glides into a
-+    // slot on the spire; tics -1 so p_tick.c owns its motion) and a LIFT state (a
-+    // freed book rises + vanishes to S_NULL on its own thinker). Green rides the
-+    // radsuit lump (SPR_SUIT), blue the berserk lump (SPR_PSTR); both are PWAD-
-+    // replaced with book art (frame A only) and unused elsewhere in the lab.
++    // Doom Perf memory-well spire books (memory-wing-well-redesign). A book is
++    // ALWAYS in one of three phases, and the phase is the whole story of a page:
++    //
++    //   FLY1-4   allocated: the book flies to the spire on its own open pages,
++    //            wings beating (up / level / down / level). p_tick.c owns its
++    //            path; tics only drive the wingbeat.
++    //   LAND1-2  arriving: the book snaps shut (half / closed) and falls through
++    //            to the shelved state, which is the SAME image as the closing
++    //            frame, so the swap to the static sprite is invisible.
++    //   (shelved) resident: a static fullbright billboard, tics -1 (p_tick.c owns
++    //            any further motion).
++    //   LIFT1-8  reclaimed: the book re-opens (closed -> half -> beating) and
++    //            flutters up into the dark, removing itself at S_NULL. The exact
++    //            mirror of its arrival, so reclaim reads as loudly as allocation.
++    //
++    // The shelved frames ride the radsuit (SPR_SUIT, green) and berserk (SPR_PSTR,
++    // blue) lumps -- single-frame items. The five FLIGHT frames per colour need a
++    // sprite name the IWAD already animates, so they ride the imp and cacodemon
++    // fireballs (SPR_BAL1 green / SPR_BAL2 blue, frames A-E): the last unused
++    // multi-frame rot-0 names in the IWAD, and nothing in the lab fires them (the
++    // OOM Baron uses SPR_BAL7). All PWAD-replaced with book art.
++    S_DP_MEMBOOK_FLY1,
++    S_DP_MEMBOOK_FLY2,
++    S_DP_MEMBOOK_FLY3,
++    S_DP_MEMBOOK_FLY4,
++    S_DP_MEMBOOK_LAND1,
++    S_DP_MEMBOOK_LAND2,
 +    S_DP_MEMBOOK,
-+    S_DP_MEMBOOK_LIFT,
++    S_DP_MEMBOOK_LIFT1,
++    S_DP_MEMBOOK_LIFT2,
++    S_DP_MEMBOOK_LIFT3,
++    S_DP_MEMBOOK_LIFT4,
++    S_DP_MEMBOOK_LIFT5,
++    S_DP_MEMBOOK_LIFT6,
++    S_DP_MEMBOOK_LIFT7,
++    S_DP_MEMBOOK_LIFT8,
++    S_DP_MEMBOOKC_FLY1,
++    S_DP_MEMBOOKC_FLY2,
++    S_DP_MEMBOOKC_FLY3,
++    S_DP_MEMBOOKC_FLY4,
++    S_DP_MEMBOOKC_LAND1,
++    S_DP_MEMBOOKC_LAND2,
 +    S_DP_MEMBOOKC,
-+    S_DP_MEMBOOKC_LIFT,
++    S_DP_MEMBOOKC_LIFT1,
++    S_DP_MEMBOOKC_LIFT2,
++    S_DP_MEMBOOKC_LIFT3,
++    S_DP_MEMBOOKC_LIFT4,
++    S_DP_MEMBOOKC_LIFT5,
++    S_DP_MEMBOOKC_LIFT6,
++    S_DP_MEMBOOKC_LIFT7,
++    S_DP_MEMBOOKC_LIFT8,
 +    // A static amber marker ringing the spire at the gauge's top (the "100% full"
 +    // line), so the fill level reads against a fixed cap. Rides the unused
 +    // light-amp visor lump (SPR_PVIS), PWAD-replaced with a brass rail segment.
@@ -70,7 +111,7 @@
      NUMSTATES
  } statenum_t;
  
-@@ -1298,6 +1348,14 @@
+@@ -1298,6 +1389,14 @@
      MT_MISC84,
      MT_MISC85,
      MT_MISC86,

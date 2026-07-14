@@ -304,6 +304,11 @@ const sideTextures = (sector, other, overrideTexture, edge) => {
     // The step up into a wall-terminal recess (the wall just below the screen)
     // gets a keyboard/control panel rather than a plain step riser.
     else if (isControlPanelRecess(other)) bottom = controlPanelTexture;
+    // A sector can name the riser its neighbours show it (rather than the wall it
+    // wears itself): the memory well's abyss keeps bookshelves on its own outer
+    // wall but turns every catwalk underside that drops into it near-black.
+    else if (other.riserWall) bottom = other.riserWall;
+    else if (sector.riserWall) bottom = sector.riserWall;
     else if (sector.kind === "outside" || other.kind === "outside") bottom = "STONE2";
     else bottom = "STEP1";
   }
