@@ -43,7 +43,7 @@ export const reserved = {
     spriteReplacements: ["PINSA0", "SOULA0", "BON1A0", "BON1B0", "BON1C0", "BON1D0", "BON2A0", "BON2B0", "BON2C0", "BON2D0"],
   },
   memory: {
-    sectorTags: [500, 559], // page cells 500-544, swap-in/out 546/547, baron pen 548, minor/major fault meters 549/550, RSS-reliquary barrel pads 551-555 (545 retired)
+    sectorTags: [500, 559], // page cells 500-544 (retired), reclaim-sluice pool 546 + dam gate 547, baron pen 548, minor/major fault meters 549/550, RSS-reliquary barrel pads 551-555, swap tributary 557 + inflow 558 (545 retired)
     lineTags: [560, 599],
     lights: [136, 140], // reserved sentinels (unused until live page-bank display)
     namePrefix: "DPM", // DPMEM (label) + DPM... for banks/swap/oom/fault/barrel-pad art
@@ -62,6 +62,10 @@ export const reserved = {
       "BAL1A0", "BAL1B0", "BAL1C0", "BAL1D0", "BAL1E0",
       "BAL2A0", "BAL2B0", "BAL2C0", "BAL2D0", "BAL2E0",
       "PVISA0",
+      // Swap-vent steam. PUFF A-D is vanilla MT_PUFF's own animation, reused so the
+      // vent needs no new mobj/state; nothing else in the map spawns puffs (the
+      // player firing a hitscan weapon at a wall is the only other source).
+      "PUFFA0", "PUFFB0", "PUFFC0", "PUFFD0",
     ],
   },
   storage: {

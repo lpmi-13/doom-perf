@@ -75,9 +75,9 @@ export const mapManifest = {
       "segments": [
         {
           "ax": 1472,
-          "ay": 853,
+          "ay": 1045,
           "bx": 1728,
-          "by": 853
+          "by": 1045
         }
       ]
     },
@@ -85,10 +85,10 @@ export const mapManifest = {
       "sign": "memory-faults",
       "segments": [
         {
-          "ax": 1472,
-          "ay": -853,
-          "bx": 1728,
-          "by": -853
+          "ax": 1928,
+          "ay": -517,
+          "bx": 1928,
+          "by": -773
         }
       ]
     },

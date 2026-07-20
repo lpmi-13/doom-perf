@@ -561,9 +561,14 @@ func (s *sampler) sample(now time.Time) (telemetry, error) {
 		return telemetry{}, err
 	}
 	// Modelled stand-in for PSI some/avg10 where the kernel has no PSI. A major
-	// fault or a swap-in parks the faulting task for about one disk I/O, and the
-	// storage sampler already measures that service time (await), so
-	// (majflt/s + swpin/s) * await is seconds stalled per second of wall clock.
+	// fault, a swap-in, or a direct-reclaim stall parks the faulting/allocating
+	// task for about one disk I/O, and the storage sampler already measures that
+	// service time (await), so (majflt/s + swpin/s + allocstall/s) * await is
+	// seconds stalled per second of wall clock. The direct-reclaim (allocstall)
+	// term is what keeps this alive on swapless hosts: there the kernel reclaims
+	// clean file cache under pressure with no swap-in to show for it, so a
+	// majflt+swpin-only estimate would under-read exactly where PSI is also often
+	// absent (some Firecracker microVMs).
 	// It is an UPPER BOUND on PSI "some": it sums stalls across tasks, where PSI
 	// counts wall-clock windows in which any task was stalled, and it cannot model
 	// "full" at all. When no block device reported a service time this sample
@@ -573,7 +578,7 @@ func (s *sampler) sample(now time.Time) (telemetry, error) {
 	if awaitSeconds <= 0 {
 		awaitSeconds = 0.001
 	}
-	stallEstimate := clamp((majFaultRate + swapInRate) * awaitSeconds)
+	stallEstimate := clamp((majFaultRate + swapInRate + allocStallRate) * awaitSeconds)
 	// Major faults contribute to saturation (thrashing refaults from disk/swap);
 	// ~200 majflt/s reads as fully saturated, alongside swap churn and PSI. PSI-less
 	// hosts substitute the modelled stall share for the two PSI terms, so the wing's

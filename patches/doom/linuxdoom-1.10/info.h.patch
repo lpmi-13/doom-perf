@@ -13,7 +13,7 @@
 
 --- a/info.h
 +++ b/info.h
-@@ -1140,6 +1140,97 @@
+@@ -1140,6 +1140,123 @@
      S_TECH2LAMP2,
      S_TECH2LAMP3,
      S_TECH2LAMP4,
@@ -108,10 +108,36 @@
 +    // line), so the fill level reads against a fixed cap. Rides the unused
 +    // light-amp visor lump (SPR_PVIS), PWAD-replaced with a brass rail segment.
 +    S_DP_MEMCAP,
++    // Doom Perf page-fault bolt (memory fault range). The driver hand-moves the bolt
++    // (out then back) and picks ONE of three looks per spawn so they can be compared:
++    // PGFAULT = gold energy ORB (SPR_MISL A), PGFAULT_ARC1/2 = a flickering electric
++    // ARC (SPR_PLSS A/B, looped), PGFAULT_STREAK = a violet plasma STREAK (SPR_BFS1
++    // A). BURST1-3 is the shared impact flare (SPR_MISL B/C/D). All PWAD-replaced;
++    // nothing in the lab fires rockets/plasma/BFG, so those lumps are free.
++    S_DP_PGFAULT,
++    S_DP_PGFAULT_ARC1,
++    S_DP_PGFAULT_ARC2,
++    S_DP_PGFAULT_STREAK,
++    // Impact effect, one of four styles the driver randomizes per burst so they can
++    // be compared: BURST1-3 = expanding ripple (MISL B/C/D), BLOOM1-3 = soft absorb
++    // (SPR_PLSE), IMPL1-3 = converging ring (SPR_APBX), SPRK1-3 = spark spray
++    // (SPR_BFE1). All PWAD-replaced; nothing in the lab fires plasma/BFG/arachno.
++    S_DP_PGFAULT_BURST1,
++    S_DP_PGFAULT_BURST2,
++    S_DP_PGFAULT_BURST3,
++    S_DP_PGFAULT_BLOOM1,
++    S_DP_PGFAULT_BLOOM2,
++    S_DP_PGFAULT_BLOOM3,
++    S_DP_PGFAULT_IMPL1,
++    S_DP_PGFAULT_IMPL2,
++    S_DP_PGFAULT_IMPL3,
++    S_DP_PGFAULT_SPRK1,
++    S_DP_PGFAULT_SPRK2,
++    S_DP_PGFAULT_SPRK3,
      NUMSTATES
  } statenum_t;
  
-@@ -1298,6 +1389,14 @@
+@@ -1298,6 +1415,15 @@
      MT_MISC84,
      MT_MISC85,
      MT_MISC86,
@@ -123,6 +149,7 @@
 +    MT_DP_MEMBOOK,
 +    MT_DP_MEMBOOKC,
 +    MT_DP_MEMCAP,
++    MT_DP_PGFAULT,
      NUMMOBJTYPES
  
  } mobjtype_t;

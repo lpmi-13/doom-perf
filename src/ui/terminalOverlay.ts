@@ -238,30 +238,43 @@ const formatMemoryRss = (telemetry: TelemetrySnapshot): string => {
   return lines.join("\n");
 };
 
+// MEMORY RECLAIM-SLUICE wing terminal — USE saturation as a backlog level. The
+// sluice's pool level IS memory saturation; this terminal shows that scalar plus
+// the signals that drive it: PSI stall time where the kernel exposes it, else a
+// labelled estimate rebuilt from the vmstat reclaim counters (which stay alive on
+// swapless + PSI-less hosts via direct reclaim). The swap TRIBUTARY only carries
+// signal when swap is configured, so this terminal states that status outright
+// rather than leaving a flat si/so reading ambiguous.
 const formatMemorySwap = (telemetry: TelemetrySnapshot): string => {
   const m = telemetry.memory;
-  const columns: [string, number][] = [
-    ["swpd", 8], ["free", 8], ["buff", 8], ["cache", 8], ["si", 6], ["so", 6],
-  ];
-  const cells = [
-    String(mib(m.swapUsedBytes)),
-    String(mib(m.freeBytes ?? m.availableBytes)),
-    String(mib(m.buffersBytes)),
-    String(mib(m.cachedBytes)),
-    String(Math.round(rate(m.swapInPagesPerSecond))),
-    String(Math.round(rate(m.swapOutPagesPerSecond))),
-  ];
+  const swapConfigured = (m.swapTotalBytes ?? 0) > 0;
+  const si = rate(m.swapInPagesPerSecond);
+  const so = rate(m.swapOutPagesPerSecond);
   const lines: string[] = [];
-  lines.push("$ vmstat 1 2     # memory + swap columns");
-  lines.push(columns.map(([label, width]) => padStart(label, width)).join(""));
-  lines.push(columns.map(([, width], i) => padStart(cells[i], width)).join(""));
+  lines.push("# reclaim sluice — memory saturation (USE)");
+  lines.push(`pool / backlog ${bar(m.saturation)} ${pctText(m.saturation)}%`);
   lines.push("");
-  lines.push("$ sar -W 1 2      # equivalent swap-page rates");
-  lines.push(padStart("pswpin/s", 12) + padStart("pswpout/s", 12));
-  lines.push(padStart(rate(m.swapInPagesPerSecond).toFixed(2), 12) + padStart(rate(m.swapOutPagesPerSecond).toFixed(2), 12));
+  if (m.pressureAvailable) {
+    lines.push("$ cat /proc/pressure/memory");
+    lines.push(`some avg10=${rate(m.pressureSomeAvg10).toFixed(2)}  full avg10=${rate(m.pressureFullAvg10).toFixed(2)}`);
+    lines.push(`stall (PSI)    ${bar(clamp(rate(m.pressureSomeAvg10) / 20))} ${rate(m.pressureSomeAvg10).toFixed(2)}% some/10s`);
+  } else {
+    // No PSI: the backlog is driven by the collector's labelled estimate, rebuilt
+    // from the vmstat reclaim events — direct reclaim keeps it alive without swap.
+    lines.push("$ grep -E 'allocstall|workingset_refault|pgscan_direct' /proc/vmstat");
+    lines.push(`direct reclaim ${padStart(String(Math.round(rate(m.directReclaimsPerSecond))), 7)} /s`);
+    lines.push(`refault        ${padStart(String(Math.round(rate(m.refaultPagesPerSecond))), 7)} /s`);
+    lines.push(`stall (est.)   ${bar(clamp(rate(m.stallEstimate)))} ${pctText(clamp(rate(m.stallEstimate)))}% (no PSI)`);
+  }
   lines.push("");
-  lines.push(`swap churn    ${bar(clamp(rate(m.swapPagesPerSecond) / 2500))} ${Math.round(rate(m.swapPagesPerSecond))} pages/s`);
-  lines.push(`saturation    ${bar(m.saturation)} ${pctText(m.saturation)}%`);
+  lines.push("$ vmstat 1 1     # swap tributary (si/so)");
+  lines.push(padStart("si", 8) + padStart("so", 8));
+  lines.push(padStart(String(Math.round(si)), 8) + padStart(String(Math.round(so)), 8));
+  if (swapConfigured) {
+    lines.push(`swap: ${mib(m.swapUsedBytes)}/${mib(m.swapTotalBytes)} MiB used   churn ${Math.round(rate(m.swapPagesPerSecond))} pages/s`);
+  } else {
+    lines.push("swap: not configured  — saturation shows as reclaim stalls / OOM instead");
+  }
   return lines.join("\n");
 };
 
@@ -279,6 +292,10 @@ const formatMemoryFaults = (telemetry: TelemetrySnapshot): string => {
   const minor = Math.max(0, rate(m.minorFaultsPerSecond));
   const major = Math.max(0, rate(m.majorFaultsPerSecond));
   const lines: string[] = [];
+  // A labelled gauge row: 13-wide label, bar, then a right-aligned value+unit column
+  // so the trailing notes line up regardless of how many digits the value has.
+  const gauge = (label: string, barStr: string, value: string, note = ""): string =>
+    `${label.padEnd(13)}${barStr} ${padStart(value, 8)}${note ? `   ${note}` : ""}`;
   lines.push("$ sar -B 1 1     # paging activity");
   lines.push(padStart("fault/s", 14) + padStart("majflt/s", 14));
   lines.push(padStart((minor + major).toFixed(2), 14) + padStart(major.toFixed(2), 14));
@@ -289,9 +306,9 @@ const formatMemoryFaults = (telemetry: TelemetrySnapshot): string => {
   lines.push("");
   // Minor = workload context (scaled against a busy 50k/s reference); major =
   // saturation (matches the collector's majFaultRate/200 severity contribution).
-  lines.push(`minor faults ${bar(clamp(minor / 50000))} ${Math.round(minor)} /s   served from RAM`);
-  lines.push(`major faults ${bar(clamp(major / 200))} ${Math.round(major)} /s   refault from disk/swap`);
-  lines.push(`saturation   ${bar(m.saturation)} ${pctText(m.saturation)}%`);
+  lines.push(gauge("minor faults", bar(clamp(minor / 50000)), `${Math.round(minor)} /s`, "served from RAM"));
+  lines.push(gauge("major faults", bar(clamp(major / 200)), `${Math.round(major)} /s`, "refault from disk/swap"));
+  lines.push(gauge("saturation", bar(m.saturation), `${pctText(m.saturation)}%`));
   lines.push("");
   if (m.pressureAvailable) {
     const some = rate(m.pressureSomeAvg10);
@@ -299,8 +316,8 @@ const formatMemoryFaults = (telemetry: TelemetrySnapshot): string => {
     lines.push("$ cat /proc/pressure/memory");
     lines.push(`some avg10=${some.toFixed(2)} avg60=${rate(m.pressureSomeAvg60).toFixed(2)} avg300=${rate(m.pressureSomeAvg300).toFixed(2)}`);
     lines.push(`full avg10=${full.toFixed(2)} avg60=${rate(m.pressureFullAvg60).toFixed(2)} avg300=${rate(m.pressureFullAvg300).toFixed(2)}`);
-    lines.push(`some stalls   ${bar(clamp(some / 20))} ${some.toFixed(2)}% of last 10s   (>10% = sustained)`);
-    lines.push(`full stalls   ${bar(clamp(full / 5))} ${full.toFixed(2)}% of last 10s   (>0 = severe)`);
+    lines.push(gauge("some stalls", bar(clamp(some / 20)), `${some.toFixed(2)}%`, "of last 10s   (>10% = sustained)"));
+    lines.push(gauge("full stalls", bar(clamp(full / 5)), `${full.toFixed(2)}%`, "of last 10s   (>0 = severe)"));
   } else {
     // No PSI here, so the stall census is rebuilt from the /proc/vmstat events the
     // kernel would have charged that stall time to. The counters are measured; the
@@ -321,8 +338,8 @@ const formatMemoryFaults = (telemetry: TelemetrySnapshot): string => {
       lines.push(`${name.padEnd(19)}${padStart(String(Math.round(value)), 9)} /s   ${note}`);
     });
     lines.push("");
-    lines.push(`reclaim stall ${bar(stall)} ${pctText(stall)}% est.   (majflt+swpin) x await`);
-    lines.push(`thrash        ${bar(clamp(refault / 3000))} ${Math.round(refault)} /s   refaults vs 3000/s reference`);
+    lines.push(gauge("reclaim stall", bar(stall), `${pctText(stall)}% est.`, "(majflt+swpin) x await"));
+    lines.push(gauge("thrash", bar(clamp(refault / 3000)), `${Math.round(refault)} /s`, "refaults vs 3000/s reference"));
     lines.push("no /proc/pressure/memory on this kernel — PSI stall shares unavailable");
   }
   return lines.join("\n");

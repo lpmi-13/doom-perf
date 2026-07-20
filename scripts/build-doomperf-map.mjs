@@ -315,7 +315,11 @@ const sideTextures = (sector, other, overrideTexture, edge) => {
   return {
     top: ceilingStep ? sector.wall : "-",
     bottom,
-    mid: "-",
+    // A see-through energy field: when two neighbouring sectors both opt in with
+    // `fieldTexture`, their shared two-sided edge wears that texture in the MID slot
+    // (its transparent columns show the space beyond). Used for the fault range's
+    // RAM-gate forcefield; the NOCLIP bolts pass through it.
+    mid: sector.fieldTexture && other.fieldTexture ? sector.fieldTexture : "-",
   };
 };
 
@@ -340,7 +344,10 @@ const doorTextureOffsetFor = (edge, sector, other) => {
 };
 
 const overrideTextureOffsetFor = (edge, sector) => {
-  const texW = labelTextureSize.width;
+  // Sectors whose label is not a door-sized plate declare their own `labelWidth`.
+  // Assuming the door width here pads a narrower plate by half its own width, which
+  // shifts the word so it renders wrapped across the wall's grid-cut segments.
+  const texW = sector.labelWidth ?? labelTextureSize.width;
   const horizontal = edge.a[1] === edge.b[1];
   if (horizontal) {
     const pad = Math.max(0, (texW - (sector.x2 - sector.x1)) / 2);
@@ -542,6 +549,17 @@ const lineFlagsFor = (front, back) => {
   // reading-rail that blocks the fall the -2048 well would otherwise soft-lock on.
   if (back && (front.kind === "void" || back.kind === "void")) {
     flags |= lineFlags.blocking;
+  }
+  // A `blockEdge` sector (the memory fault range's sunken trench) stays two-sided
+  // and see-through -- the player looks over its rail into the pit -- but is
+  // impassable, so the drop can't soft-lock. The NOCLIP fault bolts ignore it.
+  if (back && (front.blockEdge || back.blockEdge)) {
+    flags |= lineFlags.blocking;
+  }
+  // The forcefield gate mid-texture (both sectors carry `fieldTexture`) is floor-
+  // pegged so the energy field stands up from the trench floor.
+  if (back && front.fieldTexture && back.fieldTexture) {
+    flags |= lineFlags.lowerUnpegged;
   }
   if (back && isDoorPair(front, back)) {
     flags |= lineFlags.lowerUnpegged;

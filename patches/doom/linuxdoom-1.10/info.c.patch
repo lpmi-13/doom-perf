@@ -40,7 +40,7 @@
      {SPR_SMBT,32768,4,{NULL},S_BTORCHSHRT2,0,0},	// S_BTORCHSHRT
      {SPR_SMBT,32769,4,{NULL},S_BTORCHSHRT3,0,0},	// S_BTORCHSHRT2
      {SPR_SMBT,32770,4,{NULL},S_BTORCHSHRT4,0,0},	// S_BTORCHSHRT3
-@@ -1099,7 +1110,91 @@
+@@ -1099,7 +1110,116 @@
      {SPR_TLP2,32768,4,{NULL},S_TECH2LAMP2,0,0},	// S_TECH2LAMP
      {SPR_TLP2,32769,4,{NULL},S_TECH2LAMP3,0,0},	// S_TECH2LAMP2
      {SPR_TLP2,32770,4,{NULL},S_TECH2LAMP4,0,0},	// S_TECH2LAMP3
@@ -93,47 +93,72 @@
 +    {SPR_PMAP,32770,3,{NULL},S_DP_NETTX_FADE2,0,0},	// S_DP_NETTX_FADE1 (flash)
 +    {SPR_PMAP,32771,4,{NULL},S_NULL,0,0},		// S_DP_NETTX_FADE2 (ring out)
 +    // Doom Perf memory-well spire books. All fullbright; the frame letter is the
-+    // low bits (A=0 .. E=4, so 32768+n). BAL1/BAL2 carry the five FLIGHT frames
-+    // (A upbeat, B level, C downbeat, D half-shut, E shut) and SUIT/PSTR the single
-+    // SHELVED frame -- which is the same art as frame E, so the swap on landing is
-+    // invisible. DoomPerf_UpdateMemorySpire owns the flight PATH; these tics only
-+    // drive the wingbeat, the snap shut on arrival, and the flutter away on a free.
-+    // Green = working set, blue = reclaimable cache.
-+    {SPR_BAL1,32768,3,{NULL},S_DP_MEMBOOK_FLY2,0,0},	// S_DP_MEMBOOK_FLY1 (upbeat)
-+    {SPR_BAL1,32769,3,{NULL},S_DP_MEMBOOK_FLY3,0,0},	// S_DP_MEMBOOK_FLY2 (level)
-+    {SPR_BAL1,32770,3,{NULL},S_DP_MEMBOOK_FLY4,0,0},	// S_DP_MEMBOOK_FLY3 (downbeat)
-+    {SPR_BAL1,32769,3,{NULL},S_DP_MEMBOOK_FLY1,0,0},	// S_DP_MEMBOOK_FLY4 (level)
-+    {SPR_BAL1,32771,2,{NULL},S_DP_MEMBOOK_LAND2,0,0},	// S_DP_MEMBOOK_LAND1 (half-shut)
-+    {SPR_BAL1,32772,2,{NULL},S_DP_MEMBOOK,0,0},		// S_DP_MEMBOOK_LAND2 (shut)
++    // low bits (A=0 .. E=4, so 32768+n). A book in motion is drawn CLOSED (frame E,
++    // the same art as the shelved SUIT/PSTR sprite) for the whole flight, landing
++    // and lift: a compact tome carried to (or lifted off) its shelf reads as a
++    // book, where the old open-cover wingbeat (frames A-D) read as a flapping bird.
++    // DoomPerf_UpdateMemorySpire owns the motion PATH; these tics only hold the
++    // image and pace the state chain (flight loop length, landing dwell, lift rise
++    // duration) -- all unchanged, only the displayed frame is now the shut book.
++    // The open flight frames A-D stay authored in the WAD but are intentionally
++    // unreferenced. Green = working set, blue = reclaimable cache.
++    {SPR_BAL1,32772,3,{NULL},S_DP_MEMBOOK_FLY2,0,0},	// S_DP_MEMBOOK_FLY1 (shut, gliding)
++    {SPR_BAL1,32772,3,{NULL},S_DP_MEMBOOK_FLY3,0,0},	// S_DP_MEMBOOK_FLY2 (shut, gliding)
++    {SPR_BAL1,32772,3,{NULL},S_DP_MEMBOOK_FLY4,0,0},	// S_DP_MEMBOOK_FLY3 (shut, gliding)
++    {SPR_BAL1,32772,3,{NULL},S_DP_MEMBOOK_FLY1,0,0},	// S_DP_MEMBOOK_FLY4 (shut, gliding)
++    {SPR_BAL1,32772,2,{NULL},S_DP_MEMBOOK_LAND2,0,0},	// S_DP_MEMBOOK_LAND1 (settling)
++    {SPR_BAL1,32772,2,{NULL},S_DP_MEMBOOK,0,0},		// S_DP_MEMBOOK_LAND2 (settling)
 +    {SPR_SUIT,32768,-1,{NULL},S_NULL,0,0},		// S_DP_MEMBOOK (green, shelved)
-+    {SPR_BAL1,32772,2,{NULL},S_DP_MEMBOOK_LIFT2,0,0},	// S_DP_MEMBOOK_LIFT1 (shut)
-+    {SPR_BAL1,32771,2,{NULL},S_DP_MEMBOOK_LIFT3,0,0},	// S_DP_MEMBOOK_LIFT2 (re-opening)
-+    {SPR_BAL1,32768,3,{NULL},S_DP_MEMBOOK_LIFT4,0,0},	// S_DP_MEMBOOK_LIFT3 (upbeat)
-+    {SPR_BAL1,32769,3,{NULL},S_DP_MEMBOOK_LIFT5,0,0},	// S_DP_MEMBOOK_LIFT4 (level)
-+    {SPR_BAL1,32770,3,{NULL},S_DP_MEMBOOK_LIFT6,0,0},	// S_DP_MEMBOOK_LIFT5 (downbeat)
-+    {SPR_BAL1,32769,3,{NULL},S_DP_MEMBOOK_LIFT7,0,0},	// S_DP_MEMBOOK_LIFT6 (level)
-+    {SPR_BAL1,32768,3,{NULL},S_DP_MEMBOOK_LIFT8,0,0},	// S_DP_MEMBOOK_LIFT7 (upbeat)
-+    {SPR_BAL1,32769,3,{NULL},S_NULL,0,0},		// S_DP_MEMBOOK_LIFT8 (gone into the dark)
-+    {SPR_BAL2,32768,3,{NULL},S_DP_MEMBOOKC_FLY2,0,0},	// S_DP_MEMBOOKC_FLY1 (upbeat)
-+    {SPR_BAL2,32769,3,{NULL},S_DP_MEMBOOKC_FLY3,0,0},	// S_DP_MEMBOOKC_FLY2 (level)
-+    {SPR_BAL2,32770,3,{NULL},S_DP_MEMBOOKC_FLY4,0,0},	// S_DP_MEMBOOKC_FLY3 (downbeat)
-+    {SPR_BAL2,32769,3,{NULL},S_DP_MEMBOOKC_FLY1,0,0},	// S_DP_MEMBOOKC_FLY4 (level)
-+    {SPR_BAL2,32771,2,{NULL},S_DP_MEMBOOKC_LAND2,0,0},	// S_DP_MEMBOOKC_LAND1 (half-shut)
-+    {SPR_BAL2,32772,2,{NULL},S_DP_MEMBOOKC,0,0},	// S_DP_MEMBOOKC_LAND2 (shut)
++    {SPR_BAL1,32772,2,{NULL},S_DP_MEMBOOK_LIFT2,0,0},	// S_DP_MEMBOOK_LIFT1 (shut, rising)
++    {SPR_BAL1,32772,2,{NULL},S_DP_MEMBOOK_LIFT3,0,0},	// S_DP_MEMBOOK_LIFT2 (shut, rising)
++    {SPR_BAL1,32772,3,{NULL},S_DP_MEMBOOK_LIFT4,0,0},	// S_DP_MEMBOOK_LIFT3 (shut, rising)
++    {SPR_BAL1,32772,3,{NULL},S_DP_MEMBOOK_LIFT5,0,0},	// S_DP_MEMBOOK_LIFT4 (shut, rising)
++    {SPR_BAL1,32772,3,{NULL},S_DP_MEMBOOK_LIFT6,0,0},	// S_DP_MEMBOOK_LIFT5 (shut, rising)
++    {SPR_BAL1,32772,3,{NULL},S_DP_MEMBOOK_LIFT7,0,0},	// S_DP_MEMBOOK_LIFT6 (shut, rising)
++    {SPR_BAL1,32772,3,{NULL},S_DP_MEMBOOK_LIFT8,0,0},	// S_DP_MEMBOOK_LIFT7 (shut, rising)
++    {SPR_BAL1,32772,3,{NULL},S_NULL,0,0},		// S_DP_MEMBOOK_LIFT8 (gone into the dark)
++    {SPR_BAL2,32772,3,{NULL},S_DP_MEMBOOKC_FLY2,0,0},	// S_DP_MEMBOOKC_FLY1 (shut, gliding)
++    {SPR_BAL2,32772,3,{NULL},S_DP_MEMBOOKC_FLY3,0,0},	// S_DP_MEMBOOKC_FLY2 (shut, gliding)
++    {SPR_BAL2,32772,3,{NULL},S_DP_MEMBOOKC_FLY4,0,0},	// S_DP_MEMBOOKC_FLY3 (shut, gliding)
++    {SPR_BAL2,32772,3,{NULL},S_DP_MEMBOOKC_FLY1,0,0},	// S_DP_MEMBOOKC_FLY4 (shut, gliding)
++    {SPR_BAL2,32772,2,{NULL},S_DP_MEMBOOKC_LAND2,0,0},	// S_DP_MEMBOOKC_LAND1 (settling)
++    {SPR_BAL2,32772,2,{NULL},S_DP_MEMBOOKC,0,0},	// S_DP_MEMBOOKC_LAND2 (settling)
 +    {SPR_PSTR,32768,-1,{NULL},S_NULL,0,0},		// S_DP_MEMBOOKC (blue, shelved)
-+    {SPR_BAL2,32772,2,{NULL},S_DP_MEMBOOKC_LIFT2,0,0},	// S_DP_MEMBOOKC_LIFT1 (shut)
-+    {SPR_BAL2,32771,2,{NULL},S_DP_MEMBOOKC_LIFT3,0,0},	// S_DP_MEMBOOKC_LIFT2 (re-opening)
-+    {SPR_BAL2,32768,3,{NULL},S_DP_MEMBOOKC_LIFT4,0,0},	// S_DP_MEMBOOKC_LIFT3 (upbeat)
-+    {SPR_BAL2,32769,3,{NULL},S_DP_MEMBOOKC_LIFT5,0,0},	// S_DP_MEMBOOKC_LIFT4 (level)
-+    {SPR_BAL2,32770,3,{NULL},S_DP_MEMBOOKC_LIFT6,0,0},	// S_DP_MEMBOOKC_LIFT5 (downbeat)
-+    {SPR_BAL2,32769,3,{NULL},S_DP_MEMBOOKC_LIFT7,0,0},	// S_DP_MEMBOOKC_LIFT6 (level)
-+    {SPR_BAL2,32768,3,{NULL},S_DP_MEMBOOKC_LIFT8,0,0},	// S_DP_MEMBOOKC_LIFT7 (upbeat)
-+    {SPR_BAL2,32769,3,{NULL},S_NULL,0,0},		// S_DP_MEMBOOKC_LIFT8 (gone into the dark)
-+    {SPR_PVIS,32768,-1,{NULL},S_NULL,0,0}		// S_DP_MEMCAP (amber gauge-top ring, static)
++    {SPR_BAL2,32772,2,{NULL},S_DP_MEMBOOKC_LIFT2,0,0},	// S_DP_MEMBOOKC_LIFT1 (shut, rising)
++    {SPR_BAL2,32772,2,{NULL},S_DP_MEMBOOKC_LIFT3,0,0},	// S_DP_MEMBOOKC_LIFT2 (shut, rising)
++    {SPR_BAL2,32772,3,{NULL},S_DP_MEMBOOKC_LIFT4,0,0},	// S_DP_MEMBOOKC_LIFT3 (shut, rising)
++    {SPR_BAL2,32772,3,{NULL},S_DP_MEMBOOKC_LIFT5,0,0},	// S_DP_MEMBOOKC_LIFT4 (shut, rising)
++    {SPR_BAL2,32772,3,{NULL},S_DP_MEMBOOKC_LIFT6,0,0},	// S_DP_MEMBOOKC_LIFT5 (shut, rising)
++    {SPR_BAL2,32772,3,{NULL},S_DP_MEMBOOKC_LIFT7,0,0},	// S_DP_MEMBOOKC_LIFT6 (shut, rising)
++    {SPR_BAL2,32772,3,{NULL},S_DP_MEMBOOKC_LIFT8,0,0},	// S_DP_MEMBOOKC_LIFT7 (shut, rising)
++    {SPR_BAL2,32772,3,{NULL},S_NULL,0,0},		// S_DP_MEMBOOKC_LIFT8 (gone into the dark)
++    {SPR_PVIS,32768,-1,{NULL},S_NULL,0,0},		// S_DP_MEMCAP (amber gauge-top ring, static)
++    // Doom Perf page-fault beam-bolt + impact flare (fault range). The bolt is a
++    // static fullbright blob the driver hand-glides down the lane and back; the
++    // flare (a second, fire-and-forget instance the driver sets to BURST1) rides
++    // the rocket's explosion frames B/C/D and ticks itself out to S_NULL.
++    {SPR_MISL,32768,-1,{NULL},S_NULL,0,0},		// S_DP_PGFAULT (gold ORB, static; driver moves it)
++    {SPR_PLSS,32768,2,{NULL},S_DP_PGFAULT_ARC2,0,0},	// S_DP_PGFAULT_ARC1 (electric arc, flicker A)
++    {SPR_PLSS,32769,2,{NULL},S_DP_PGFAULT_ARC1,0,0},	// S_DP_PGFAULT_ARC2 (electric arc, flicker B; loops)
++    {SPR_BFS1,32768,-1,{NULL},S_NULL,0,0},		// S_DP_PGFAULT_STREAK (violet streak, static)
++    {SPR_MISL,32769,3,{NULL},S_DP_PGFAULT_BURST2,0,0},	// S_DP_PGFAULT_BURST1 (hot flash)
++    {SPR_MISL,32770,3,{NULL},S_DP_PGFAULT_BURST3,0,0},	// S_DP_PGFAULT_BURST2 (widening ring)
++    {SPR_MISL,32771,4,{NULL},S_NULL,0,0},		// S_DP_PGFAULT_BURST3 (fading ring)
++    // Impact styles 2-4 (style 1 = the ripple BURST chain above). Each is a 3-frame
++    // fullbright animation the flare plays through to S_NULL.
++    {SPR_PLSE,32768,4,{NULL},S_DP_PGFAULT_BLOOM2,0,0},	// S_DP_PGFAULT_BLOOM1 (soft absorb)
++    {SPR_PLSE,32769,4,{NULL},S_DP_PGFAULT_BLOOM3,0,0},	// S_DP_PGFAULT_BLOOM2
++    {SPR_PLSE,32770,5,{NULL},S_NULL,0,0},		// S_DP_PGFAULT_BLOOM3
++    {SPR_APBX,32768,3,{NULL},S_DP_PGFAULT_IMPL2,0,0},	// S_DP_PGFAULT_IMPL1 (converging ring)
++    {SPR_APBX,32769,3,{NULL},S_DP_PGFAULT_IMPL3,0,0},	// S_DP_PGFAULT_IMPL2
++    {SPR_APBX,32770,4,{NULL},S_NULL,0,0},		// S_DP_PGFAULT_IMPL3
++    {SPR_BFE1,32768,3,{NULL},S_DP_PGFAULT_SPRK2,0,0},	// S_DP_PGFAULT_SPRK1 (spark spray)
++    {SPR_BFE1,32769,3,{NULL},S_DP_PGFAULT_SPRK3,0,0},	// S_DP_PGFAULT_SPRK2
++    {SPR_BFE1,32770,4,{NULL},S_NULL,0,0}		// S_DP_PGFAULT_SPRK3
  };
  
  
-@@ -4665,6 +4760,218 @@
+@@ -4665,6 +4785,246 @@
  	sfx_None,		// activesound
  	MF_NOBLOCKMAP,		// flags
  	S_NULL		// raisestate
@@ -273,7 +298,7 @@
 +
 +    {		// MT_DP_MEMBOOK -- green working-set book (scripted glide, non-blocking)
 +	-1,		// doomednum (runtime-spawned only)
-+	S_DP_MEMBOOK_FLY1,		// spawnstate (a courier: it spawns IN FLIGHT, wings beating)
++	S_DP_MEMBOOK_FLY1,		// spawnstate (a courier: spawns a shut book already gliding in)
 +	1000,		// spawnhealth
 +	S_NULL,		// seestate
 +	sfx_None,		// seesound
@@ -301,7 +326,7 @@
 +
 +    {		// MT_DP_MEMBOOKC -- blue reclaimable-cache book (scripted glide)
 +	-1,		// doomednum (runtime-spawned only)
-+	S_DP_MEMBOOKC_FLY1,		// spawnstate (a courier: it spawns IN FLIGHT, wings beating)
++	S_DP_MEMBOOKC_FLY1,		// spawnstate (a courier: spawns a shut book already gliding in)
 +	1000,		// spawnhealth
 +	S_NULL,		// seestate
 +	sfx_None,		// seesound
@@ -347,6 +372,34 @@
 +	100,		// mass
 +	0,		// damage
 +	sfx_None,		// activesound
++	MF_NOGRAVITY|MF_NOBLOCKMAP|MF_NOCLIP,		// flags
++	S_NULL		// raisestate
++    },
++
++    {		// MT_DP_PGFAULT -- page-fault beam-bolt (scripted volley, non-blocking)
++	-1,		// doomednum (runtime-spawned only)
++	S_DP_PGFAULT,		// spawnstate (static bolt; the driver owns its flight)
++	1000,		// spawnhealth
++	S_NULL,		// seestate
++	sfx_None,		// seesound
++	8,		// reactiontime
++	sfx_None,		// attacksound
++	S_NULL,		// painstate
++	0,		// painchance
++	sfx_None,		// painsound
++	S_NULL,		// meleestate
++	S_NULL,		// missilestate
++	S_NULL,		// deathstate
++	S_NULL,		// xdeathstate
++	sfx_None,		// deathsound
++	0,		// speed
++	6*FRACUNIT,		// radius
++	16*FRACUNIT,		// height
++	100,		// mass
++	0,		// damage
++	sfx_None,		// activesound
++	// Non-blocking + no clipping: the bolts ride a scripted lane path (p_tick.c),
++	// passing straight through the RAM hologram curtain the player is held at.
 +	MF_NOGRAVITY|MF_NOBLOCKMAP|MF_NOCLIP,		// flags
 +	S_NULL		// raisestate
      }

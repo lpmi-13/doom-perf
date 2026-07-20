@@ -52,7 +52,19 @@
      if ((int)frame > maxframe)
  	maxframe = frame;
  		
-@@ -478,7 +504,15 @@
+@@ -444,6 +470,11 @@
+ 
+ 
+ 
++// Doom Perf: darkest COLORMAP fade level for a dissolving/materializing spire
++// book (0 = fullbright .. 31 = near black). MUST match DOOMPERF_SPIRE_FADE_MAX
++// in p_tick.c, which produces the fly-in fade values this renderer reads.
++#define DOOMPERF_BOOK_FADE_MAX	31
++
+ //
+ // R_ProjectSprite
+ // Generates a vissprite for a thing
+@@ -478,7 +509,15 @@
      
      angle_t		ang;
      fixed_t		iscale;
@@ -69,7 +81,43 @@
      // transform the origin point
      tr_x = thing->x - viewx;
      tr_y = thing->y - viewy;
-@@ -979,11 +1013,8 @@
+@@ -585,12 +624,34 @@
+ 	// fixed map
+ 	vis->colormap = fixedcolormap;
+     }
++    else if (thing->type == MT_DP_MEMBOOK || thing->type == MT_DP_MEMBOOKC)
++    {
++	// Doom Perf memory-well book dissolve / materialize. The book is otherwise
++	// fullbright; here it is darkened through the COLORMAP by a fade level so it
++	// melts into the dark shaft. A courier resolves from faded to solid as it
++	// flies in (fade stored in reactiontime by DoomPerf_SpireFly); a freed book
++	// dissolves the other way, its fade rising with its progress along the eight
++	// LIFT states. FADE_MAX matches DOOMPERF_SPIRE_FADE_MAX in p_tick.c.
++	int		fade;
++	statenum_t	st = (statenum_t)(thing->state - states);
++
++	if (st >= S_DP_MEMBOOK_LIFT1 && st <= S_DP_MEMBOOK_LIFT8)
++	    fade = ((st - S_DP_MEMBOOK_LIFT1) * DOOMPERF_BOOK_FADE_MAX) / 7;
++	else if (st >= S_DP_MEMBOOKC_LIFT1 && st <= S_DP_MEMBOOKC_LIFT8)
++	    fade = ((st - S_DP_MEMBOOKC_LIFT1) * DOOMPERF_BOOK_FADE_MAX) / 7;
++	else
++	    fade = thing->reactiontime;		// fly-in materialize; 0 when shelved
++
++	if (fade < 0) fade = 0;
++	else if (fade > DOOMPERF_BOOK_FADE_MAX) fade = DOOMPERF_BOOK_FADE_MAX;
++	vis->colormap = colormaps + fade * 256;
++    }
+     else if (thing->frame & FF_FULLBRIGHT)
+     {
+ 	// full bright
+ 	vis->colormap = colormaps;
+     }
+-    
++
+     else
+     {
+ 	// diminished light
+@@ -979,11 +1040,8 @@
  	if (ds->maskedtexturecol)
  	    R_RenderMaskedSegRange (ds, ds->x1, ds->x2);
      

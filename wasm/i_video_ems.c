@@ -43,6 +43,8 @@ int doomperf_memory_proc_count = 0;
 int doomperf_memory_proc_oom[DOOMPERF_MEMORY_PROC_SLOTS];
 int doomperf_memory_minflt = 0;
 int doomperf_memory_majflt = 0;
+int doomperf_memory_swap_present = 0;  // 1 when a swap device is configured on the host
+int doomperf_memory_swap_activity = 0; // swap si+so rate as permille of full scale
 int doomperf_oom_event = 0;
 int doomperf_oom_victim = 0;
 int doomperf_net_rx = 0;
@@ -308,6 +310,23 @@ EMSCRIPTEN_KEEPALIVE
 void DoomPerf_SetMemoryMajorFaults(int permille)
 {
     doomperf_memory_majflt = DoomPerf_ClampPermille(permille);
+}
+
+// Whether the host has a swap device configured (swapTotalBytes > 0). Drives the
+// reclaim sluice's swap TRIBUTARY: when 0 the tributary channel seals dry (stone
+// floor, dark) so a swapless host reads unmistakably; when 1 it runs nukage.
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_SetMemorySwapPresent(int present)
+{
+    doomperf_memory_swap_present = present ? 1 : 0;
+}
+
+// Swap in+out paging rate (vmstat si+so) as a permille of full scale. Drives the
+// glow/ripple of the swap tributary when swap is present.
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_SetMemorySwapActivity(int permille)
+{
+    doomperf_memory_swap_activity = DoomPerf_ClampPermille(permille);
 }
 
 // Fire the Baron OOM-kill event: latch a pending kill naming the victim barrel

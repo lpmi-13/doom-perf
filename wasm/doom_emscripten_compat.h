@@ -111,6 +111,13 @@ extern int doomperf_memory_proc_oom[DOOMPERF_MEMORY_PROC_SLOTS];
 extern int doomperf_memory_minflt;
 extern int doomperf_memory_majflt;
 
+// Doom Perf: swap state for the reclaim sluice's swap TRIBUTARY (memory wing).
+// _present is 1 when the host has a swap device configured (swapTotalBytes > 0),
+// so a swapless host reads unmistakably (the tributary seals dry); _activity is the
+// swap si+so paging rate as permille of full scale, driving its glow when present.
+extern int doomperf_memory_swap_present;
+extern int doomperf_memory_swap_activity;
+
 // Doom Perf: OOM-kill event for the memory wing's Baron of Hell. The browser
 // sets a pending flag (DoomPerf_TriggerMemoryOomKill) naming the victim barrel
 // slot when the live oom_kill counter rises; DoomPerf_UpdateOomBaron (p_tick.c)

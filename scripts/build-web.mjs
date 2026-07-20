@@ -93,10 +93,10 @@ const DEV_HOST = "127.0.0.1";
 const TELEMETRY_HOST = process.env.DOOM_TELEMETRY_HOST ?? "127.0.0.1";
 const TELEMETRY_PORT = Number(process.env.DOOM_TELEMETRY_PORT ?? 9999);
 
-// Stream a request through to `target`, copying status/headers verbatim. Both
-// directions are piped (never buffered) so Server-Sent-Events flush chunk by
-// chunk and the telemetry stream stays live.
-const proxyRequest = (target, clientReq, clientRes) => {
+// Stream a request through to `target`, copying status/headers verbatim (plus any
+// `extraHeaders`). Both directions are piped (never buffered) so Server-Sent-Events
+// flush chunk by chunk and the telemetry stream stays live.
+const proxyRequest = (target, clientReq, clientRes, extraHeaders) => {
   const proxyReq = httpRequest(
     {
       host: target.host,
@@ -106,7 +106,7 @@ const proxyRequest = (target, clientReq, clientRes) => {
       headers: { ...clientReq.headers, host: `${target.host}:${target.port}` },
     },
     (proxyRes) => {
-      clientRes.writeHead(proxyRes.statusCode ?? 502, proxyRes.headers);
+      clientRes.writeHead(proxyRes.statusCode ?? 502, { ...proxyRes.headers, ...extraHeaders });
       proxyRes.pipe(clientRes);
     }
   );
@@ -134,8 +134,16 @@ if (watch || serve) {
 
     const proxy = createServer((req, res) => {
       const path = (req.url ?? "/").split("?")[0];
-      const target = path === "/telemetry" || path === "/healthz" ? telemetryTarget : esbuildTarget;
-      proxyRequest(target, req, res);
+      const isTelemetry = path === "/telemetry" || path === "/healthz";
+      const target = isTelemetry ? telemetryTarget : esbuildTarget;
+      // esbuild's serve sends no Cache-Control/ETag/Last-Modified at all, and with no
+      // caching directives a browser falls back to HEURISTIC caching -- it may reuse a
+      // response without revalidating. That silently defeats iteration: /game/ has no
+      // ?v= of its own, so a cached copy keeps pointing at whatever bundle hash was
+      // current when it was stored, and that bundle in turn asks for the WAD/engine
+      // version IT was built with. Rebuilt assets then never reach the page even
+      // though the server is serving them correctly. Dev must never be cached.
+      proxyRequest(target, req, res, isTelemetry ? undefined : { "cache-control": "no-store, must-revalidate" });
     });
     proxy.listen(DEV_PORT, DEV_HOST, () => {
       console.log(`[build-web] serving http://${DEV_HOST}:${DEV_PORT}`);

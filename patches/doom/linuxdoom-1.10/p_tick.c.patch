@@ -13,6 +13,7 @@
 #   (+)   memory-wing-rework (paging minor/major fault meters + OOM-killer Baron)
 #   (+)   disk-wing-rework (df / usage cistern + per-device IOPS bank + real dashboard IOPS)
 #   (+)   memory-well-spire (green/blue book-sprite fill on the central spire)
+#   (+)   memory-sluice-rework (swap channels -> reclaim saturation sluice: pool/dam/tributary/inflow + abyss waterfall)
 #
 # Order-independent: this is the only Doom Perf patch that touches p_tick.c.
 # Regenerate by diffing a clean tree against the staged build tree;
@@ -26,7 +27,7 @@
  //-----------------------------------------------------------------------------
  //
  // $Id:$
-@@ -30,9 +30,1864 @@
+@@ -30,9 +30,2347 @@
  
  #include "doomstat.h"
  
@@ -360,28 +361,50 @@
 +    }
 +}
 +
-+// Doom Perf: MEMORY page-bank instruments, one independent station per USE
-+// signal. Tags 500..544 are the 9x5 page cells (Station A: `free -m`
-+// composition, the junction book-shelf), 546/547 are the swap-in/out channels
-+// (Station B), 549/550 are the minor/major page-fault meters (Station C), 548 is
-+// the OOM-killer BARON's pen (Station D, driven by DoomPerf_UpdateOomBaron), and
-+// 551..555 are the RSS-reliquary barrel pads. Sunken page cells = a shelf;
-+// count+colour = composition. Saturation lifts/pulses the swap channels and the
-+// major-fault meter.
++// Doom Perf: MEMORY wing instruments, one independent station per USE signal.
++// Tags 500..544 are the retired page cells (Station A, superseded by the spire);
++// 546/547 + 557/558 are the RECLAIM SLUICE (Station B: saturation pool, dam gate,
++// swap tributary, demand inflow); 549/550 are the fault range's near/far lanes
++// (Station C, the beam VOLLEY -- see DoomPerf_FaultVolley); 548 is the OOM-killer
++// BARON's pen (Station D, driven by DoomPerf_UpdateOomBaron); and 551..555 are the
++// RSS-reliquary barrel pads. Saturation raises the sluice pool and shuts its dam.
 +#define DOOMPERF_MEMORY_PAGE_TAG_BASE	500
 +#define DOOMPERF_MEMORY_PAGE_COUNT	45
-+#define DOOMPERF_MEMORY_SWAP_IN_TAG	546
-+#define DOOMPERF_MEMORY_SWAP_OUT_TAG	547
++#define DOOMPERF_MEMORY_POOL_TAG	546	// reclaim sluice pool: floor = saturation backlog
++#define DOOMPERF_MEMORY_SILL_TAG	547	// FIXED outlet sill (static geometry; the drain capacity)
++#define DOOMPERF_MEMORY_VENT_TAG	557	// swap relief vent: steams while swap pages, sealed when no swap
++#define DOOMPERF_MEMORY_INFLOW_TAG	558	// demand inflow stream feeding the pool
++#define DOOMPERF_MEMORY_DRAIN_TAG	559	// tailwater below the weir (mirrors the pool colour)
++#define DOOMPERF_MEMORY_FALL_SPEED	(3 * FRACUNIT)	// waterfall row-scroll / tic (DPMFALL sidedefs)
 +#define DOOMPERF_MEMORY_OOM_PEN_TAG	548
-+#define DOOMPERF_MEMORY_MINFLT_TAG	549
-+#define DOOMPERF_MEMORY_MAJFLT_TAG	550
++// Fault range (Station C): 549 is the near lane behind the RAM hologram, 550 the
++// far lane at the disk wall. DoomPerf_FaultVolley fires bolts down the lane and
++// flashes these two sectors where the bolts burst -- the hologram (549) on a minor
++// fault, the disk wall (550) on a major fault -- via a decaying light glow bumped
++// per burst. No floor meters any more.
++#define DOOMPERF_FAULT_NEAR_TAG		549
++#define DOOMPERF_FAULT_FAR_TAG		550
++#define DOOMPERF_FAULT_NEAR_BASE	150	// ambient near-lane light (hologram at rest)
++#define DOOMPERF_FAULT_FAR_BASE		132	// ambient far-lane light (disk wall at rest)
 +#define DOOMPERF_MEMORY_PAGE_LOW	(-48 * FRACUNIT)
 +#define DOOMPERF_MEMORY_PAGE_HIGH	(-16 * FRACUNIT)
 +#define DOOMPERF_MEMORY_PAGE_STEP	(2 * FRACUNIT)
-+#define DOOMPERF_MEMORY_SWAP_LOW	(-20 * FRACUNIT)
-+#define DOOMPERF_MEMORY_SWAP_HIGH	(12 * FRACUNIT)
-+#define DOOMPERF_MEMORY_FLT_LOW		(-24 * FRACUNIT)
-+#define DOOMPERF_MEMORY_FLT_HIGH	(16 * FRACUNIT)
++// The sluice models arrivals outrunning a FIXED service rate. The outlet sill (547)
++// never moves -- it is the constant amount of work the system can drain -- so the only
++// thing that changes is the WATER LEVEL, which is the backlog. Level sits at the sill
++// when the system is keeping up and climbs toward the brim as it falls behind.
++//
++// These are MAP UNITS, not fixed_t, and the lerps below stay in units until a final
++// * FRACUNIT (the same shape as the disk cistern / device-bank code above). That is
++// load-bearing: a fixed_t lerp of the form (HIGH - LOW) * permille overflows 32-bit
++// int once the span exceeds 32 units (INT_MAX / (1000 * FRACUNIT) = 32.7), which
++// silently wraps the level to a wrong, LOW height instead of clamping.
++#define DOOMPERF_MEMORY_WATER_BASE	(-60)	// level with the fixed sill: draining as fast as it arrives
++#define DOOMPERF_MEMORY_POOL_BRIM	(-4)	// full brim, just below the walkway (never overflows)
++// Colour is keyed off the ACTUAL fill fraction (permille of sill..brim), not sat, so
++// the pool only turns amber/red once it is genuinely that full on screen.
++#define DOOMPERF_MEMORY_POOL_WARM	500		// fill >= this permille: green -> amber
++#define DOOMPERF_MEMORY_POOL_HOT	800		// fill >= this permille: amber -> hot red (glow near the brim)
 +// RSS "reliquary" barrels (sector tags 551..555): one barrel per top-RSS
 +// process (the rows of `ps -eo pid,rss,comm --sort=-rss`), each standing on its
 +// own pad sector in front of the RSS terminal. We light each pad by that
@@ -392,6 +415,15 @@
 +#define DOOMPERF_MEMORY_BARREL_COUNT	5
 +#define DOOMPERF_MEMORY_BARREL_LIGHT_LO	168
 +#define DOOMPERF_MEMORY_BARREL_LIGHT_HI	248
++
++// Decaying light-glow for the two fault-range surfaces (the RAM hologram / the disk
++// wall). DoomPerf_FaultVolley bumps these to _GLOW_MAX where a bolt bursts and
++// decays them each tic; DoomPerf_UpdateMemoryWing adds them onto the 549/550 base
++// light. So a burst lands as a bright flash that fades over ~14 tics.
++#define DOOMPERF_FAULT_GLOW_MAX		96
++#define DOOMPERF_FAULT_GLOW_DECAY	7
++static int doomperf_fault_holo_glow;
++static int doomperf_fault_wall_glow;
 +
 +static int DoomPerf_EffectiveMemoryUtil (void)
 +{
@@ -407,7 +439,7 @@
 +    if (doomperf_sim_mode == 5)
 +	return 40;
 +    if (doomperf_sim_mode == 6)
-+	return 760 + ((leveltime * 4) % 180);
++	return 700 + ((leveltime * 2) % 300);	// sweep up to a full, red, brimming pool
 +    return doomperf_memory_saturation;
 +}
 +
@@ -431,6 +463,27 @@
 +    if (doomperf_sim_mode == 6)
 +	return 820 + ((leveltime * 5) % 150);
 +    return doomperf_memory_majflt;
++}
++
++// Whether the host has a swap device configured, and its swap-in+out paging rate
++// (permille), for the reclaim sluice's swap tributary. The memory sims assume a
++// swap-backed host so the tributary demos as running (mode 6 churns it); a live
++// swapless host pushes present=0 and the tributary seals dry. A live host can also
++// be forced swapless for testing with ?swap=off (src/index.ts zeroes swapTotal).
++static int DoomPerf_EffectiveMemorySwapPresent (void)
++{
++    if (doomperf_sim_mode == 5 || doomperf_sim_mode == 6)
++	return 1;
++    return doomperf_memory_swap_present ? 1 : 0;
++}
++
++static int DoomPerf_EffectiveMemorySwapActivity (void)
++{
++    if (doomperf_sim_mode == 5)
++	return 60 + (leveltime % 30);
++    if (doomperf_sim_mode == 6)
++	return 500 + ((leveltime * 4) % 300);
++    return doomperf_memory_swap_activity;
 +}
 +
 +// Reclaimable page cache (Buffers+Cached) in permille of MemTotal. In the memory
@@ -501,6 +554,7 @@
 +    int		green_cells;
 +    int		cyan_cells;
 +    int		flatnum;
++    int		fill;
 +    int		pulse;
 +    int		i;
 +    int		idx;
@@ -509,17 +563,86 @@
 +    fixed_t	height;
 +    fixed_t	target_h;
 +    fixed_t	cur;
++    int		water_units;
++    int		pool_flat;
++    int		pool_light;
++    static fixed_t doomperf_pool_level = 0;	// eased water surface, shared by pool/crest/tailwater
 +    mobj_t*	mo;
 +    static int	flats_ready = 0;
 +    static int	flat_green;
 +    static int	flat_cyan;
 +    static int	flat_empty;
++    static int	flat_nukage;
++    static int	flat_stone;
++    static int	flat_poolg;
++    static int	flat_poola;
++    static int	flat_poolr;
 +    static int	barrels_ready = 0;
 +
 +    util = DoomPerf_Clamp1000(DoomPerf_EffectiveMemoryUtil());
 +    cache = DoomPerf_Clamp1000(DoomPerf_EffectiveMemoryCache());
 +    sat = DoomPerf_Clamp1000(DoomPerf_EffectiveMemorySaturation());
 +    pulse = DoomPerf_TrianglePulse(2 + sat / 180);
++
++    // Resolved up front: the sluice colour work below needs the pool flats.
++    if (!flats_ready)
++    {
++	flat_green = R_FlatNumForName("DPMUSED");
++	flat_cyan = R_FlatNumForName("DPMCACH");
++	flat_empty = R_FlatNumForName("DPMFREE");
++	flat_nukage = R_FlatNumForName("NUKAGE1");
++	flat_stone = R_FlatNumForName("FLOOR5_1");
++	flat_poolg = R_FlatNumForName("DPMPLG");
++	flat_poola = R_FlatNumForName("DPMPLA");
++	flat_poolr = R_FlatNumForName("DPMPLR");
++	flats_ready = 1;
++    }
++
++    // The BACKLOG level: rides from the fixed sill (draining as fast as work arrives)
++    // up to the brim (the system is far behind and an OOM kill is imminent). Lerped in
++    // MAP UNITS and only then scaled to fixed_t -- see the overflow note on the
++    // defines. Eased HERE rather than inside the sector loop so the pool, the sill's
++    // spill sheet and the tailwater all paint from one level/colour this tic,
++    // regardless of the order those sectors happen to sit in the sectors[] array.
++    water_units = DOOMPERF_MEMORY_WATER_BASE
++	+ ((DOOMPERF_MEMORY_POOL_BRIM - DOOMPERF_MEMORY_WATER_BASE) * sat) / 1000;
++    target_h = water_units * FRACUNIT;
++    if (leveltime == 0)
++	doomperf_pool_level = target_h;
++    if (doomperf_pool_level < target_h)
++    {
++	doomperf_pool_level += DOOMPERF_MEMORY_PAGE_STEP;
++	if (doomperf_pool_level > target_h)
++	    doomperf_pool_level = target_h;
++    }
++    else if (doomperf_pool_level > target_h)
++    {
++	doomperf_pool_level -= DOOMPERF_MEMORY_PAGE_STEP;
++	if (doomperf_pool_level < target_h)
++	    doomperf_pool_level = target_h;
++    }
++    // Temper by the ACTUAL fill fraction of the visible surface (not sat), so the
++    // water stays green until it is genuinely well up the basin and only runs red as
++    // it nears the brim -- "red == nearly full", the way you'd read a tank.
++    fill = ((doomperf_pool_level >> FRACBITS) - DOOMPERF_MEMORY_WATER_BASE) * 1000
++	/ (DOOMPERF_MEMORY_POOL_BRIM - DOOMPERF_MEMORY_WATER_BASE);
++    if (fill < 0)
++	fill = 0;
++    else if (fill > 1000)
++	fill = 1000;
++    if (fill >= DOOMPERF_MEMORY_POOL_HOT)
++	pool_flat = flat_poolr;
++    else if (fill >= DOOMPERF_MEMORY_POOL_WARM)
++	pool_flat = flat_poola;
++    else
++	pool_flat = flat_poolg;
++    // Dim when calm, brightening as it fills; a flicker adds the "glow" once the
++    // water is running hot so a full brim reads as an angry, live red.
++    pool_light = 128 + (fill * 124) / 1000;
++    if (fill > 900)
++	pool_light += (pulse * (fill - 900)) / 600;
++    if (pool_light > 252)
++	pool_light = 252;
 +
 +    // Split the shelf into page-cache (cyan) + working-set (green) + free
 +    // (empty) books, straight from the live `free -m` composition: green tracks
@@ -534,14 +657,6 @@
 +    cyan_cells = (cache * DOOMPERF_MEMORY_PAGE_COUNT + 500) / 1000;
 +    if (cyan_cells > DOOMPERF_MEMORY_PAGE_COUNT - green_cells)
 +	cyan_cells = DOOMPERF_MEMORY_PAGE_COUNT - green_cells;
-+
-+    if (!flats_ready)
-+    {
-+	flat_green = R_FlatNumForName("DPMUSED");
-+	flat_cyan = R_FlatNumForName("DPMCACH");
-+	flat_empty = R_FlatNumForName("DPMFREE");
-+	flats_ready = 1;
-+    }
 +
 +    // First tic after a level (re)load: turn the reliquary's map barrels into
 +    // pure instruments -- non-solid and non-shootable so they neither block the
@@ -613,37 +728,100 @@
 +	    continue;
 +	}
 +
-+	if (tag == DOOMPERF_MEMORY_SWAP_IN_TAG || tag == DOOMPERF_MEMORY_SWAP_OUT_TAG)
++	// Reclaim sluice POOL (Station B): the impounded water behind the weir. Level,
++	// colour and light were all computed once above, so this surface, the sheet on
++	// the weir crest and the tailwater below it always agree.
++	if (tag == DOOMPERF_MEMORY_POOL_TAG)
 +	{
-+	    height = DOOMPERF_MEMORY_SWAP_LOW
-+		+ ((DOOMPERF_MEMORY_SWAP_HIGH - DOOMPERF_MEMORY_SWAP_LOW) * sat) / 1000;
-+	    light = 166 + (sat * 48) / 1000 + (pulse * sat) / 4000;
-+	    sectors[i].floorheight = height;
++	    sectors[i].floorheight = doomperf_pool_level;
++	    sectors[i].floorpic = (short)pool_flat;
++	    sectors[i].lightlevel = (short)pool_light;
++	    continue;
++	}
++
++	// TAILWATER below the weir: the same body of water after it has spilled over, so
++	// it carries the pool's colour and light (with a little extra churn from the
++	// falling nappe). Its floor is static -- only the surface look changes.
++	if (tag == DOOMPERF_MEMORY_DRAIN_TAG)
++	{
++	    sectors[i].floorpic = (short)pool_flat;
++	    light = pool_light - 12 + (pulse >> 4);
++	    if (light < 80)
++		light = 80;
++	    if (light > 252)
++		light = 252;
 +	    sectors[i].lightlevel = (short)light;
 +	    continue;
 +	}
 +
-+	// Paging bay minor-fault meter (Station C): a low, dim column that rises
-+	// with the minor-fault rate. Minor faults are mostly workload, so this
-+	// reads as steady activity rather than danger.
-+	if (tag == DOOMPERF_MEMORY_MINFLT_TAG)
++	// FIXED OUTLET SILL (Station B): deliberately does NOT move -- its height is the
++	// system's constant drain capacity. Only its surface is live: it carries a thin
++	// sheet of the same water sliding over it, so the spill reads as one continuous
++	// body rather than a stone lip between two unrelated puddles.
++	if (tag == DOOMPERF_MEMORY_SILL_TAG)
 +	{
-+	    int mf = DoomPerf_Clamp1000(DoomPerf_EffectiveMemoryMinFlt());
-+	    sectors[i].floorheight = DOOMPERF_MEMORY_FLT_LOW
-+		+ ((DOOMPERF_MEMORY_FLT_HIGH - DOOMPERF_MEMORY_FLT_LOW) * mf) / 1000;
-+	    sectors[i].lightlevel = (short)(148 + (mf * 56) / 1000);
++	    sectors[i].floorpic = (short)pool_flat;
++	    sectors[i].lightlevel = (short)pool_light;
 +	    continue;
 +	}
 +
-+	// Paging bay major-fault meter (Station C): the disk/swap-refault
-+	// saturation signal, so it climbs higher, burns hotter, and pulses as it
-+	// rises -- the thrash warning next to the swap channels.
-+	if (tag == DOOMPERF_MEMORY_MAJFLT_TAG)
++	// INFLOW stream (Station B): the demand arriving. Static level; its light
++	// shimmers with the fault/demand rate so it reads as a busy feed even when the
++	// pool is calm.
++	if (tag == DOOMPERF_MEMORY_INFLOW_TAG)
 +	{
-+	    int mf = DoomPerf_Clamp1000(DoomPerf_EffectiveMemoryMajFlt());
-+	    sectors[i].floorheight = DOOMPERF_MEMORY_FLT_LOW
-+		+ ((DOOMPERF_MEMORY_FLT_HIGH - DOOMPERF_MEMORY_FLT_LOW) * mf) / 1000;
-+	    sectors[i].lightlevel = (short)(162 + (mf * 66) / 1000 + (pulse * mf) / 4000);
++	    int	demand = DoomPerf_Clamp1000(DoomPerf_EffectiveMemoryMinFlt()
++					   + DoomPerf_EffectiveMemoryMajFlt());
++	    light = 150 + (demand * 40) / 1000 + (pulse * demand) / 4000;
++	    if (light > 240)
++		light = 240;
++	    sectors[i].lightlevel = (short)light;
++	    continue;
++	}
++
++	// SWAP RELIEF VENT (Station B): the pressure release. A grate above the waterline
++	// that glows and hisses steam (DoomPerf_UpdateSwapVent) while swap is paging, and
++	// goes dark and dead when the host has no swap at all -- so a swapless host reads
++	// as "no relief valve fitted", not merely idle.
++	if (tag == DOOMPERF_MEMORY_VENT_TAG)
++	{
++	    if (DoomPerf_EffectiveMemorySwapPresent())
++	    {
++		int	act = DoomPerf_Clamp1000(DoomPerf_EffectiveMemorySwapActivity());
++		light = 150 + (act * 70) / 1000 + (pulse * act) / 4000;
++		if (light > 240)
++		    light = 240;
++		sectors[i].lightlevel = (short)light;
++	    }
++	    else
++	    {
++		sectors[i].floorpic = (short)flat_stone;
++		sectors[i].lightlevel = 96;
++	    }
++	    continue;
++	}
++
++	// Fault range near lane (Station C): the RAM hologram's face. Ambient at
++	// rest, flashing brighter the moment a minor-fault bolt bursts on it
++	// (DoomPerf_FaultVolley bumps doomperf_fault_holo_glow).
++	if (tag == DOOMPERF_FAULT_NEAR_TAG)
++	{
++	    light = DOOMPERF_FAULT_NEAR_BASE + doomperf_fault_holo_glow;
++	    if (light > 252)
++		light = 252;
++	    sectors[i].lightlevel = (short)light;
++	    continue;
++	}
++
++	// Fault range far lane (Station C): the disk wall a major-fault bolt strikes
++	// after punching through the hologram. Dimmer at rest, flaring hot on a
++	// strike (doomperf_fault_wall_glow), so a deep hit reads across the room.
++	if (tag == DOOMPERF_FAULT_FAR_TAG)
++	{
++	    light = DOOMPERF_FAULT_FAR_BASE + doomperf_fault_wall_glow;
++	    if (light > 252)
++		light = 252;
++	    sectors[i].lightlevel = (short)light;
 +	    continue;
 +	}
 +
@@ -663,6 +841,86 @@
 +		light = 252;
 +	    sectors[i].lightlevel = (short)light;
 +	}
++    }
++}
++
++// Doom Perf: the reclaim sluice's SWAP RELIEF VENT (memory wing, Station B). This is
++// the answer to "why doesn't the backlog just grow forever": when memory pressure
++// builds, the kernel vents it by paging anonymous memory out to swap, and here that
++// shows as steam hissing from a grate above the waterline. Spawn rate follows the
++// real swap paging rate, so the vent only breathes when swap is actually working, and
++// a host with no swap configured never steams at all -- there is no relief valve
++// fitted, and the pool runs to the OOM brim instead.
++//
++// The puffs are vanilla MT_PUFFs: MF_NOBLOCKMAP|MF_NOGRAVITY (they neither collide
++// nor fall) and their spawn state animates PUFF A->D and then removes the thing on its
++// own, so this needs no bespoke mobj type, state table or despawn bookkeeping. The
++// wing's PWAD replaces those four frames with stippled steam (see buildSteamPuffFrame).
++#define DOOMPERF_VENT_RISE	(FRACUNIT + FRACUNIT / 2)	// upward drift / tic
++#define DOOMPERF_VENT_LIFE	14	// extra tics per frame: a slower, steam-like billow
++#define DOOMPERF_VENT_PERIOD	10	// tics between puffs at the faintest venting
++#define DOOMPERF_VENT_Z		(28 * FRACUNIT)	// grate lip, above the pool's brim
++
++void DoomPerf_UpdateSwapVent (void)
++{
++    int		act;
++    int		period;
++    int		i;
++    mobj_t*	puff;
++
++    if (!DoomPerf_EffectiveMemorySwapPresent ())
++	return;
++    act = DoomPerf_Clamp1000 (DoomPerf_EffectiveMemorySwapActivity ());
++    if (act <= 0)
++	return;
++    // Heavier paging -> shorter gap between puffs (a steady hiss rather than the odd
++    // wisp). Cadence only; the vent never emits more than one puff per tic.
++    period = DOOMPERF_VENT_PERIOD - (act * (DOOMPERF_VENT_PERIOD - 1)) / 1000;
++    if (period < 1)
++	period = 1;
++    if (leveltime % period)
++	return;
++
++    for (i = 0; i < numsectors; i++)
++    {
++	if (sectors[i].tag != DOOMPERF_MEMORY_VENT_TAG)
++	    continue;
++	// soundorg is the sector's bounding-box centre, filled in at level load, so the
++	// vent needs no hardcoded coordinates.
++	puff = P_SpawnMobj (sectors[i].soundorg.x,
++			    sectors[i].soundorg.y,
++			    sectors[i].floorheight + DOOMPERF_VENT_Z,
++			    MT_PUFF);
++	if (!puff)
++	    continue;
++	puff->momz = DOOMPERF_VENT_RISE;
++	// Drift sideways a little so the plume spreads instead of stacking in a column.
++	puff->momx = ((P_Random () - P_Random ()) << 8);
++	puff->momy = ((P_Random () - P_Random ()) << 8);
++	puff->tics += DOOMPERF_VENT_LIFE;
++    }
++}
++
++// Doom Perf: scroll the reclaim sluice's WATERFALL. Every sidedef whose lower
++// texture is the fall texture (the inflow spout + the outflow pit, DPMFALL) has its
++// row offset walked DOWN each tic (rowoffset -=, since a rising rowoffset scrolls the
++// pattern upward), so the nukage appears to pour steadily down into the pool / abyss.
++// Found by texture name, so the cascade needs no line tags. Only fall-riser sidedefs
++// carry DPMFALL as their BOTTOM texture and those edges have no top texture (their
++// neighbours share the room ceiling), so nothing else rides the scroll.
++void DoomPerf_UpdateMemoryFalls (void)
++{
++    static int	fall_tex = -2;
++    int		i;
++
++    if (fall_tex == -2)
++	fall_tex = R_CheckTextureNumForName("DPMFALL");
++    if (fall_tex < 0)
++	return;
++    for (i = 0; i < numsides; i++)
++    {
++	if (sides[i].bottomtexture == fall_tex)
++	    sides[i].rowoffset -= DOOMPERF_MEMORY_FALL_SPEED;
 +    }
 +}
 +
@@ -1547,6 +1805,14 @@
 +#define DOOMPERF_SPIRE_LEAD	(ANG45)			// entry angle, upwind of the slot
 +#define DOOMPERF_SPIRE_RISE	(260 * FRACUNIT)	// courier spawn height above its slot
 +#define DOOMPERF_SPIRE_LIFTZ	(6 * FRACUNIT)		// freed-book rise / tic
++// Dissolve/materialize fade for the flying books (see R_ProjectSprite). A book is
++// darkened through the COLORMAP by a level in [0..FADE_MAX] so it melts into the
++// dark shaft: a courier resolves from faded to solid as its radius closes on the
++// shelf (this value stored in mobj->reactiontime, read by the renderer), and a
++// freed book dissolves the other way by its LIFT-state progress (the renderer
++// derives that itself). FADE_MAX MUST match the renderer's cap (32 COLORMAP maps,
++// 0=fullbright .. 31=near black).
++#define DOOMPERF_SPIRE_FADE_MAX	31
 +#define DOOMPERF_SPIRE_MAXSPAWN	3			// couriers launched per tic (perf + cadence)
 +#define DOOMPERF_SPIRE_MAXFREE	3			// books lifted per tic
 +#define DOOMPERF_SPIRE_DEADBAND	3			// slots of jitter the fill ignores
@@ -1666,6 +1932,19 @@
 +    mo->angle = ang;
 +    DoomPerf_SpireSetRadius (mo, r);
 +
++    // Materialize: fade from FADE_MAX out in the dark (r == R_DARK) to solid at
++    // the shelf (r == R). The renderer reads this off reactiontime; at landing r
++    // has closed to R, so the book is already solid (fade 0) as it settles.
++    {
++	int	span = DOOMPERF_SPIRE_R_DARK - DOOMPERF_SPIRE_R;
++	int	out = (r >> FRACBITS) - DOOMPERF_SPIRE_R;
++	int	fade = (span > 0) ? (out * DOOMPERF_SPIRE_FADE_MAX) / span : 0;
++
++	if (fade < 0) fade = 0;
++	else if (fade > DOOMPERF_SPIRE_FADE_MAX) fade = DOOMPERF_SPIRE_FADE_MAX;
++	mo->reactiontime = fade;
++    }
++
 +    landed = (ang == target && r == (DOOMPERF_SPIRE_R << FRACBITS) && mo->z == tz);
 +
 +    P_UnsetThingPosition (mo);
@@ -1721,6 +2000,27 @@
 +    mo->momx = mo->momy = mo->momz = 0;
 +    mo->angle = entry;
 +    DoomPerf_SpireSetRadius (mo, DOOMPERF_SPIRE_R_DARK << FRACBITS);
++    mo->reactiontime = DOOMPERF_SPIRE_FADE_MAX;	// spawns fully faded, out in the dark
++    return mo;
++}
++
++// Place a book already shelved on slot `k`: at its exact board position and in
++// the static shelved state, skipping the courier flight entirely. Used to stock
++// the whole spire in a single tic when the level first loads (the prime pass in
++// DoomPerf_UpdateMemorySpire), so the gauge reads as fully populated the instant
++// the player can see it rather than assembling itself in front of them.
++static mobj_t* DoomPerf_SpireShelve (int k, mobjtype_t type)
++{
++    fixed_t	tx, ty, tz;
++    mobj_t*	mo;
++
++    DoomPerf_SpireSlot (k, &tx, &ty, &tz);
++    mo = P_SpawnMobj (tx, ty, tz, type);
++    mo->momx = mo->momy = mo->momz = 0;
++    mo->angle = DoomPerf_SpireAngle (k);
++    DoomPerf_SpireSetRadius (mo, DOOMPERF_SPIRE_R << FRACBITS);
++    mo->reactiontime = 0;		// primed books are already home: fully solid
++    P_SetMobjState (mo, (type == MT_DP_MEMBOOK) ? S_DP_MEMBOOK : S_DP_MEMBOOKC);
 +    return mo;
 +}
 +
@@ -1730,6 +2030,7 @@
 +    static int		cur_green = 0;
 +    static int		cur_blue = 0;
 +    static int		cap_ready = 0;
++    static int		primed = 0;
 +    static int		churn_timer = DOOMPERF_SPIRE_CHURN_SLOW;
 +    int			util, cache, green, blue, filled;
 +    int			churn, interval;
@@ -1744,6 +2045,7 @@
 +	cur_green = 0;
 +	cur_blue = 0;
 +	cap_ready = 0;
++	primed = 0;
 +	churn_timer = DOOMPERF_SPIRE_CHURN_SLOW;
 +    }
 +
@@ -1768,6 +2070,30 @@
 +    blue = (cache * DOOMPERF_SPIRE_SLOTS + 500) / 1000;
 +    if (blue > DOOMPERF_SPIRE_SLOTS - green)
 +	blue = DOOMPERF_SPIRE_SLOTS - green;
++
++    // First populated tic after a level (re)load: stock the whole current fill
++    // instantly (books shelved directly in place) rather than flying couriers in
++    // over the next several seconds. A player who beelines into the memory wing
++    // right after the level loads then finds the spire already stocked, not
++    // mid-assembly. We hold off until the first tic with a non-empty target, so a
++    // pre-telemetry tic (util still 0 before the browser's first push) can't prime
++    // an empty spire and latch it. Every level (re)load re-primes -- and a sim
++    // switch is a full G_DeferedInitNew that respawns the player back at the hub,
++    // so this snap is never seen happening. Live changes AFTER the prime still
++    // animate as couriers/lifts; only the initial stock is snapped into place.
++    if (!primed)
++    {
++	if (green + blue == 0)
++	    return;			// telemetry not in yet: stock nothing, wait
++	cur_green = green;
++	cur_blue = blue;
++	filled = cur_green + cur_blue;
++	for (k = 0; k < filled; k++)
++	    books[k] = DoomPerf_SpireShelve (k, (k < cur_green) ? MT_DP_MEMBOOK
++							        : MT_DP_MEMBOOKC);
++	primed = 1;
++	return;
++    }
 +
 +    // Ease the target composition toward the live value, but only once it has
 +    // moved beyond a DEADBAND -- the memory sims synthesize the utilization with a
@@ -1888,10 +2214,168 @@
 +		      (DOOMPERF_NET_CAP * DoomPerf_ISqrt (tx * 1000)) / 1000);
 +}
 +
++// Doom Perf: THE FAULT RANGE VOLLEY (memory wing, Station C). Page faults are a
++// RATE, and what makes a MINOR fault cheap and a MAJOR fault expensive is DISTANCE:
++// a minor fault resolves in RAM, a major fault goes all the way to disk. The fault
++// gallery is a run-queue-style T: the player watches side-on from a raised overlook
++// as beam-bolts (MT_DP_PGFAULT) fly ACROSS a sunken trench (world +x, along the
++// line y=-913, the trench centre). Minor bolts burst at the RAM GATE (x=1560), major
++// bolts break through to the far DISK WALL (x=1780). Each then returns to the -x
++// emitter (x=1420), so the round-trip flight IS the fault's latency -- a minor
++// snaps back at once, a major crosses the whole trench and back. Spawn cadence
++// tracks the live minflt/majflt rate; a burst spawns an impact flare and flashes
++// its surface's sector (549 RAM side / 550 disk side). The bolts are NOCLIP, so the
++// player -- held on the overlook by the trench rail -- watches them freely.
++#define DOOMPERF_FAULT_Y	(-913 * FRACUNIT)	// firing line world y (trench centre)
++#define DOOMPERF_FAULT_EMIT_X	(1310 * FRACUNIT)	// emitter: the -v end of the (elongated) trench
++#define DOOMPERF_FAULT_MINOR_X	(1600 * FRACUNIT)	// minor bolts burst at the RAM gate (centre)
++#define DOOMPERF_FAULT_MAJOR_X	(1890 * FRACUNIT)	// major bolts strike the far disk wall
++#define DOOMPERF_FAULT_Z	(-24 * FRACUNIT)	// beam height (trench floor -48 + 24)
++#define DOOMPERF_FAULT_SPEED	(12 * FRACUNIT)		// bolt glide / tic (readable travel)
++#define DOOMPERF_FAULT_CAP	8			// max bolts in flight per class
++// So bolts don't march on one line: each spawns at a random depth (world y, across
++// the trench) and a small height jitter (z), for a scatter that fills the trench
++// under load. A bolt keeps its y/z for its whole out-and-back flight.
++#define DOOMPERF_FAULT_LANE	(100 * FRACUNIT)	// +/- world-y spread across the trench depth
++#define DOOMPERF_FAULT_ZJIT	(12 * FRACUNIT)		// +/- z scatter
++
++static mobj_t*	doomperf_fault_minor[DOOMPERF_FAULT_CAP];
++static mobj_t*	doomperf_fault_major[DOOMPERF_FAULT_CAP];
++static int	doomperf_fault_minor_gap;	// tics until the next minor bolt
++static int	doomperf_fault_major_gap;	// tics until the next major bolt
++
++// Tics between bolts for a fault rate (permille): a sqrt gradient so light churn
++// still trickles, tightening to a fast staccato under load, none at zero. Jittered
++// so the volley clumps rather than ticking like a metronome.
++static int DoomPerf_FaultInterval (int rate)
++{
++    int		s;
++    int		iv;
++
++    if (rate <= 0)
++	return 9999;
++    s = DoomPerf_ISqrt (rate * 1000);		// ~sqrt(rate/1000) * 1000, in [1,1000]
++    iv = 6000 / (s + 30);			// ~6 tics at full rate .. ~60 near zero
++    if (iv < 4)
++	iv = 4;
++    if (iv > 60)
++	iv = 60;
++    iv = (iv * (80 + (P_Random () % 80))) / 100;	// 0.8x .. 1.6x bursty jitter
++    return (iv < 3) ? 3 : iv;
++}
++
++// One class of fault (minor or major): compact the pool, drive each live bolt out
++// to `targetX` (world +x, across the trench) and back, burst + flash `glow` on
++// arrival, and spawn fresh bolts at the rate wearing this class's `look` (state).
++// `mo->movedir` is the phase (0 = outbound, 1 = returning home).
++static void DoomPerf_FaultLane (mobj_t** pool, int* gap, fixed_t targetX,
++				int* glow, statenum_t look, int rate)
++{
++    int		i;
++    int		w;
++    int		alive;
++    mobj_t*	mo;
++
++    w = 0;
++    for (i = 0; i < DOOMPERF_FAULT_CAP; i++)
++    {
++	mo = pool[i];
++	if (!mo)
++	    continue;
++	if (mo->thinker.function.acv == (actionf_v)(-1))
++	    continue;		// freed elsewhere (e.g. level reload)
++
++	if (mo->movedir == 0)
++	{
++	    // Outbound: glide +x across the trench toward the surface. On arrival,
++	    // flare + flash and turn for home.
++	    mo->momx = DOOMPERF_FAULT_SPEED;
++	    mo->momy = 0;
++	    if (mo->x >= targetX)
++	    {
++		mobj_t*	flare = P_SpawnMobj (targetX, mo->y, mo->z,
++					     MT_DP_PGFAULT);
++		// Impact style: the expanding RIPPLE (the other three chains --
++		// bloom/implode/spark -- remain defined but dormant).
++		P_SetMobjState (flare, S_DP_PGFAULT_BURST1);
++		*glow = DOOMPERF_FAULT_GLOW_MAX;
++		mo->movedir = 1;
++		mo->momx = -DOOMPERF_FAULT_SPEED;
++	    }
++	}
++	else
++	{
++	    // Returning: glide -x back to the emitter, then gone (the fault served).
++	    mo->momx = -DOOMPERF_FAULT_SPEED;
++	    mo->momy = 0;
++	    if (mo->x <= DOOMPERF_FAULT_EMIT_X)
++	    {
++		P_RemoveMobj (mo);
++		continue;
++	    }
++	}
++	pool[w++] = mo;
++    }
++    for (i = w; i < DOOMPERF_FAULT_CAP; i++)
++	pool[i] = NULL;
++    alive = w;
++
++    if (*gap > 0)
++	(*gap)--;
++    if (rate > 0 && alive < DOOMPERF_FAULT_CAP && *gap <= 0)
++    {
++	fixed_t	y = DOOMPERF_FAULT_Y + ((P_Random () - 128) * DOOMPERF_FAULT_LANE) / 128;
++	fixed_t	z = DOOMPERF_FAULT_Z + ((P_Random () - 128) * DOOMPERF_FAULT_ZJIT) / 128;
++
++	mo = P_SpawnMobj (DOOMPERF_FAULT_EMIT_X, y, z, MT_DP_PGFAULT);
++	P_SetMobjState (mo, look); // this class's look: MINOR = violet streak, MAJOR = electric arc
++	mo->movedir = 0;
++	mo->momx = DOOMPERF_FAULT_SPEED;
++	pool[alive] = mo;
++	*gap = DoomPerf_FaultInterval (rate);
++    }
++}
++
++void DoomPerf_FaultVolley (void)
++{
++    int		i;
++
++    // Level reload frees every mobj; drop the dangling pool refs on the first tic.
++    if (leveltime == 0)
++    {
++	for (i = 0; i < DOOMPERF_FAULT_CAP; i++)
++	{
++	    doomperf_fault_minor[i] = NULL;
++	    doomperf_fault_major[i] = NULL;
++	}
++	doomperf_fault_minor_gap = 0;
++	doomperf_fault_major_gap = 0;
++	doomperf_fault_holo_glow = 0;
++	doomperf_fault_wall_glow = 0;
++    }
++
++    // Ease both surface glows back toward ambient; a burst re-lights them below.
++    doomperf_fault_holo_glow -= DOOMPERF_FAULT_GLOW_DECAY;
++    if (doomperf_fault_holo_glow < 0)
++	doomperf_fault_holo_glow = 0;
++    doomperf_fault_wall_glow -= DOOMPERF_FAULT_GLOW_DECAY;
++    if (doomperf_fault_wall_glow < 0)
++	doomperf_fault_wall_glow = 0;
++
++    DoomPerf_FaultLane (doomperf_fault_minor, &doomperf_fault_minor_gap,
++			DOOMPERF_FAULT_MINOR_X, &doomperf_fault_holo_glow,
++			S_DP_PGFAULT_STREAK, // MINOR = violet plasma streak
++			DoomPerf_Clamp1000 (DoomPerf_EffectiveMemoryMinFlt ()));
++    DoomPerf_FaultLane (doomperf_fault_major, &doomperf_fault_major_gap,
++			DOOMPERF_FAULT_MAJOR_X, &doomperf_fault_wall_glow,
++			S_DP_PGFAULT_ARC1, // MAJOR = flickering electric arc
++			DoomPerf_Clamp1000 (DoomPerf_EffectiveMemoryMajFlt ()));
++}
++
  //
  // THINKERS
  // All thinkers should be allocated by Z_Malloc
-@@ -130,11 +1985,11 @@
+@@ -130,11 +2468,11 @@
  void P_Ticker (void)
  {
      int		i;
@@ -1905,7 +2389,7 @@
      // pause if in menu and at least one tic has been run
      if ( !netgame
  	 && menuactive
-@@ -143,16 +1998,27 @@
+@@ -143,16 +2481,30 @@
      {
  	return;
      }
@@ -1919,8 +2403,11 @@
 +    DoomPerf_UpdateDiskUsage ();
 +    DoomPerf_UpdateDiskDevices ();
 +    DoomPerf_UpdateMemoryWing ();
++    DoomPerf_UpdateMemoryFalls ();
++    DoomPerf_UpdateSwapVent ();
 +    DoomPerf_UpdateOomBaron ();
 +    DoomPerf_UpdateMemorySpire ();
++    DoomPerf_FaultVolley ();
 +    DoomPerf_UpdateRunQueueParticles ();
 +    DoomPerf_UpdateNetworkPackets ();
 +

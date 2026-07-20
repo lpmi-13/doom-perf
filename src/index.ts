@@ -175,6 +175,29 @@ const applyPsiOverride = (telemetry: TelemetrySnapshot): TelemetrySnapshot =>
     ? { ...telemetry, memory: { ...telemetry.memory, pressureAvailable: false } }
     : telemetry;
 
+// ?swap=off renders the wing as if the host had no swap device configured, so the
+// reclaim sluice's swap tributary (its sealed-dry state) and the memory terminal's
+// "swap: not configured" line can be checked without finding a swapless host.
+// Unlike ?psi=off this feeds the ENGINE too (not just the terminal), so the
+// tributary geometry actually seals. Live mode only in practice: sims 5/6 force a
+// swap-backed host engine-side.
+const swapDisabled = new URLSearchParams(window.location.search).get("swap") === "off";
+const applySwapOverride = (telemetry: TelemetrySnapshot): TelemetrySnapshot =>
+  swapDisabled
+    ? {
+        ...telemetry,
+        memory: {
+          ...telemetry.memory,
+          swapTotalBytes: 0,
+          swapFreeBytes: 0,
+          swapUsedBytes: 0,
+          swapInPagesPerSecond: 0,
+          swapOutPagesPerSecond: 0,
+          swapPagesPerSecond: 0,
+        },
+      }
+    : telemetry;
+
 const wadParam = new URLSearchParams(window.location.search).get("wad")?.toLowerCase();
 const wadMap: Record<string, string> = {
   freedoom1: "/wads/freedoom1.wad",
@@ -242,6 +265,11 @@ type DoomPerfEngine = {
   // minor/major fault meters in the memory wing.
   _DoomPerf_SetMemoryMinorFaults?: (permille: number) => void;
   _DoomPerf_SetMemoryMajorFaults?: (permille: number) => void;
+  // Reclaim sluice swap tributary: whether a swap device is configured (0 seals the
+  // channel dry so a swapless host reads unmistakably) and the swap si+so paging
+  // rate (permille) glowing the channel when present.
+  _DoomPerf_SetMemorySwapPresent?: (present: number) => void;
+  _DoomPerf_SetMemorySwapActivity?: (permille: number) => void;
   // Fire the Baron-of-Hell OOM-kill event: the baron walks to reliquary barrel
   // `slot` (0 = largest resident set) and detonates it. Called when the live
   // oom_kill counter increments; the memory saturation sim self-fires it engine-side.
@@ -377,6 +405,18 @@ const pushTelemetryToEngine = (
   );
   engine?._DoomPerf_SetMemoryMajorFaults?.(
     Math.round(clampRatio((telemetry.memory.majorFaultsPerSecond ?? 0) / 200) * 1000)
+  );
+  // Reclaim sluice swap TRIBUTARY: whether swap is configured (swapTotalBytes > 0)
+  // so a swapless host seals the channel dry, plus the swap si+so paging rate as
+  // permille of a 2500 pages/s reference to glow it when present. Sims 5/6 assume a
+  // swap-backed host engine-side.
+  engine?._DoomPerf_SetMemorySwapPresent?.((telemetry.memory.swapTotalBytes ?? 0) > 0 ? 1 : 0);
+  engine?._DoomPerf_SetMemorySwapActivity?.(
+    Math.round(
+      clampRatio(
+        ((telemetry.memory.swapInPagesPerSecond ?? 0) + (telemetry.memory.swapOutPagesPerSecond ?? 0)) / 2500
+      ) * 1000
+    )
   );
   // OOM-kill event: when the live oom_kill counter rises, send the Baron after the
   // hottest resident-set barrel (highest oom_score = the kernel's likeliest victim).
@@ -1001,8 +1041,11 @@ const start = async () => {
       // Live host values reach the engine only in live mode. isLive tracks which
       // snapshot we actually push, so the OOM-kill event stays tied to live data.
       if (lastEffectiveTelemetry) {
-        pushTelemetryToEngine(engine, lastEffectiveTelemetry, lastScenario === undefined);
-        terminal.update(applyPsiOverride(lastEffectiveTelemetry));
+        // ?swap=off seals the swap tributary, so it must reach the engine feed too,
+        // not just the terminal (unlike ?psi=off, which is display-only).
+        const shown = applySwapOverride(lastEffectiveTelemetry);
+        pushTelemetryToEngine(engine, shown, lastScenario === undefined);
+        terminal.update(applyPsiOverride(shown));
       }
     };
 
