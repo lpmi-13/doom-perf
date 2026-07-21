@@ -75,9 +75,9 @@ export const mapManifest = {
       "segments": [
         {
           "ax": 1472,
-          "ay": 1045,
+          "ay": 1109,
           "bx": 1728,
-          "by": 1045
+          "by": 1109
         }
       ]
     },

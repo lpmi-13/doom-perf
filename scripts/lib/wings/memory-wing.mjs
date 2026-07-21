@@ -125,8 +125,14 @@ const FAR = { u1: -288, u2: 288, v1: wellOct[1][1], v2: wellOct[1][1] + 320 }; /
 const FAR_TC = Math.round((FAR.v1 + FAR.v2) / 2); // 2277
 // The sluice pod is deeper (u) and longer to the south (v) than the other pods: the
 // south wall has to carry the vent duct, the SWAP plate and the inflow spout side by
-// side, and the outlet needs room to be a wide spillway rather than a slot.
-const LEFT = { u1: wellOct[3][0] - 512, u2: wellOct[3][0], v1: SC - 200, v2: SC + 160 }; // -1029..-517, 1400..1760
+// side, and the outlet needs room to be a wide spillway rather than a slot. It is also
+// deeper (u) and longer to the north (v) than the pool needs, so the walkway that rings
+// the pool is a full catwalk width (SLUICE_WALK) rather than a ledge you sidle along —
+// the back leg is the approach to the swap terminal and has to be stood in comfortably.
+// v2 must stay south of the well's left face corner (wellOct[3][1] = 1814) or the pod's
+// north wall would overrun the void wedge it borders.
+const SLUICE_WALK = 2 * CWH; // 128: back + north walkways around the pool
+const LEFT = { u1: wellOct[3][0] - 576, u2: wellOct[3][0], v1: SC - 200, v2: SC + 192 }; // -1093..-517, 1400..1792
 // ===== FAULT RANGE (right pod) — a T-gallery, run-queue style. A raised OVERLOOK
 // (floor 0) where the player enters and walks, beside a sunken firing TRENCH that
 // runs left-right along v: the emitter sits at the -v end, bolts fly +v, minor
@@ -200,6 +206,19 @@ const cardCatalogTexture = { texture: wingName("memory", "CCAT"), patch: wingNam
 // scrolls every sidedef wearing it downward each tic (found by name in
 // DoomPerf_UpdateMemoryFalls), so the still texture only has to read as falling water.
 const fallTexture = { texture: wingName("memory", "FALL"), patch: wingName("memory", "PFAL"), width: 64, height: 128 };
+// The cascade comes in the same three TEMPERS as the pool surface, and the engine
+// swaps them onto the fall sidedefs from the same fill reading that picks the pool
+// flat — so the falling water is always the colour of the water it is falling out of.
+// (Without this the pool reddens toward the OOM brim while its own outflow stays
+// nukage green, which reads as two different fluids.) Doom's palette carries each hue
+// as a 16-entry ramp that darkens with index — green 112, red 176, amber 208 — so one
+// authored pattern of ramp OFFSETS recolours by moving its base. Amber bases at 210
+// rather than 208 because 208 is pure white and blows the cascade's crests out.
+const fallTempers = [
+  { ...fallTexture, ramp: 112 }, // calm green (the name the map itself wears)
+  { ...fallTexture, texture: wingName("memory", "FALA"), patch: wingName("memory", "PFLA"), ramp: 210 }, // amber
+  { ...fallTexture, texture: wingName("memory", "FALR"), patch: wingName("memory", "PFLR"), ramp: 176 }, // hot red
+];
 // The "SWAP" plate beside the relief vent. Both dimensions MUST be powers of two and
 // MUST equal the recess face it is hung on (128 wide x 128 floor-to-ceiling). Doom
 // masks wall columns to a power of two — r_data.c sets texturewidthmask to the largest
@@ -837,25 +856,28 @@ const buildAbyssWallPatch = () => {
 // the ~2000-unit drop into the abyss. DoomPerf_UpdateMemoryFalls scrolls every
 // sidedef wearing it downward each tic, so the still image only needs to read as
 // falling water; the motion is the engine's.
-const buildFallPatch = () => {
+// `ramp` is the palette index the hue's 16-shade ramp starts at; every colour below is
+// an OFFSET into it (0 = brightest), so the identical pattern renders green, amber or
+// red. Offsets stay within 0..12, which keeps all three tempers inside their ramp.
+const buildFallPatch = (ramp) => {
   const W = fallTexture.width;
   const H = fallTexture.height;
-  const px = new Uint8Array(W * H).fill(123); // deep nukage green
+  const px = new Uint8Array(W * H).fill(ramp + 11); // deep body of the water
   const col = (x, w, c) => {
     for (let y = 0; y < H; y += 1) {
       for (let xx = Math.max(0, x); xx < Math.min(W, x + w); xx += 1) px[y * W + xx] = c;
     }
   };
-  // Ropes of falling water: vertical bands in a few green shades (lower palette
-  // index = brighter along Doom's green ramp), a couple carrying a bright crest.
-  const streaks = [[1, 3, 120], [7, 2, 116], [12, 4, 124], [19, 3, 118], [25, 2, 112], [31, 5, 122], [39, 2, 116], [44, 4, 119], [52, 3, 124], [57, 4, 120]];
-  for (const [x, w, c] of streaks) col(x, w, c);
+  // Ropes of falling water: vertical bands in a few shades of the hue, a couple
+  // carrying a bright crest.
+  const streaks = [[1, 3, 8], [7, 2, 4], [12, 4, 12], [19, 3, 6], [25, 2, 0], [31, 5, 10], [39, 2, 4], [44, 4, 7], [52, 3, 12], [57, 4, 8]];
+  for (const [x, w, c] of streaks) col(x, w, ramp + c);
   // Broken glints so the scroll sparkles rather than reading as flat bars.
   for (let i = 0; i < 90; i += 1) {
     const x = (i * 37) % W;
     const y = (i * 53) % H;
-    px[y * W + x] = 112;
-    if (x + 1 < W) px[y * W + x + 1] = 116;
+    px[y * W + x] = ramp;
+    if (x + 1 < W) px[y * W + x + 1] = ramp + 4;
   }
   return buildPatch(px, W, H);
 };
@@ -1161,11 +1183,6 @@ const build = (ctx) => {
   // — every catwalk/platform/pod edge that falls away into it.
   const voidStyle = { ...shaft, kind: "void", floor: ABYSS, floorFlat: "FLOOR7_2", light: 112, riserWall: abyssWallTexture.texture };
   const podStyle = { ...mbase, kind: "memory-walk", floor: WALK, light: 180 };
-  // The reclaim sluice's OUTFLOW PIT: a dedicated abyss cell at the pod's SE corner
-  // whose walls + risers wear the falling-nukage texture, so the pool's drain-off
-  // pours over the gate into it (and on into the well) as a localized cascade. ONLY
-  // this pit + the inflow spout wear the fall texture — it never bleeds onto the
-  // catwalk. The engine scrolls it downward for the motion.
 
   // A shallow control-panel terminal recess whose one-sided far wall is the
   // screen. `local` is the recess's local screen side ("left"/"right"); the riser
@@ -1298,6 +1315,19 @@ const build = (ctx) => {
   const VENT_H = 96; //     vent mouth sits at the head of the stand pipe, well clear of the water
   const SPOUT_H = 16; //    inflow spout sits above the pool and pours down into it
   const sluiceWalk = { ...podStyle, light: 178 };
+  // The entrance LEDGE is the one sluice walkway that owns a one-sided wall: the
+  // barrier's exposed north END CAP. The barrier band is un-sectored, so its cap is
+  // worn by whichever sector abuts it — and that cap is part of the GATE, so it takes
+  // the abyss wall rather than the walkway's inherited bookshelf, matching the slot
+  // flanks. (Every other ledge edge is a two-sided seam; its `wall` shows nowhere else.)
+  // `riserWall` settles what the ledge shows on its UNDERSIDE where it overhangs the
+  // outflow pit and the tailwater: abyss masonry, like every other walkway edge that
+  // falls away into the void. It has to be stated here rather than inherited, because
+  // the neighbour normally names the riser (`other.riserWall` is resolved first) and
+  // the pit names the WATERFALL — correct for the drain's lip it was built for, but it
+  // would otherwise sheet water down the mouth's north jamb, out from under a walkway
+  // with nothing above it to pour.
+  const gateLedge = { ...sluiceWalk, wall: abyssWallTexture.texture, riserWall: abyssWallTexture.texture };
   const fluidBase = { ...podStyle, kind: "memory-sluice", floorFlat: "NUKAGE1", blockEdge: true, light: 176 };
   // Pool basin walls are STONE (a cistern), not the library shelves, so the tank
   // reads as a contained pool rather than a flooded bookcase. No riserWall: that
@@ -1330,24 +1360,45 @@ const build = (ctx) => {
   // aperture can pass. Room-height ceiling (matching pool and tailwater) is
   // deliberate: a ceiling step here would put a top texture on the same sidedef as the
   // scrolling fall riser, and rowoffset would drag the bookshelves down with the water
-  // (see the falls note). `riserWall` gives the drop into each slot its cascade.
-  const slotStyle = { ...podStyle, kind: "memory-sluice", floorFlat: poolFlatNames.calm, riserWall: fallTexture.texture, blockEdge: true, floor: SILL_H, light: 150, tag: memoryTags.drainSlots };
+  // (see the falls note). `riserWall` gives the drop into each slot its cascade, and
+  // `wall` — worn by each slot's two one-sided pier flanks, the only thing you see
+  // looking into a gate — is the ABYSS wall, not the inherited bookshelf: a gate cut
+  // through a dam is masonry in shadow, the same near-black as every catwalk underside.
+  const slotStyle = { ...podStyle, kind: "memory-sluice", wall: abyssWallTexture.texture, floorFlat: poolFlatNames.calm, riserWall: fallTexture.texture, blockEdge: true, floor: SILL_H, light: 150, tag: memoryTags.drainSlots };
   // TAILWATER drain below the weir: the pool's outflow collects here, so the engine
   // paints it the SAME colour as the pool. Its well-facing edge keeps the dark abyss
   // wall (the void's riserWall wins), so no green leaks outside the pod.
   const drainStyle = { ...fluidBase, floor: -88, floorFlat: poolFlatNames.calm, wall: "STONE2", light: 150, tag: memoryTags.drain };
+  // OUTFLOW PIT: the lip the tailwater pours over. A dedicated ABYSS cell carved off
+  // the drain's well-facing edge, so what the well sees under the pod's mouth is a
+  // ~1960-unit cascade falling all the way to the bottom of the shaft, not a dead
+  // black wall. Two things make it a separate sector rather than a fall texture on the
+  // pod mouth itself:
+  //   1. DoomPerf_UpdateMemoryFalls walks the rowoffset of every sidedef whose BOTTOM
+  //      texture is DPMFALL, and a rowoffset drags that sidedef's TOP with it. So the
+  //      falling face must sit on a sidedef with NO top texture — i.e. between two
+  //      sectors that share a ceiling. The pit takes the pod's ROOM_CEIL, so its seam
+  //      with the drain (and with the ledge above) is ceiling-flush and scrolls clean.
+  //   2. That parks the mouth's ceiling step on the pit/void seam instead, where the
+  //      floors are both ABYSS and there is no bottom texture to scroll — so the
+  //      shaft's bookshelf lintel above the opening still renders, and stays put.
+  // Its floor is the abyss itself, so the drop is bottomless; `light` matches the
+  // tailwater it spills from rather than the void's gloom, or the fall reads as unlit.
+  const LIP_D = 32; // pit depth: how far back from the shaft wall the lip sits
+  const pitStyle = { ...voidStyle, wall: abyssWallTexture.texture, ceiling: ROOM_CEIL, light: 150, riserWall: fallTexture.texture };
 
   // Walkways (floor 0). The entrance ledge starts exactly at the catwalk's south edge
   // (SC - CWH) so that arriving down the catwalk there is nothing to step onto on the
   // LEFT — that side is the spillway — and the only way on is to turn right (north)
   // toward the terminal.
   const OUTLET_V = SC - CWH; // spillway occupies everything south of the entrance
-  areaRect(direction, "sluice-back", { u1: LEFT.u1, v1: LEFT.v1, u2: LEFT.u1 + 64, v2: LEFT.v2 }, sluiceWalk);
-  areaRect(direction, "sluice-north", { u1: LEFT.u1 + 64, v1: SC + CWH, u2: LEFT.u2, v2: LEFT.v2 }, sluiceWalk);
-  areaRect(direction, "sluice-ledge", { u1: LEFT.u2 - 96, v1: OUTLET_V, u2: LEFT.u2, v2: SC + CWH }, sluiceWalk);
+  const POOL_U1 = LEFT.u1 + SLUICE_WALK; // pool's back (west) edge; the south-wall fittings hang off it
+  areaRect(direction, "sluice-back", { u1: LEFT.u1, v1: LEFT.v1, u2: POOL_U1, v2: LEFT.v2 }, sluiceWalk);
+  areaRect(direction, "sluice-north", { u1: POOL_U1, v1: SC + CWH, u2: LEFT.u2, v2: LEFT.v2 }, sluiceWalk);
+  areaRect(direction, "sluice-ledge", { u1: LEFT.u2 - 96, v1: OUTLET_V, u2: LEFT.u2, v2: SC + CWH }, gateLedge);
   // The POOL basin (overlooked from back / north / ledge), one clean rect — the pipe
   // now lives in its own alcove rather than standing out in the middle of the water.
-  areaRect(direction, "sluice-pool", { u1: LEFT.u1 + 64, v1: LEFT.v1, u2: LEFT.u2 - 96, v2: SC + CWH }, poolStyle);
+  areaRect(direction, "sluice-pool", { u1: POOL_U1, v1: LEFT.v1, u2: LEFT.u2 - 96, v2: SC + CWH }, poolStyle);
   // South wall, west to east across the pool's 352-unit face: the SWAP duct, its
   // placard, then the (now broad) inflow spout — spaced so none of them touch.
   // The VENT ALCOVE: a deep bay cut back into the south wall that the stand pipe sits
@@ -1355,11 +1406,11 @@ const build = (ctx) => {
   // water. The bay floor is part of the basin (same pool tag + style), so water fills
   // it and rises with the rest; the pipe is a raised island in the middle of it,
   // leaving a margin of water on all four sides.
-  const BAY_U1 = LEFT.u1 + 72;
-  const BAY_U2 = LEFT.u1 + 168;
+  const BAY_U1 = POOL_U1 + 8;
+  const BAY_U2 = POOL_U1 + 104;
   const BAY_V1 = LEFT.v1 - 96; // 96 deep into the wall
-  const PIPE_U1 = LEFT.u1 + 88;
-  const PIPE_U2 = LEFT.u1 + 152;
+  const PIPE_U1 = POOL_U1 + 24;
+  const PIPE_U2 = POOL_U1 + 88;
   const PIPE_V1 = BAY_V1 + 16;
   const PIPE_V2 = PIPE_V1 + 64;
   areaRect(direction, "sluice-bay-back", { u1: BAY_U1, v1: BAY_V1, u2: BAY_U2, v2: PIPE_V1 }, poolStyle);
@@ -1367,8 +1418,8 @@ const build = (ctx) => {
   areaRect(direction, "sluice-bay-e", { u1: PIPE_U2, v1: PIPE_V1, u2: BAY_U2, v2: PIPE_V2 }, poolStyle);
   areaRect(direction, "sluice-bay-front", { u1: BAY_U1, v1: PIPE_V2, u2: BAY_U2, v2: LEFT.v1 }, poolStyle);
   areaRect(direction, "sluice-pipe", { u1: PIPE_U1, v1: PIPE_V1, u2: PIPE_U2, v2: PIPE_V2 }, pipeStyle);
-  areaRect(direction, "sluice-swap-plate", { u1: LEFT.u1 + 184, v1: LEFT.v1 - 24, u2: LEFT.u1 + 184 + swapSignSize.width, v2: LEFT.v1 }, swapPlateStyle);
-  areaRect(direction, "sluice-inflow", { u1: LEFT.u1 + 328, v1: LEFT.v1 - 32, u2: LEFT.u1 + 408, v2: LEFT.v1 }, inflowStyle);
+  areaRect(direction, "sluice-swap-plate", { u1: POOL_U1 + 120, v1: LEFT.v1 - 24, u2: POOL_U1 + 120 + swapSignSize.width, v2: LEFT.v1 }, swapPlateStyle);
+  areaRect(direction, "sluice-inflow", { u1: POOL_U1 + 264, v1: LEFT.v1 - 32, u2: POOL_U1 + 344, v2: LEFT.v1 }, inflowStyle);
   // The immobile BARRIER across the outlet, pierced by four narrow drain slots. Only
   // the slots are sectors; the band between them is left un-sectored and so renders as
   // solid stone wall. The tailwater beyond collects whatever gets through.
@@ -1382,7 +1433,8 @@ const build = (ctx) => {
     const v1 = LEFT.v1 + slotPier * (s + 1) + SLOT_W * s;
     areaRect(direction, `sluice-slot-${s}`, { u1: BARRIER_U1, v1, u2: BARRIER_U2, v2: v1 + SLOT_W }, slotStyle);
   }
-  areaRect(direction, "sluice-drain", { u1: BARRIER_U2, v1: LEFT.v1, u2: LEFT.u2, v2: OUTLET_V }, drainStyle);
+  areaRect(direction, "sluice-drain", { u1: BARRIER_U2, v1: LEFT.v1, u2: LEFT.u2 - LIP_D, v2: OUTLET_V }, drainStyle);
+  areaRect(direction, "sluice-pit", { u1: LEFT.u2 - LIP_D, v1: LEFT.v1, u2: LEFT.u2, v2: OUTLET_V }, pitStyle);
   terminalRecess("swap", { u1: LEFT.u1 - REC, v1: SC - TERM_HALF, u2: LEFT.u1, v2: SC + TERM_HALF }, memoryScreens.swap, "left");
 
   // ===== RIGHT POD — "the fault gallery" (page faults). A run-queue-style T: a
@@ -1449,13 +1501,13 @@ const textures = [
     height: abyssWallTexture.height,
     build: buildAbyssWallPatch,
   },
-  {
-    texture: fallTexture.texture,
-    patch: fallTexture.patch,
-    width: fallTexture.width,
-    height: fallTexture.height,
-    build: buildFallPatch,
-  },
+  ...fallTempers.map((temper) => ({
+    texture: temper.texture,
+    patch: temper.patch,
+    width: temper.width,
+    height: temper.height,
+    build: () => buildFallPatch(temper.ramp),
+  })),
   {
     texture: swapSign.texture,
     patch: swapSign.patch,

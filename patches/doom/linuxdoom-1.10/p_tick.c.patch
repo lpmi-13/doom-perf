@@ -14,6 +14,7 @@
 #   (+)   disk-wing-rework (df / usage cistern + per-device IOPS bank + real dashboard IOPS)
 #   (+)   memory-well-spire (green/blue book-sprite fill on the central spire)
 #   (+)   memory-sluice-rework (swap channels -> reclaim saturation sluice: pool/dam/tributary/inflow + abyss waterfall)
+#   (+)   memory-fall-temper (cascades recoloured to match the pool surface)
 #
 # Order-independent: this is the only Doom Perf patch that touches p_tick.c.
 # Regenerate by diffing a clean tree against the staged build tree;
@@ -27,7 +28,7 @@
  //-----------------------------------------------------------------------------
  //
  // $Id:$
-@@ -30,9 +30,2347 @@
+@@ -30,9 +30,2390 @@
  
  #include "doomstat.h"
  
@@ -425,6 +426,12 @@
 +static int doomperf_fault_holo_glow;
 +static int doomperf_fault_wall_glow;
 +
++// Which temper (0 green / 1 amber / 2 hot red) the pool surface is painting this tic.
++// DoomPerf_UpdateMemoryWing sets it alongside the pool flat; DoomPerf_UpdateMemoryFalls
++// reads it moments later to dress the cascades in the same colour as the water they
++// pour out of. Kept beside the pool colour thresholds it is derived from.
++static int doomperf_fall_temper;
++
 +static int DoomPerf_EffectiveMemoryUtil (void)
 +{
 +    if (doomperf_sim_mode == 5)
@@ -631,11 +638,20 @@
 +    else if (fill > 1000)
 +	fill = 1000;
 +    if (fill >= DOOMPERF_MEMORY_POOL_HOT)
++    {
 +	pool_flat = flat_poolr;
++	doomperf_fall_temper = 2;
++    }
 +    else if (fill >= DOOMPERF_MEMORY_POOL_WARM)
++    {
 +	pool_flat = flat_poola;
++	doomperf_fall_temper = 1;
++    }
 +    else
++    {
 +	pool_flat = flat_poolg;
++	doomperf_fall_temper = 0;
++    }
 +    // Dim when calm, brightening as it fills; a flicker adds the "glow" once the
 +    // water is running hot so a full brim reads as an angry, live red.
 +    pool_light = 128 + (fill * 124) / 1000;
@@ -901,26 +917,54 @@
 +    }
 +}
 +
-+// Doom Perf: scroll the reclaim sluice's WATERFALL. Every sidedef whose lower
-+// texture is the fall texture (the inflow spout + the outflow pit, DPMFALL) has its
-+// row offset walked DOWN each tic (rowoffset -=, since a rising rowoffset scrolls the
-+// pattern upward), so the nukage appears to pour steadily down into the pool / abyss.
-+// Found by texture name, so the cascade needs no line tags. Only fall-riser sidedefs
-+// carry DPMFALL as their BOTTOM texture and those edges have no top texture (their
-+// neighbours share the room ceiling), so nothing else rides the scroll.
++// Doom Perf: scroll + TEMPER the reclaim sluice's WATERFALL. Every sidedef whose
++// lower texture is a fall texture (the inflow spout, the gate slots and the outflow
++// pit) has its row offset walked DOWN each tic (rowoffset -=, since a rising rowoffset
++// scrolls the pattern upward), so the nukage appears to pour steadily down into the
++// pool / abyss. Found by texture name, so the cascade needs no line tags. Only
++// fall-riser sidedefs carry a fall texture as their BOTTOM texture and those edges have
++// no top texture (their neighbours share the room ceiling), so nothing else rides the
++// scroll.
++//
++// The three tempers (DPMFALL green / DPMFALA amber / DPMFALR red) are the same cascade
++// on the pool surface's three hues. Each tic every fall sidedef is set to whichever one
++// DoomPerf_UpdateMemoryWing just picked for the pool, so the falling water is always
++// the colour of the water it falls out of -- otherwise the pool reddens toward the OOM
++// brim while its own outflow stays green, reading as two different fluids. That
++// ordering is load-bearing: this runs immediately after DoomPerf_UpdateMemoryWing in
++// P_Ticker, so doomperf_fall_temper is this tic's reading, not last tic's.
 +void DoomPerf_UpdateMemoryFalls (void)
 +{
-+    static int	fall_tex = -2;
++    static int	fall_tex[3];
++    static int	tex_ready = 0;
++    int		want;
 +    int		i;
 +
-+    if (fall_tex == -2)
-+	fall_tex = R_CheckTextureNumForName("DPMFALL");
-+    if (fall_tex < 0)
++    if (!tex_ready)
++    {
++	fall_tex[0] = R_CheckTextureNumForName("DPMFALL");
++	fall_tex[1] = R_CheckTextureNumForName("DPMFALA");
++	fall_tex[2] = R_CheckTextureNumForName("DPMFALR");
++	// A map without the recoloured tempers keeps the green cascade rather than
++	// blanking the falls: fall back to the base texture for any that is missing.
++	if (fall_tex[1] < 0)
++	    fall_tex[1] = fall_tex[0];
++	if (fall_tex[2] < 0)
++	    fall_tex[2] = fall_tex[0];
++	tex_ready = 1;
++    }
++    if (fall_tex[0] < 0)
 +	return;
++    want = fall_tex[doomperf_fall_temper];
 +    for (i = 0; i < numsides; i++)
 +    {
-+	if (sides[i].bottomtexture == fall_tex)
++	if (sides[i].bottomtexture == fall_tex[0]
++	    || sides[i].bottomtexture == fall_tex[1]
++	    || sides[i].bottomtexture == fall_tex[2])
++	{
++	    sides[i].bottomtexture = (short)want;
 +	    sides[i].rowoffset -= DOOMPERF_MEMORY_FALL_SPEED;
++	}
 +    }
 +}
 +
@@ -2375,7 +2419,7 @@
  //
  // THINKERS
  // All thinkers should be allocated by Z_Malloc
-@@ -130,11 +2468,11 @@
+@@ -130,11 +2511,11 @@
  void P_Ticker (void)
  {
      int		i;
@@ -2389,7 +2433,7 @@
      // pause if in menu and at least one tic has been run
      if ( !netgame
  	 && menuactive
-@@ -143,16 +2481,30 @@
+@@ -143,16 +2524,30 @@
      {
  	return;
      }
