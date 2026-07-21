@@ -3,7 +3,7 @@
 // telemetry as if it were the output of a Linux diagnostic command. Opened by
 // pressing USE/space near an instrument sign (see src/index.ts).
 // ---------------------------------------------------------------------------
-import type { TelemetrySnapshot, TerminalSign } from "../telemetry/types";
+import type { MemoryTelemetry, TelemetrySnapshot, TerminalSign } from "../telemetry/types";
 import { clamp } from "../telemetry/normalize";
 
 const pctText = (value: number) => `${Math.round(clamp(value) * 100)}`;
@@ -238,6 +238,28 @@ const formatMemoryRss = (telemetry: TelemetrySnapshot): string => {
   return lines.join("\n");
 };
 
+// sar -B's %vmeff: of the pages page-frame reclaim EXAMINED, what share did it
+// actually manage to free. Returns undefined — never 0 — when nothing was scanned,
+// because the ratio is genuinely undefined there and 0% would invert the meaning
+// ("reclaim achieved nothing" vs "reclaim never had to run"). Every caller must
+// handle the undefined case explicitly rather than defaulting it to a number.
+const reclaimEfficiency = (m: MemoryTelemetry): number | undefined => {
+  const scan = rate(m.scanPagesPerSecond);
+  const steal = rate(m.stealPagesPerSecond);
+  if (!(scan > 0)) {
+    return undefined;
+  }
+  return clamp(steal / scan) * 100;
+};
+
+// Plain-language reading for a %vmeff figure. The thresholds are rules of thumb, not
+// kernel constants: healthy reclaim frees most of what it looks at, and efficiency
+// falling away means it is scanning pages it cannot evict.
+const vmeffNote = (vmeff: number): string =>
+  vmeff >= 80 ? "reclaim finding evictable pages easily"
+  : vmeff >= 40 ? "working harder per page freed"
+  : "scanning hard, freeing little — most pages unevictable";
+
 // MEMORY RECLAIM-SLUICE wing terminal — USE saturation as a backlog level. The
 // sluice's pool level IS memory saturation; this terminal shows that scalar plus
 // the signals that drive it: PSI stall time where the kernel exposes it, else a
@@ -255,6 +277,9 @@ const formatMemoryReclaim = (telemetry: TelemetrySnapshot): string => {
   const swapConfigured = (m.swapTotalBytes ?? 0) > 0;
   const si = rate(m.swapInPagesPerSecond);
   const so = rate(m.swapOutPagesPerSecond);
+  const scan = rate(m.scanPagesPerSecond);
+  const steal = rate(m.stealPagesPerSecond);
+  const vmeff = reclaimEfficiency(m);
   const lines: string[] = [];
   lines.push("# reclaim sluice — memory saturation (USE)");
   lines.push(`pool / backlog ${bar(m.saturation)} ${pctText(m.saturation)}%`);
@@ -266,10 +291,35 @@ const formatMemoryReclaim = (telemetry: TelemetrySnapshot): string => {
   } else {
     // No PSI: the backlog is driven by the collector's labelled estimate, rebuilt
     // from the vmstat reclaim events — direct reclaim keeps it alive without swap.
+    // pgscan_direct is printed as well as grepped: the command line used to advertise
+    // a counter the output then dropped.
     lines.push("$ grep -E 'allocstall|workingset_refault|pgscan_direct' /proc/vmstat");
     lines.push(`direct reclaim ${padStart(String(Math.round(rate(m.directReclaimsPerSecond))), 7)} /s`);
     lines.push(`refault        ${padStart(String(Math.round(rate(m.refaultPagesPerSecond))), 7)} /s`);
+    lines.push(`pgscan_direct  ${padStart(String(Math.round(rate(m.directScanPagesPerSecond))), 7)} /s`);
     lines.push(`stall (est.)   ${bar(clamp(rate(m.stallEstimate)))} ${pctText(clamp(rate(m.stallEstimate)))}% (no PSI)`);
+  }
+  lines.push("");
+  // RECLAIM WORK vs RESULT. The pool level says how far behind we are; this says how
+  // hard the kernel is working to catch up and whether that work is achieving
+  // anything. %vmeff is the ratio: pages freed per page examined. It collapses when
+  // reclaim keeps walking the LRU over pages it is not allowed to evict — which is
+  // exactly what a swapless host under pressure does, since anonymous pages can only
+  // be freed to swap. So this block is where the two saturation cases diverge
+  // numerically, not just visually.
+  lines.push("$ sar -B 1 1     # reclaim work vs result");
+  lines.push(
+    `scanned   ${padStart(String(Math.round(scan)), 8)} pages/s   (kswapd + direct)`
+  );
+  lines.push(`reclaimed ${padStart(String(Math.round(steal)), 8)} pages/s`);
+  if (vmeff === undefined) {
+    // Undefined, NOT zero — see reclaimEfficiency(). Nothing was scanned, so there is
+    // no ratio to report; printing 0% here would read as total failure.
+    lines.push("%vmeff         n/a            no scanning this interval");
+  } else {
+    lines.push(
+      `%vmeff    ${bar(clamp(vmeff / 100))} ${padStart(vmeff.toFixed(1), 6)}%   ${vmeffNote(vmeff)}`
+    );
   }
   lines.push("");
   lines.push("$ swapon --show; vmstat 1 1     # relief path");
@@ -313,9 +363,29 @@ const formatMemoryFaults = (telemetry: TelemetrySnapshot): string => {
   // so the trailing notes line up regardless of how many digits the value has.
   const gauge = (label: string, barStr: string, value: string, note = ""): string =>
     `${label.padEnd(13)}${barStr} ${padStart(value, 8)}${note ? `   ${note}` : ""}`;
+  // The real `sar -B` table, not just its two fault columns: the reclaim side
+  // (pgscank/pgscand/pgsteal/%vmeff) belongs beside the faults because they are two
+  // halves of one loop — reclaim frees pages, faults bring them back. Direct scanning
+  // (pgscand) is the costly kind: it happens in the allocating process's own context,
+  // so it is stall time a workload actually feels, whereas kswapd scans in the
+  // background. %vmeff is undefined rather than 0 when nothing scanned; see
+  // reclaimEfficiency().
+  const scanTotal = rate(m.scanPagesPerSecond);
+  const scanDirect = Math.min(rate(m.directScanPagesPerSecond), scanTotal);
+  const scanKswapd = Math.max(0, scanTotal - scanDirect);
+  const steal = rate(m.stealPagesPerSecond);
+  const vmeff = reclaimEfficiency(m);
   lines.push("$ sar -B 1 1     # paging activity");
-  lines.push(padStart("fault/s", 14) + padStart("majflt/s", 14));
-  lines.push(padStart((minor + major).toFixed(2), 14) + padStart(major.toFixed(2), 14));
+  lines.push(
+    padStart("fault/s", 11) + padStart("majflt/s", 11) +
+    padStart("pgscank/s", 11) + padStart("pgscand/s", 11) +
+    padStart("pgsteal/s", 11) + padStart("%vmeff", 9)
+  );
+  lines.push(
+    padStart((minor + major).toFixed(2), 11) + padStart(major.toFixed(2), 11) +
+    padStart(scanKswapd.toFixed(2), 11) + padStart(scanDirect.toFixed(2), 11) +
+    padStart(steal.toFixed(2), 11) + padStart(vmeff === undefined ? "n/a" : vmeff.toFixed(2), 9)
+  );
   lines.push("");
   lines.push("$ awk '/^pgfault|^pgmajfault/{print}' /proc/vmstat   # (shown as rates)");
   lines.push(`pgfault      ${padStart(String(Math.round(minor + major)), 12)} /s   minor + major`);

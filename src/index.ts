@@ -560,6 +560,24 @@ const scenarioTelemetry = (
   // OOM is the relief path in mode 7, so unlike every other scenario it reports real
   // kills — matching the engine's faster baron self-fire (DOOMPERF_OOM_SIM_PERIOD_NOSWAP).
   const memoryOomKills = memoryNoSwap ? 17 + Math.floor(now / 4000) % 9 : 0;
+  // Page-frame reclaim throughput, and the %vmeff story it produces. This is where
+  // modes 6 and 7 diverge in NUMBERS rather than fittings: reclaim can only free a
+  // page it is permitted to evict, and with no swap every anonymous page it walks past
+  // is untouchable. So mode 7 scans two-and-a-half times as hard as mode 6 and frees a
+  // quarter as much per page examined — the classic swapless signature, and the reason
+  // its pool never comes down without a kill. Efficiency is expressed as a ratio here
+  // so scan and steal cannot drift into an implausible pairing.
+  const memoryScanPages = memoryNoSwap
+    ? 46000 + 16000 * memoryWave
+    : memorySaturated
+      ? 18000 + 6000 * memoryWave
+      : 2600 + 800 * memoryWave;
+  const memoryVmeff = memoryNoSwap
+    ? 0.14 + 0.05 * memoryWave // scanning hard, freeing almost nothing
+    : memorySaturated
+      ? 0.55 + 0.08 * memoryWave // working for it, but swap lets the work land
+      : 0.86 + 0.06 * memoryWave; // healthy: most of what it looks at is evictable
+  const memoryStealPages = memoryScanPages * memoryVmeff;
   const simMemory: SimMemoryTelemetry = memoryMode
     ? {
         utilization: clampRatio(1 - memoryAvailableBytes / memoryTotalBytes),
@@ -619,6 +637,8 @@ const scenarioTelemetry = (
             ? 5200 + 2600 * memoryWave
             : 0,
         compactStallsPerSecond: memorySaturated ? 3 + 2 * memoryWave : 0,
+        scanPagesPerSecond: memoryScanPages,
+        stealPagesPerSecond: memoryStealPages,
         // The PSI-less estimate is (majflt + swapin) x await. Mode 7 has neither term
         // to speak of, so the modelled stall would read misleadingly calm on a host
         // that is in fact grinding — direct reclaim is where its stall time actually
@@ -677,6 +697,12 @@ const scenarioTelemetry = (
         directReclaimsPerSecond: 0,
         directScanPagesPerSecond: 0,
         compactStallsPerSecond: 0,
+        // Quiet background reclaim: kswapd ticking over and freeing nearly everything
+        // it looks at (~90% vmeff), which is what a healthy host looks like. Non-zero
+        // rather than 0, so the CPU/disk/network scenarios don't render "n/a" vmeff
+        // and imply the memory instruments are broken.
+        scanPagesPerSecond: 900 + utilization * 1400,
+        stealPagesPerSecond: (900 + utilization * 1400) * 0.9,
         stallEstimate: 0,
         oomKills: 0,
         oomKillsPerSecond: 0,

@@ -231,3 +231,85 @@ func TestReduceStorageCapsDeviceBank(t *testing.T) {
 		t.Fatalf("aggregate IOPS = %v, want %v (all devices)", result.IOPS, wantIops)
 	}
 }
+
+// A modern kernel exposes the reclaim counters under BOTH spellings at once --
+// by actor (pgscan_kswapd/pgscan_direct) and by type (pgscan_anon/pgscan_file) --
+// and they are two partitions of the same events, summing to the same total.
+// Adding all of them would double the figure and halve the derived %vmeff, so
+// readScanStealCounters must pick one partition. These are real 6.8 values.
+func TestReadScanStealCountersDoesNotDoubleCountBothSpellings(t *testing.T) {
+	vmstat := map[string]uint64{
+		"pgscan_kswapd":          11860028,
+		"pgscan_direct":          455268,
+		"pgscan_khugepaged":      0,
+		"pgscan_direct_throttle": 0,
+		"pgscan_anon":            1456692,
+		"pgscan_file":            10858604,
+		"pgsteal_kswapd":         10686833,
+		"pgsteal_direct":         351378,
+		"pgsteal_khugepaged":     0,
+		"pgsteal_anon":           666043,
+		"pgsteal_file":           10372168,
+	}
+	scan, steal := readScanStealCounters(vmstat)
+
+	// by-actor is preferred; by-type sums to the identical total, so either answer
+	// is correct -- what must NOT happen is the two being added together.
+	if scan != 12315296 {
+		t.Fatalf("scan = %d, want 12315296 (by-actor total, not actor+type)", scan)
+	}
+	if steal != 11038211 {
+		t.Fatalf("steal = %d, want 11038211 (by-actor total, not actor+type)", steal)
+	}
+	// Guard the invariant directly: both spellings must agree on this input.
+	if byType := vmstat["pgscan_anon"] + vmstat["pgscan_file"]; byType != scan {
+		t.Fatalf("by-type scan %d != by-actor scan %d; fixture no longer exercises the trap", byType, scan)
+	}
+}
+
+// pgscan_direct_throttle counts throttling EVENTS, not scanned pages, but it sits
+// under the pgscan_direct prefix -- so a prefix sum must exclude it by name.
+func TestReadScanStealCountersExcludesDirectThrottle(t *testing.T) {
+	vmstat := map[string]uint64{
+		"pgscan_direct":          1000,
+		"pgscan_direct_throttle": 7,
+		"pgsteal_direct":         400,
+	}
+	scan, steal := readScanStealCounters(vmstat)
+
+	if scan != 1000 {
+		t.Fatalf("scan = %d, want 1000 (throttle events excluded)", scan)
+	}
+	if steal != 400 {
+		t.Fatalf("steal = %d, want 400", steal)
+	}
+}
+
+// Pre-5.9 kernels have no anon/file split; pre-4.8 ones spell the actor counters
+// per zone. Both must still produce a total.
+func TestReadScanStealCountersHandlesPerZoneAndTypeOnlySpellings(t *testing.T) {
+	perZone := map[string]uint64{
+		"pgscan_kswapd_dma":     10,
+		"pgscan_kswapd_normal":  90,
+		"pgscan_direct_normal":  25,
+		"pgsteal_kswapd_dma":    5,
+		"pgsteal_kswapd_normal": 45,
+		"pgsteal_direct_normal": 10,
+	}
+	scan, steal := readScanStealCounters(perZone)
+	if scan != 125 || steal != 60 {
+		t.Fatalf("per-zone scan/steal = %d/%d, want 125/60", scan, steal)
+	}
+
+	// Type-only: the by-actor sum is zero, so the fallback must engage.
+	typeOnly := map[string]uint64{
+		"pgscan_anon":  300,
+		"pgscan_file":  700,
+		"pgsteal_anon": 120,
+		"pgsteal_file": 480,
+	}
+	scan, steal = readScanStealCounters(typeOnly)
+	if scan != 1000 || steal != 600 {
+		t.Fatalf("type-only scan/steal = %d/%d, want 1000/600", scan, steal)
+	}
+}

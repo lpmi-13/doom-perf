@@ -68,6 +68,15 @@ export interface MemoryTelemetry extends ResourceTelemetry {
   directReclaimsPerSecond?: number;
   directScanPagesPerSecond?: number;
   compactStallsPerSecond?: number;
+  // Page-frame reclaim throughput — the sar -B pgscank/pgscand/pgsteal columns.
+  // scanPagesPerSecond is ALL scanning (kswapd + direct), so directScanPagesPerSecond
+  // above is a subset of it. %vmeff = steal/scan is derived at render time, not
+  // carried here: with no scanning the ratio is UNDEFINED, not zero, and rendering a
+  // bare 0% would read as "reclaim is totally ineffective" when it means "reclaim did
+  // not need to run" — the opposite conclusion. See reclaimEfficiency() in
+  // terminalOverlay.ts, which returns undefined for that case.
+  scanPagesPerSecond?: number;
+  stealPagesPerSecond?: number;
   // Modelled 0..1 stand-in for PSI some/avg10 — (majflt/s + swapin/s) x disk await,
   // an upper bound on the real stall share. An estimate: never present it as a
   // kernel-reported PSI figure.
@@ -189,6 +198,7 @@ export type SimMemoryTelemetry = MemoryTelemetry &
     | "pressureFullAvg10" | "pressureFullAvg60" | "pressureFullAvg300"
     | "refaultPagesPerSecond" | "directReclaimsPerSecond" | "directScanPagesPerSecond"
     | "compactStallsPerSecond" | "stallEstimate"
+    | "scanPagesPerSecond" | "stealPagesPerSecond"
     | "oomKills" | "oomKillsPerSecond" | "topRss">>;
 
 // Read by formatStorage, formatStorageUsage, formatStorageIops. Applies to the

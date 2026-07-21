@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -104,6 +105,14 @@ type memoryTelemetry struct {
 	DirectReclaimsPerSecond  float64 `json:"directReclaimsPerSecond"`
 	DirectScanPagesPerSecond float64 `json:"directScanPagesPerSecond"`
 	CompactStallsPerSecond   float64 `json:"compactStallsPerSecond"`
+	// Page-frame reclaim throughput, the sar -B pgscank/pgscand/pgsteal columns.
+	// ScanPagesPerSecond is ALL scanning (kswapd + direct), so the direct-only
+	// figure above is a subset of it. Consumers derive %vmeff = steal/scan; it is
+	// deliberately NOT emitted here, because efficiency is undefined rather than
+	// zero when nothing is being scanned, and a plain float64 has no way to say so
+	// (see the terminal's "n/a" branch in terminalOverlay.ts).
+	ScanPagesPerSecond  float64 `json:"scanPagesPerSecond"`
+	StealPagesPerSecond float64 `json:"stealPagesPerSecond"`
 	// StallEstimate is a modelled 0..1 stand-in for PSI some/avg10 on PSI-less
 	// hosts (see the derivation at its assignment). It is an estimate, never a
 	// kernel-reported figure, and consumers must label it as one.
@@ -274,6 +283,8 @@ type sampler struct {
 	allocStalls   uint64
 	directScan    uint64
 	compactStalls uint64
+	scanPages     uint64
+	stealPages    uint64
 	ctxt          uint64
 	intr          uint64
 }
@@ -553,6 +564,9 @@ func (s *sampler) sample(now time.Time) (telemetry, error) {
 	allocStallRate := counterRate(allocStalls, s.allocStalls, elapsed)
 	directScanRate := counterRate(directScan, s.directScan, elapsed)
 	compactStallRate := counterRate(compactStalls, s.compactStalls, elapsed)
+	scanPages, stealPages := readScanStealCounters(vmstat)
+	scanRate := counterRate(scanPages, s.scanPages, elapsed)
+	stealRate := counterRate(stealPages, s.stealPages, elapsed)
 	topRSS := readTopRSSProcesses(5)
 	memErrors := clamp(oomRate)
 
@@ -612,6 +626,8 @@ func (s *sampler) sample(now time.Time) (telemetry, error) {
 	s.allocStalls = allocStalls
 	s.directScan = directScan
 	s.compactStalls = compactStalls
+	s.scanPages = scanPages
+	s.stealPages = stealPages
 	s.ctxt = ctxt
 	s.intr = intr
 	s.disk = disks
@@ -680,6 +696,8 @@ func (s *sampler) sample(now time.Time) (telemetry, error) {
 			DirectReclaimsPerSecond:  allocStallRate,
 			DirectScanPagesPerSecond: directScanRate,
 			CompactStallsPerSecond:   compactStallRate,
+			ScanPagesPerSecond:       scanRate,
+			StealPagesPerSecond:      stealRate,
 			StallEstimate:            stallEstimate,
 		},
 		Storage: storage,
@@ -739,6 +757,57 @@ func readReclaimCounters(vmstat map[string]uint64) (refaults, allocStalls, direc
 	allocStalls = vmstat["allocstall"] + vmstat["allocstall_dma"] + vmstat["allocstall_dma32"] +
 		vmstat["allocstall_normal"] + vmstat["allocstall_movable"] + vmstat["allocstall_device"]
 	return refaults, allocStalls, vmstat["pgscan_direct"], vmstat["compact_stall"]
+}
+
+// sumPrefix adds every counter whose name starts with prefix, skipping exact names
+// in `skip`. Older kernels spell the reclaim counters per-zone (pgscan_kswapd_dma,
+// pgscan_kswapd_normal, ...) rather than as one total, so a prefix sum covers both
+// shapes without enumerating every zone; `skip` exists because /proc/vmstat puts
+// unrelated counters under the same prefix (see readScanStealCounters).
+func sumPrefix(vmstat map[string]uint64, prefix string, skip ...string) uint64 {
+	var total uint64
+	for name, value := range vmstat {
+		if strings.HasPrefix(name, prefix) && !slices.Contains(skip, name) {
+			total += value
+		}
+	}
+	return total
+}
+
+// readScanStealCounters returns total pages SCANNED and pages STOLEN (reclaimed) by
+// the page-frame reclaim, the two inputs to sar -B's %vmeff -- how many of the pages
+// reclaim examined it actually managed to free.
+//
+// The counters come in two spellings that, unlike the workingset_refault split, BOTH
+// exist at once on a modern kernel:
+//
+//	by ACTOR  pgscan_kswapd + pgscan_direct + pgscan_khugepaged
+//	by TYPE   pgscan_anon + pgscan_file                     (added in 5.9)
+//
+// These are two partitions of the SAME events, and on a 6.8 host they sum to exactly
+// the same number. Adding all of them together therefore double-counts and silently
+// halves %vmeff. So we pick ONE partition: by-actor where present (it goes back much
+// further), by-type only as a fallback.
+//
+// pgscan_direct_throttle is excluded explicitly: it counts throttling *events*, not
+// scanned pages, and would otherwise be swept up by the pgscan_direct prefix.
+func readScanStealCounters(vmstat map[string]uint64) (scan, steal uint64) {
+	scanByActor := sumPrefix(vmstat, "pgscan_kswapd") +
+		sumPrefix(vmstat, "pgscan_direct", "pgscan_direct_throttle") +
+		sumPrefix(vmstat, "pgscan_khugepaged")
+	stealByActor := sumPrefix(vmstat, "pgsteal_kswapd") +
+		sumPrefix(vmstat, "pgsteal_direct") +
+		sumPrefix(vmstat, "pgsteal_khugepaged")
+
+	scan = scanByActor
+	if scan == 0 {
+		scan = vmstat["pgscan_anon"] + vmstat["pgscan_file"]
+	}
+	steal = stealByActor
+	if steal == 0 {
+		steal = vmstat["pgsteal_anon"] + vmstat["pgsteal_file"]
+	}
+	return scan, steal
 }
 
 func readTopRSSProcesses(limit int) []rssProcessTelemetry {

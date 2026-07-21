@@ -199,6 +199,8 @@ const readMemory = (payload: Record<string, unknown>): MemoryTelemetry => {
     directReclaimsPerSecond: numberValue(source.directReclaimsPerSecond),
     directScanPagesPerSecond: numberValue(source.directScanPagesPerSecond),
     compactStallsPerSecond: numberValue(source.compactStallsPerSecond),
+    scanPagesPerSecond: numberValue(source.scanPagesPerSecond),
+    stealPagesPerSecond: numberValue(source.stealPagesPerSecond),
     stallEstimate: numberValue(source.stallEstimate),
     oomKills: numberValue(source.oomKills),
     oomKillsPerSecond: numberValue(source.oomKillsPerSecond),
