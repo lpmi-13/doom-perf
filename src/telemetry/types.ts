@@ -177,7 +177,7 @@ export type SimCpuTelemetry = CpuTelemetry &
     | "runQueue" | "blocked" | "user" | "system" | "idle" | "iowait" | "steal"
     | "contextSwitchesPerSecond" | "interruptsPerSecond">>;
 
-// Read by formatMemory, formatMemoryRss, formatMemorySwap, formatMemoryFaults,
+// Read by formatMemory, formatMemoryRss, formatMemoryReclaim, formatMemoryFaults,
 // formatMemoryOom.
 export type SimMemoryTelemetry = MemoryTelemetry &
   Required<Pick<MemoryTelemetry,
@@ -236,7 +236,7 @@ export type TerminalSign =
   | "load"
   | "memory"
   | "memory-rss"
-  | "memory-swap"
+  | "memory-reclaim"
   | "memory-faults"
   | "memory-oom"
   | "storage"

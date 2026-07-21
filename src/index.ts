@@ -176,11 +176,13 @@ const applyPsiOverride = (telemetry: TelemetrySnapshot): TelemetrySnapshot =>
     : telemetry;
 
 // ?swap=off renders the wing as if the host had no swap device configured, so the
-// reclaim sluice's swap tributary (its sealed-dry state) and the memory terminal's
-// "swap: not configured" line can be checked without finding a swapless host.
-// Unlike ?psi=off this feeds the ENGINE too (not just the terminal), so the
-// tributary geometry actually seals. Live mode only in practice: sims 5/6 force a
-// swap-backed host engine-side.
+// reclaim sluice's CAPPED vent (welded pipe + "NO SWAP / RELIEF / OOM KILL" placard +
+// its brim alarm) and the terminal's OOM relief-path block can be checked without
+// finding a swapless host. Unlike ?psi=off this feeds the ENGINE too (not just the
+// terminal), so the fittings actually change. LIVE MODE ONLY: the memory sims assert a
+// swap-backed host engine-side and deliberately keep doing so, because the capped state
+// is a claim about the real host being watched — not something a scenario should
+// fabricate. To see it saturated as well, drive real memory pressure on a swapless box.
 const swapDisabled = new URLSearchParams(window.location.search).get("swap") === "off";
 const applySwapOverride = (telemetry: TelemetrySnapshot): TelemetrySnapshot =>
   swapDisabled
@@ -265,9 +267,10 @@ type DoomPerfEngine = {
   // minor/major fault meters in the memory wing.
   _DoomPerf_SetMemoryMinorFaults?: (permille: number) => void;
   _DoomPerf_SetMemoryMajorFaults?: (permille: number) => void;
-  // Reclaim sluice swap tributary: whether a swap device is configured (0 seals the
-  // channel dry so a swapless host reads unmistakably) and the swap si+so paging
-  // rate (permille) glowing the channel when present.
+  // Reclaim sluice swap RELIEF VENT: whether a swap device is configured (0 caps the
+  // duct — welded pipe, "NO SWAP / RELIEF / OOM KILL" placard — so a swapless host
+  // reads unmistakably) and the swap si+so paging rate (permille) glowing and steaming
+  // the vent when present.
   _DoomPerf_SetMemorySwapPresent?: (present: number) => void;
   _DoomPerf_SetMemorySwapActivity?: (permille: number) => void;
   // Fire the Baron-of-Hell OOM-kill event: the baron walks to reliquary barrel
@@ -406,10 +409,10 @@ const pushTelemetryToEngine = (
   engine?._DoomPerf_SetMemoryMajorFaults?.(
     Math.round(clampRatio((telemetry.memory.majorFaultsPerSecond ?? 0) / 200) * 1000)
   );
-  // Reclaim sluice swap TRIBUTARY: whether swap is configured (swapTotalBytes > 0)
-  // so a swapless host seals the channel dry, plus the swap si+so paging rate as
-  // permille of a 2500 pages/s reference to glow it when present. Sims 5/6 assume a
-  // swap-backed host engine-side.
+  // Reclaim sluice swap RELIEF VENT: whether swap is configured (swapTotalBytes > 0)
+  // so a swapless host renders the duct capped, plus the swap si+so paging rate as
+  // permille of a 2500 pages/s reference to glow and steam it when present. Sims 5/6
+  // assume a swap-backed host engine-side, so the capped rendering is live-mode only.
   engine?._DoomPerf_SetMemorySwapPresent?.((telemetry.memory.swapTotalBytes ?? 0) > 0 ? 1 : 0);
   engine?._DoomPerf_SetMemorySwapActivity?.(
     Math.round(
@@ -461,17 +464,24 @@ const scenarioTelemetry = (
   engine: DoomPerfEngine | undefined
 ): TelemetrySnapshot | undefined => {
   const mode = engine?._DoomPerf_GetSimMode?.() ?? 0;
-  if (mode < 1 || mode > 8) {
+  if (mode < 1 || mode > 9) {
     return undefined;
   }
 
   const cpuMode = mode === 1 || mode === 2;
   const diskMode = mode === 3 || mode === 4;
   const diskSaturated = mode === 4;
-  const memoryMode = mode === 5 || mode === 6;
-  const memorySaturated = mode === 6;
-  const networkMode = mode === 7 || mode === 8;
-  const networkSaturated = mode === 8;
+  // Memory has THREE scenarios: 5 utilization, 6 saturation on a swap-backed host,
+  // 7 the same saturation on a host with NO swap configured. 6 and 7 are a matched
+  // pair — identical pressure, one difference (is a relief valve fitted), and every
+  // divergence below is a consequence of that one difference. Mirrors the engine's
+  // DOOMPERF_SIM_MEM_* modes in p_tick.c; the two must stay in step or the terminal
+  // and the room disagree.
+  const memoryMode = mode === 5 || mode === 6 || mode === 7;
+  const memorySaturated = mode === 6 || mode === 7;
+  const memoryNoSwap = mode === 7;
+  const networkMode = mode === 8 || mode === 9;
+  const networkSaturated = mode === 9;
   const count = Math.max(1, Math.min(doomPerfCpuCoreCapacity, engine?._DoomPerf_GetEffectiveCpuCoreCount?.() ?? 8));
   const now = Date.now();
   // CPU is the stressed signal only in the CPU scenario, where the engine
@@ -495,8 +505,9 @@ const scenarioTelemetry = (
     : mode === 3 ? "sim: high disk utilization"
     : mode === 4 ? "sim: high disk saturation"
     : mode === 5 ? "sim: high memory utilization"
-    : mode === 6 ? "sim: high memory saturation"
-    : mode === 7 ? "sim: high network utilization"
+    : mode === 6 ? "sim: memory saturation, swap configured"
+    : mode === 7 ? "sim: memory saturation, no swap configured"
+    : mode === 8 ? "sim: high network utilization"
     : "sim: high network saturation";
   // Background memory stats so the memory and vmstat terminals are meaningful in
   // every scenario. Modes 5/6 follow the USE memory lab pattern: mode 5 is a
@@ -514,21 +525,56 @@ const scenarioTelemetry = (
   const memoryAvailableBytes = memorySaturated
     ? (420 + 180 * memoryWave) * 1024 ** 2
     : (1500 + 360 * memoryWave) * 1024 ** 2;
-  const memorySwapTotalBytes = 4 * gib;
-  const memorySwapUsedBytes = memorySaturated
-    ? (2450 + 500 * memoryWave) * 1024 ** 2
-    : (96 + 48 * memoryWave) * 1024 ** 2;
-  const memorySwapIn = memorySaturated ? 260 + 220 * memoryWave : 0;
-  const memorySwapOut = memorySaturated ? 520 + 360 * Math.abs(Math.sin(now / 1900)) : 0;
+  // No swap device at all in mode 7 — every swap field is zero, not "small". That is
+  // what makes the terminal print "(no swap devices)" and the vent render capped.
+  const memorySwapTotalBytes = memoryNoSwap ? 0 : 4 * gib;
+  const memorySwapUsedBytes = memoryNoSwap
+    ? 0
+    : memorySaturated
+      ? (2450 + 500 * memoryWave) * 1024 ** 2
+      : (96 + 48 * memoryWave) * 1024 ** 2;
+  const memorySwapIn = memorySaturated && !memoryNoSwap ? 260 + 220 * memoryWave : 0;
+  const memorySwapOut =
+    memorySaturated && !memoryNoSwap ? 520 + 360 * Math.abs(Math.sin(now / 1900)) : 0;
+  // Major faults are the counter-intuitive one. Mode 6 thrashes because pages keep
+  // being pushed to swap and dragged back; with no swap those refaults cannot happen,
+  // so mode 7's majors are LOW — only file-backed pages (executables, mmap'd files,
+  // evicted cache) can fault back in. Higher pressure, fewer major faults.
+  const memoryMajorFaults = memoryNoSwap
+    ? 22 + 14 * memoryWave
+    : memorySaturated
+      ? 150 + 90 * memoryWave
+      : 2 + 3 * memoryWave;
+  // With no swap, page cache is the ONLY reclaimable pool, so it is scoured much
+  // harder than mode 6 and direct reclaim runs hotter for less benefit.
+  const memoryCachedBytes = memoryNoSwap
+    ? 150 * 1024 ** 2
+    : memorySaturated
+      ? 520 * 1024 ** 2
+      : 1500 * 1024 ** 2;
+  const memoryBuffersBytes = memoryNoSwap
+    ? 28 * 1024 ** 2
+    : memorySaturated
+      ? 96 * 1024 ** 2
+      : 260 * 1024 ** 2;
+  // OOM is the relief path in mode 7, so unlike every other scenario it reports real
+  // kills — matching the engine's faster baron self-fire (DOOMPERF_OOM_SIM_PERIOD_NOSWAP).
+  const memoryOomKills = memoryNoSwap ? 17 + Math.floor(now / 4000) % 9 : 0;
   const simMemory: SimMemoryTelemetry = memoryMode
     ? {
         utilization: clampRatio(1 - memoryAvailableBytes / memoryTotalBytes),
-        saturation: memorySaturated ? clampRatio(0.76 + 0.18 * memoryWave) : 0.04,
-        errors: 0,
+        saturation: memoryNoSwap
+          ? clampRatio(0.82 + 0.16 * memoryWave)
+          : memorySaturated
+            ? clampRatio(0.76 + 0.18 * memoryWave)
+            : 0.04,
+        // The only scenario that reports OOM errors: with no swap there is no other
+        // way for the backlog to come down, so the kill channel is the relief channel.
+        errors: memoryNoSwap ? clampRatio(0.62 + 0.3 * memoryWave) : 0,
         totalBytes: memoryTotalBytes,
         freeBytes: memorySaturated ? 190 * 1024 ** 2 : 640 * 1024 ** 2,
-        buffersBytes: memorySaturated ? 96 * 1024 ** 2 : 260 * 1024 ** 2,
-        cachedBytes: memorySaturated ? 520 * 1024 ** 2 : 1500 * 1024 ** 2,
+        buffersBytes: memoryBuffersBytes,
+        cachedBytes: memoryCachedBytes,
         availableBytes: memoryAvailableBytes,
         swapTotalBytes: memorySwapTotalBytes,
         swapFreeBytes: Math.max(0, memorySwapTotalBytes - memorySwapUsedBytes),
@@ -537,9 +583,10 @@ const scenarioTelemetry = (
         swapOutPagesPerSecond: memorySwapOut,
         swapPagesPerSecond: memorySwapIn + memorySwapOut,
         // Paging: mode 6 (saturation) thrashes — heavy major faults refaulting
-        // from disk/swap; mode 5 (utilization) has only light minor-fault churn.
+        // from disk/swap; mode 5 (utilization) has only light minor-fault churn;
+        // mode 7 keeps the workload's minor churn but loses the majors (see above).
         minorFaultsPerSecond: memorySaturated ? 9000 + 5000 * memoryWave : 1200 + 400 * memoryWave,
-        majorFaultsPerSecond: memorySaturated ? 150 + 90 * memoryWave : 2 + 3 * memoryWave,
+        majorFaultsPerSecond: memoryMajorFaults,
         pressureAvailable: true,
         pressureSomeAvg10: memorySaturated ? 18 + 10 * memoryWave : 0.35,
         pressureSomeAvg60: memorySaturated ? 15 + 6 * memoryWave : 0.2,
@@ -552,18 +599,40 @@ const scenarioTelemetry = (
         // vmstat reclaim counters — what the PSI-less fallback reads (?psi=off). A
         // thrashing host refaults hard and drives the allocator into direct reclaim;
         // stallEstimate mirrors the collector's model at a ~1.2ms nominal await.
-        refaultPagesPerSecond: memorySaturated ? 2400 + 1400 * memoryWave : 40 + 30 * memoryWave,
-        directReclaimsPerSecond: memorySaturated ? 38 + 22 * memoryWave : 0,
-        directScanPagesPerSecond: memorySaturated ? 5200 + 2600 * memoryWave : 0,
+        // Mode 7 refaults LESS (nothing anonymous to bring back) but scans and direct-
+        // reclaims MORE: the allocator keeps walking the LRU looking for something it
+        // is allowed to evict, finds only page cache, and stalls doing it. That is the
+        // shape of swapless pressure — lots of reclaim work, little relief.
+        refaultPagesPerSecond: memoryNoSwap
+          ? 420 + 260 * memoryWave
+          : memorySaturated
+            ? 2400 + 1400 * memoryWave
+            : 40 + 30 * memoryWave,
+        directReclaimsPerSecond: memoryNoSwap
+          ? 96 + 54 * memoryWave
+          : memorySaturated
+            ? 38 + 22 * memoryWave
+            : 0,
+        directScanPagesPerSecond: memoryNoSwap
+          ? 14000 + 7000 * memoryWave
+          : memorySaturated
+            ? 5200 + 2600 * memoryWave
+            : 0,
         compactStallsPerSecond: memorySaturated ? 3 + 2 * memoryWave : 0,
+        // The PSI-less estimate is (majflt + swapin) x await. Mode 7 has neither term
+        // to speak of, so the modelled stall would read misleadingly calm on a host
+        // that is in fact grinding — direct reclaim is where its stall time actually
+        // goes. Fold that in so ?psi=off does not tell a comfortable lie.
         stallEstimate: clampRatio(
-          ((memorySaturated ? 150 + 90 * memoryWave : 2 + 3 * memoryWave) + memorySwapIn) * 0.0012
+          (memoryMajorFaults + memorySwapIn) * 0.0012 +
+            (memoryNoSwap ? (96 + 54 * memoryWave) * 0.006 : 0)
         ),
-        oomKills: 0,
-        oomKillsPerSecond: 0,
-        // oomScore mirrors the engine's barrel-glow synthesis for modes 5/6
-        // (DoomPerf_EffectiveMemoryProcOom), so the terminal's OOM readout and
-        // the in-world barrels tell the same story in the demo.
+        oomKills: memoryOomKills,
+        oomKillsPerSecond: memoryNoSwap ? 0.24 + 0.12 * memoryWave : 0,
+        // oomScore mirrors the engine's barrel-glow synthesis for modes 5/6/7
+        // (DoomPerf_EffectiveMemoryProcOom — both saturation modes take the
+        // full-badness profile), so the terminal's OOM readout and the in-world
+        // barrels tell the same story in the demo.
         topRss: memorySaturated
           ? [
               { pid: 4210, rssBytes: 11264 * 1024 ** 2, command: "mem-pressure-worker", oomScore: 950 },
@@ -1025,7 +1094,8 @@ const start = async () => {
     const refreshEffectiveTelemetry = (forceScenarioSample = false) => {
       const engine = getEngine();
       const mode = engine?._DoomPerf_GetSimMode?.() ?? 0;
-      const inScenario = mode >= 1 && mode <= 8;
+      // Must match scenarioTelemetry's own range check (1..9 — memory owns 5/6/7).
+      const inScenario = mode >= 1 && mode <= 9;
       const now = Date.now();
       if (!inScenario) {
         lastScenario = undefined;

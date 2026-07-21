@@ -8,7 +8,8 @@
 // satellite PODS branch off the far/left/right catwalks:
 //   FAR  — "condemned stacks": the RSS reliquary barrels (tags 551..555) the OOM
 //          BARON (pen tag 548, gate 556) stalks, with the ps/RSS + OOM terminals.
-//   LEFT — "scriptorium annex": the swap-in/out channels (tags 546/547) + vmstat.
+//   LEFT — "reclaim sluice": the saturation pool + fixed dam (tags 546/547), its
+//          swap relief vent (557) and the PSI/vmstat terminal.
 //   RIGHT— "fault gallery": a T-gallery over a sunken firing trench where the
 //          fault VOLLEY fires beam-bolts (minor->RAM gate 549 / major->disk wall
 //          550), watched side-on from a raised overlook carrying the sar terminal.
@@ -110,7 +111,7 @@ const memoryTerminal = { lines: ["MEMORY", "FREE -M"], texture: wingName("memory
 const memoryScreens = {
   rss: { lines: ["RESIDENT SET", "PS SORT RSS"], texture: wingName("memory", "RTRM"), patch: wingName("memory", "PRTR") },
   oom: { lines: ["OOM KILLER", "VMSTAT DMESG"], texture: wingName("memory", "OTRM"), patch: wingName("memory", "POTR") },
-  swap: { lines: ["MEM PRESSURE", "PSI VMSTAT"], texture: wingName("memory", "STRM"), patch: wingName("memory", "PSTR") },
+  reclaim: { lines: ["MEM PRESSURE", "PSI VMSTAT"], texture: wingName("memory", "STRM"), patch: wingName("memory", "PSTR") },
   faults: { lines: ["PAGE FAULTS", "SAR -B PSI"], texture: wingName("memory", "FTRM"), patch: wingName("memory", "PFTR") },
 };
 const REC = 16; // terminal recess depth
@@ -165,7 +166,9 @@ const screenFaces = {
   memory: { u: VEST.u1 - REC, v1: VEST_TC - TERM_HALF, v2: VEST_TC + TERM_HALF },
   "memory-rss": { u: FAR.u1 - REC, v1: FAR_TC - TERM_HALF, v2: FAR_TC + TERM_HALF },
   "memory-oom": { u: FAR.u2 + REC, v1: FAR_TC - TERM_HALF, v2: FAR_TC + TERM_HALF },
-  "memory-swap": { u: LEFT.u1 - REC, v1: SC - TERM_HALF, v2: SC + TERM_HALF },
+  // Named for what the pod MEASURES (reclaim saturation), not for the one optional
+  // fitting on its south wall — the sluice reads the same on a host with no swap.
+  "memory-reclaim": { u: LEFT.u1 - REC, v1: SC - TERM_HALF, v2: SC + TERM_HALF },
   "memory-faults": { v: FR.v1 + REC, u1: FR_TERM_U - TERM_HALF, u2: FR_TERM_U + TERM_HALF },
 };
 
@@ -219,18 +222,53 @@ const fallTempers = [
   { ...fallTexture, texture: wingName("memory", "FALA"), patch: wingName("memory", "PFLA"), ramp: 210 }, // amber
   { ...fallTexture, texture: wingName("memory", "FALR"), patch: wingName("memory", "PFLR"), ramp: 176 }, // hot red
 ];
-// The "SWAP" plate beside the relief vent. Both dimensions MUST be powers of two and
+// The placard hung beside the relief vent. Both dimensions MUST be powers of two and
 // MUST equal the recess face it is hung on (128 wide x 128 floor-to-ceiling). Doom
 // masks wall columns to a power of two — r_data.c sets texturewidthmask to the largest
 // 2^n <= width, and R_DrawColumn indexes dc_source with `& 127` — so a 96-wide texture
 // is drawn as if it were 64 wide and repeats mid-wall (one "SWAP" then half of the
 // next). Every other sign in the project is 256x128 for the same reason.
 const swapSignSize = { width: 128, height: 128 };
-// The SWAP VENT's stand pipe: a fat riveted steel duct rising out of the pool to the
-// vent mouth, so the steam visibly comes from somewhere. 64x128 (powers of two) and it
-// tiles vertically up the pipe's full height, which is what a real pipe run looks like.
-const pipeTexture = { texture: wingName("memory", "PIPE"), patch: wingName("memory", "PPIP"), width: 64, height: 128 };
-const swapSign = { texture: wingName("memory", "SWSG"), patch: wingName("memory", "PSWS") };
+// The plate comes in TWO states the engine swaps between by texture name (see
+// DoomPerf_UpdateSwapCap in p_tick.c), keyed on whether the host has a swap device.
+// This exists because a merely DARK grate is ambiguous: it reads the same whether swap
+// is fitted-but-idle or absent entirely, and those are completely different stories.
+// The plate says which, and — this is the point — names the consequence. With swap the
+// vent is the relief path; without it the only thing that relieves memory pressure is
+// the OOM killer, which is the Baron two pods over. It labels the VENT, not the pod:
+// the pod is the reclaim sluice and measures saturation whether or not swap exists.
+const ventSigns = {
+  // Fitted: the identification plate. Green like every other label in the wing.
+  fitted: {
+    texture: wingName("memory", "SWSG"),
+    patch: wingName("memory", "PSWS"),
+    lines: ["SWAP", "RELIEF", "VENT"],
+    color: signTextColor,
+    hazard: false,
+  },
+  // Capped: a WARNING placard, not a dead one. Same bright steel body (a blanked-off
+  // fitting still carries live signage) with red lettering and a hazard border, so it
+  // reads as "deliberately not fitted" from across the pod rather than "burnt out".
+  capped: {
+    texture: wingName("memory", "SWSX"),
+    patch: wingName("memory", "PSWX"),
+    lines: ["NO SWAP", "RELIEF", "OOM KILL"],
+    color: 176, // Doom's red ramp base
+    hazard: true,
+  },
+};
+// The vent's stand pipe: a fat riveted steel duct rising out of the pool to the vent
+// mouth, so the steam visibly comes from somewhere. 64x128 (powers of two) and it tiles
+// vertically up the pipe's full height, which is what a real pipe run looks like.
+// Also two-state, swapped alongside the placard: the CAPPED variant is the same duct
+// gone cold — desaturated, no specular highlight, and welded shut with a cross-brace at
+// every coupling. The fitting itself has to read as blanked off, or the placard is just
+// a sign next to a working-looking pipe.
+const pipeTextures = {
+  fitted: { texture: wingName("memory", "PIPE"), patch: wingName("memory", "PPIP"), width: 64, height: 128, capped: false },
+  capped: { texture: wingName("memory", "PIPX"), patch: wingName("memory", "PPIX"), width: 64, height: 128, capped: true },
+};
+const pipeTexture = pipeTextures.fitted;
 // The spire's shelf pitch, in map units. The engine stacks the book sprites in
 // rings this far apart (DOOMPERF_SPIRE_RSTEP in p_tick.c) and the rack texture
 // draws a board every RING_PITCH rows; the two MUST agree or the books float.
@@ -933,7 +971,12 @@ const buildSteamPuffFrame = (stage) => {
 // falling off to dark at both edges) so a flat wall reads as round, banded by flanges
 // with rivet rows. Tiles vertically: the flange band sits at the tile seam so a run of
 // pipe looks like sections bolted end to end.
-const buildPipePatch = () => {
+// The CAPPED variant (`capped: true`) is the same duct with the life taken out of it:
+// the specular highlight is dropped (a cold pipe has no wet sheen), every shade steps
+// one notch darker, and each flange carries a welded cross-brace — so the fitting reads
+// as blanked off rather than merely unlit. See ventSigns for why the state is shown at
+// all instead of just letting a dark grate imply it.
+const buildPipePatch = ({ capped = false } = {}) => {
   const W = pipeTexture.width;
   const H = pipeTexture.height;
   const px = new Uint8Array(W * H);
@@ -941,12 +984,12 @@ const buildPipePatch = () => {
   // of that ramp, then 5..8 for the deep shadow at the silhouette edges.
   const shadeFor = (x) => {
     const t = Math.abs((x + 0.5 - W * 0.42) / (W * 0.58)); // highlight left of centre
-    if (t < 0.12) return 4; // specular
-    if (t < 0.30) return 80;
-    if (t < 0.48) return 83;
-    if (t < 0.66) return 86;
-    if (t < 0.82) return 90;
-    if (t < 0.94) return 94;
+    if (t < 0.12) return capped ? 83 : 4; // specular (none when cold)
+    if (t < 0.30) return capped ? 86 : 80;
+    if (t < 0.48) return capped ? 88 : 83;
+    if (t < 0.66) return capped ? 90 : 86;
+    if (t < 0.82) return capped ? 93 : 90;
+    if (t < 0.94) return capped ? 95 : 94;
     return 7;
   };
   for (let y = 0; y < H; y += 1) {
@@ -970,18 +1013,46 @@ const buildPipePatch = () => {
     // Rivet row along the collar: a lit pip with a shadow under it.
     for (let x = 5; x < W - 3; x += 9) {
       const ry = Math.min(H - 4, cy + 3);
-      px[ry * W + x] = 4;
-      px[ry * W + x + 1] = 80;
-      px[(ry + 1) * W + x] = 80;
+      px[ry * W + x] = capped ? 86 : 4;
+      px[ry * W + x + 1] = capped ? 90 : 80;
+      px[(ry + 1) * W + x] = capped ? 90 : 80;
       px[(ry + 1) * W + x + 1] = 7;
+    }
+    // Capped: a welded cross-brace over each collar — two diagonals corner to corner
+    // across the collar band, in weld-scar grey. Drawn per-collar (not once per tile)
+    // so the bracing repeats with the pipe sections as the run tiles upward.
+    if (capped) {
+      const y0 = Math.max(0, cy);
+      const y1 = Math.min(H - 1, cy + 9);
+      const span = y1 - y0;
+      if (span > 0) {
+        for (let d = 0; d <= span; d += 1) {
+          const t = d / span;
+          const xa = Math.round(4 + t * (W - 9));
+          const xb = Math.round(W - 5 - t * (W - 9));
+          for (const bx of [xa, xb]) {
+            for (let w = 0; w < 2; w += 1) {
+              const x = bx + w;
+              if (x >= 0 && x < W) px[(y0 + d) * W + x] = 4;
+            }
+          }
+        }
+      }
     }
   }
   return buildPatch(px, W, H);
 };
 
-// "SWAP" plate hung beside the relief vent: a bolted metal placard, sized to exactly
-// fill its recess face so the word appears ONCE.
-const buildSwapSignPatch = () => {
+// The vent placard, built in either state (see ventSigns): a bolted metal plate sized
+// to exactly fill its recess face so the text appears ONCE. Three stacked lines rather
+// than one word, because the plate has to name the fitting AND its consequence.
+// All three lines share ONE scale (SIGN_SCALE) instead of letting drawCenteredText pick
+// per line — it auto-shrinks to fit, so "OOM KILL" would come out smaller than "SWAP"
+// and the plate would read as three unrelated stencils rather than one message.
+const SIGN_SCALE = 2; // the largest scale at which every line above fits the 128 plate
+const SIGN_LINE_H = 7 * SIGN_SCALE; // glyph rows are 7 tall
+const SIGN_LINE_GAP = 10;
+const buildVentSignPatch = (sign) => {
   const { width, height } = swapSignSize;
   const px = new Uint8Array(width * height).fill(7);
   const rect = (x1, y1, x2, y2, c) => {
@@ -995,14 +1066,25 @@ const buildSwapSignPatch = () => {
   rect(6, 6, 8, height - 6, 80);
   rect(6, height - 8, width - 6, height - 6, 0);
   rect(width - 8, 6, width - 6, height - 6, 0);
+  // Hazard border (capped state only): a dashed red rule inset from the bevel, top and
+  // bottom, so the plate reads as a warning at a distance — before the text resolves.
+  if (sign.hazard) {
+    for (let x = 12; x < width - 12; x += 12) {
+      rect(x, 12, x + 7, 15, sign.color);
+      rect(x, height - 15, x + 7, height - 12, sign.color);
+    }
+  }
   // Corner bolts.
   for (const [bx, by] of [[12, 12], [width - 15, 12], [12, height - 15], [width - 15, height - 15]]) {
     rect(bx, by, bx + 3, by + 3, 5);
     rect(bx, by, bx + 2, by + 1, 80);
   }
-  const scale = 3;
-  const startY = Math.floor((height - 7 * scale) / 2);
-  drawCenteredText(px, width, height, "SWAP", startY, scale, signTextColor, 12, width - 12);
+  const block = sign.lines.length * SIGN_LINE_H + (sign.lines.length - 1) * SIGN_LINE_GAP;
+  let y = Math.floor((height - block) / 2);
+  for (const line of sign.lines) {
+    drawCenteredText(px, width, height, line, y, SIGN_SCALE, sign.color, 10, width - 10);
+    y += SIGN_LINE_H + SIGN_LINE_GAP;
+  }
   return buildPatch(px, width, height);
 };
 
@@ -1338,21 +1420,23 @@ const build = (ctx) => {
   // Ceiling stays room-height so the spout->pool drop has no top texture to scroll.
   const inflowStyle = { ...fluidBase, floor: SPOUT_H, wall: "STONE2", riserWall: fallTexture.texture, light: 168, tag: memoryTags.inflow };
   // SWAP RELIEF VENT: a broad metal DUCT mouth above the waterline (so it never
-  // floods). The engine hisses steam from it while swap is paging and darkens it when
-  // the host has no swap. Room-height ceiling so the plume rises clear instead of
-  // stacking against a lid. Unlabelled — the SWAP plate is its own recess beside it,
-  // because a label smaller than its wall tiles into a grid of SWAPs.
+  // floods). The engine hisses steam from it while swap is paging, and when the host
+  // has no swap it darkens the mouth AND swaps the pipe to its welded-shut texture, so
+  // the fitting reads as capped rather than idle. Room-height ceiling so the plume
+  // rises clear instead of stacking against a lid. Unlabelled — the placard is its own
+  // recess beside it, because a label smaller than its wall tiles into a grid of SWAPs.
   // The vent's STAND PIPE, set back inside a recessed alcove. It carries the swap tag,
   // so the engine spawns the steam at THIS sector's centre — i.e. straight up out of
   // the middle of the pipe's mouth. (While the tag lived on the alcove behind it, the
   // plume appeared to squeeze out from behind the pipe's back edge.) It is a raised
   // block, so what the room sees is its `riserWall`.
   const pipeStyle = { ...podStyle, kind: "memory-sluice", blockEdge: true, floor: VENT_H, floorFlat: "FLOOR7_1", riserWall: pipeTexture.texture, wall: pipeTexture.texture, light: 168, tag: memoryTags.swapTrib };
-  // The single SWAP placard: a recess whose face is EXACTLY the plate's 128x128, so
-  // the texture fills it once (see swapSignSize on Doom's power-of-two column masking).
-  // Set above the waterline, at reading height.
+  // The VENT placard: a recess whose face is EXACTLY the plate's 128x128, so the
+  // texture fills it once (see swapSignSize on Doom's power-of-two column masking).
+  // Set above the waterline, at reading height. Built in the fitted state; the engine
+  // re-hangs it as the capped warning plate whenever the host has no swap device.
   const SWAP_PLATE_FLOOR = 32;
-  const swapPlateStyle = { ...podStyle, kind: "memory-sluice", blockEdge: true, floor: SWAP_PLATE_FLOOR, ceiling: SWAP_PLATE_FLOOR + swapSignSize.height, wall: "METAL1", light: 200, labelSide: localSideToWorld(direction, "bottom"), labelTexture: swapSign.texture, labelWidth: swapSignSize.width };
+  const swapPlateStyle = { ...podStyle, kind: "memory-sluice", blockEdge: true, floor: SWAP_PLATE_FLOOR, ceiling: SWAP_PLATE_FLOOR + swapSignSize.height, wall: "METAL1", light: 200, labelSide: localSideToWorld(direction, "bottom"), labelTexture: ventSigns.fitted.texture, labelWidth: swapSignSize.width };
   // DRAIN SLOTS through the immobile BARRIER. The barrier itself is not a sector at
   // all — the un-sectored band between these slots becomes solid wall — so it is a
   // fixed stone gate the water can never lift. Only these narrow full-height slits let
@@ -1435,7 +1519,7 @@ const build = (ctx) => {
   }
   areaRect(direction, "sluice-drain", { u1: BARRIER_U2, v1: LEFT.v1, u2: LEFT.u2 - LIP_D, v2: OUTLET_V }, drainStyle);
   areaRect(direction, "sluice-pit", { u1: LEFT.u2 - LIP_D, v1: LEFT.v1, u2: LEFT.u2, v2: OUTLET_V }, pitStyle);
-  terminalRecess("swap", { u1: LEFT.u1 - REC, v1: SC - TERM_HALF, u2: LEFT.u1, v2: SC + TERM_HALF }, memoryScreens.swap, "left");
+  terminalRecess("reclaim", { u1: LEFT.u1 - REC, v1: SC - TERM_HALF, u2: LEFT.u1, v2: SC + TERM_HALF }, memoryScreens.reclaim, "left");
 
   // ===== RIGHT POD — "the fault gallery" (page faults). A run-queue-style T: a
   // raised OVERLOOK the player enters and walks (sar/PSI terminal on its +v end
@@ -1508,20 +1592,22 @@ const textures = [
     height: temper.height,
     build: () => buildFallPatch(temper.ramp),
   })),
-  {
-    texture: swapSign.texture,
-    patch: swapSign.patch,
+  // Both vent-placard states and both stand-pipe states ship in the WAD; the engine
+  // picks a pair each tic from the live swap-present reading (DoomPerf_UpdateSwapCap).
+  ...Object.values(ventSigns).map((sign) => ({
+    texture: sign.texture,
+    patch: sign.patch,
     width: swapSignSize.width,
     height: swapSignSize.height,
-    build: buildSwapSignPatch,
-  },
-  {
-    texture: pipeTexture.texture,
-    patch: pipeTexture.patch,
-    width: pipeTexture.width,
-    height: pipeTexture.height,
-    build: buildPipePatch,
-  },
+    build: () => buildVentSignPatch(sign),
+  })),
+  ...Object.values(pipeTextures).map((pipe) => ({
+    texture: pipe.texture,
+    patch: pipe.patch,
+    width: pipe.width,
+    height: pipe.height,
+    build: () => buildPipePatch(pipe),
+  })),
   {
     texture: rackTexture.texture,
     patch: rackTexture.patch,

@@ -53,7 +53,7 @@
  };
  
  menu_t  MainDef =
-@@ -268,6 +263,49 @@
+@@ -268,6 +263,56 @@
      0
  };
  
@@ -72,6 +72,12 @@
 +    mode_simdisksat,
 +    mode_simmemutil,
 +    mode_simmemsat,
++    // The swapless twin of mode_simmemsat, kept ADJACENT to it deliberately: the two
++    // scenarios are meant to be flipped between back to back, and the contrast is the
++    // whole lesson. Inserting here (rather than appending after the network pair)
++    // renumbered the network modes to 8/9 -- p_tick.c never referenced 7/8, so the
++    // only follow-on was src/index.ts's scenario synthesis.
++    mode_simmemsatnoswap,
 +    mode_simnetutil,
 +    mode_simnetsat,
 +    mode_end
@@ -86,6 +92,7 @@
 +    {1,"",M_ChooseMode,'k'},
 +    {1,"",M_ChooseMode,'m'},
 +    {1,"",M_ChooseMode,'p'},
++    {1,"",M_ChooseMode,'o'},
 +    {1,"",M_ChooseMode,'n'},
 +    {1,"",M_ChooseMode,'t'}
 +};
@@ -103,7 +110,7 @@
  
  //
  // EPISODE SELECT
-@@ -338,11 +376,6 @@
+@@ -338,11 +383,6 @@
  //
  enum
  {
@@ -115,7 +122,7 @@
      mousesens,
      option_empty2,
      soundvol,
-@@ -351,11 +384,6 @@
+@@ -351,11 +391,6 @@
  
  menuitem_t OptionsMenu[]=
  {
@@ -127,7 +134,7 @@
      {2,"M_MSENS",	M_ChangeSensitivity,'m'},
      {-1,"",0},
      {1,"M_SVOL",	M_Sound,'s'}
-@@ -855,7 +883,10 @@
+@@ -855,7 +890,10 @@
  //
  void M_DrawMainMenu(void)
  {
@@ -138,7 +145,7 @@
  }
  
  
-@@ -877,11 +908,96 @@
+@@ -877,11 +915,101 @@
  	M_StartMessage(NEWGAME,NULL,false);
  	return;
      }
@@ -169,7 +176,11 @@
 +    "SIM: HIGH DISK UTILIZATION",
 +    "SIM: HIGH DISK SATURATION",
 +    "SIM: HIGH MEMORY UTILIZATION",
-+    "SIM: HIGH MEMORY SATURATION",
++    // The two saturation scenarios name their swap state outright rather than leaving
++    // one of them as the bare default: an unqualified MEMORY SATURATION entry would
++    // quietly imply swap is a given, which is the assumption the pair exists to break.
++    "SIM: MEMORY SATURATION, SWAP",
++    "SIM: MEMORY SATURATION, NO SWAP",
 +    "SIM: HIGH NETWORK UTILIZATION",
 +    "SIM: HIGH NETWORK SATURATION"
 +};
@@ -232,15 +243,16 @@
 +void M_ChooseMode(int choice)
 +{
 +    // 0 = live telemetry; 1/2 = simulated high CPU utilization/saturation
-+    // (read by the CPU room renderer); 3/4 disk, 5/6 memory, 7/8 network
-+    // utilization/saturation (read by the browser's USE terminal scenarios).
++    // (read by the CPU room renderer); 3/4 disk, 5/6/7 memory, 8/9 network
++    // (read by the browser's USE terminal scenarios). Memory has THREE: 5
++    // utilization, 6 saturation with swap, 7 saturation with no swap.
 +    doomperf_sim_mode = choice;
 +    G_DeferedInitNew(hurtme,1,1);
 +    M_ClearMenus ();
  }
  
  
-@@ -945,24 +1061,14 @@
+@@ -945,24 +1073,14 @@
  // M_Options
  //
  char    detailNames[2][9]	= {"M_GDHIGH","M_GDLOW"};
@@ -265,7 +277,7 @@
  }
  
  void M_Options(int choice)
-@@ -1579,10 +1685,6 @@
+@@ -1579,10 +1697,6 @@
  	    M_EndGame(0);
  	    return true;
  				
@@ -276,7 +288,7 @@
  				
  	  case KEY_F9:            // Quickload
  	    S_StartSound(NULL,sfx_swtchn);
-@@ -1864,12 +1966,6 @@
+@@ -1864,12 +1978,6 @@
      switch ( gamemode )
      {
        case commercial:

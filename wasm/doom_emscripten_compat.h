@@ -111,10 +111,12 @@ extern int doomperf_memory_proc_oom[DOOMPERF_MEMORY_PROC_SLOTS];
 extern int doomperf_memory_minflt;
 extern int doomperf_memory_majflt;
 
-// Doom Perf: swap state for the reclaim sluice's swap TRIBUTARY (memory wing).
-// _present is 1 when the host has a swap device configured (swapTotalBytes > 0),
-// so a swapless host reads unmistakably (the tributary seals dry); _activity is the
-// swap si+so paging rate as permille of full scale, driving its glow when present.
+// Doom Perf: swap state for the reclaim sluice's swap RELIEF VENT (memory wing).
+// _present is 1 when the host has a swap device configured (swapTotalBytes > 0), so a
+// swapless host reads unmistakably (the duct renders capped, with an OOM-KILL placard);
+// _activity is the swap si+so paging rate as permille of full scale, driving the vent's
+// glow and steam when present. The capped rendering is a LIVE-telemetry affordance: the
+// memory sims (modes 5/6) always assert a swap-backed host.
 extern int doomperf_memory_swap_present;
 extern int doomperf_memory_swap_activity;
 

@@ -313,8 +313,9 @@ void DoomPerf_SetMemoryMajorFaults(int permille)
 }
 
 // Whether the host has a swap device configured (swapTotalBytes > 0). Drives the
-// reclaim sluice's swap TRIBUTARY: when 0 the tributary channel seals dry (stone
-// floor, dark) so a swapless host reads unmistakably; when 1 it runs nukage.
+// reclaim sluice's swap RELIEF VENT: when 0 the duct is capped (welded pipe, red
+// "NO SWAP / RELIEF / OOM KILL" placard, alarm light as the pool nears the brim) so a
+// swapless host reads unmistakably; when 1 it hisses steam as swap pages.
 EMSCRIPTEN_KEEPALIVE
 void DoomPerf_SetMemorySwapPresent(int present)
 {

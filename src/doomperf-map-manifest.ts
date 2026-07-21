@@ -71,7 +71,7 @@ export const mapManifest = {
       ]
     },
     {
-      "sign": "memory-swap",
+      "sign": "memory-reclaim",
       "segments": [
         {
           "ax": 1472,

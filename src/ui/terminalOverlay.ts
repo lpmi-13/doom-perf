@@ -242,10 +242,15 @@ const formatMemoryRss = (telemetry: TelemetrySnapshot): string => {
 // sluice's pool level IS memory saturation; this terminal shows that scalar plus
 // the signals that drive it: PSI stall time where the kernel exposes it, else a
 // labelled estimate rebuilt from the vmstat reclaim counters (which stay alive on
-// swapless + PSI-less hosts via direct reclaim). The swap TRIBUTARY only carries
-// signal when swap is configured, so this terminal states that status outright
-// rather than leaving a flat si/so reading ambiguous.
-const formatMemorySwap = (telemetry: TelemetrySnapshot): string => {
+// swapless + PSI-less hosts via direct reclaim).
+//
+// The pod is named for RECLAIM, not swap, because everything above stays live with
+// no swap device: only the relief VENT depends on one. So the terminal closes with
+// an explicit RELIEF PATH block naming how pressure actually gets released on THIS
+// host — paging out to swap, or, with no swap fitted, the OOM killer. That is the
+// same statement the vent's capped placard makes in the room; a reader who never
+// walks to the Baron pen should still learn where the pressure goes.
+const formatMemoryReclaim = (telemetry: TelemetrySnapshot): string => {
   const m = telemetry.memory;
   const swapConfigured = (m.swapTotalBytes ?? 0) > 0;
   const si = rate(m.swapInPagesPerSecond);
@@ -267,13 +272,25 @@ const formatMemorySwap = (telemetry: TelemetrySnapshot): string => {
     lines.push(`stall (est.)   ${bar(clamp(rate(m.stallEstimate)))} ${pctText(clamp(rate(m.stallEstimate)))}% (no PSI)`);
   }
   lines.push("");
-  lines.push("$ vmstat 1 1     # swap tributary (si/so)");
-  lines.push(padStart("si", 8) + padStart("so", 8));
-  lines.push(padStart(String(Math.round(si)), 8) + padStart(String(Math.round(so)), 8));
+  lines.push("$ swapon --show; vmstat 1 1     # relief path");
   if (swapConfigured) {
+    lines.push(padStart("si", 8) + padStart("so", 8));
+    lines.push(padStart(String(Math.round(si)), 8) + padStart(String(Math.round(so)), 8));
     lines.push(`swap: ${mib(m.swapUsedBytes)}/${mib(m.swapTotalBytes)} MiB used   churn ${Math.round(rate(m.swapPagesPerSecond))} pages/s`);
+    lines.push("");
+    lines.push("RELIEF PATH: page out to swap. The vent hisses while si/so is non-zero;");
+    lines.push("             the backlog only reaches OOM if swap cannot keep up.");
   } else {
-    lines.push("swap: not configured  — saturation shows as reclaim stalls / OOM instead");
+    // No si/so table here at all: two zeroes under a vmstat header invite the reading
+    // "swap is quiet", when the truth is there is no swap to be quiet. Say so, then
+    // say what takes its place — the whole reason this pod stops short of the brim.
+    lines.push("(no swap devices)");
+    lines.push("");
+    lines.push("RELIEF PATH: OOM kill. With no swap fitted there is no way to page");
+    lines.push("             anonymous memory out, so reclaim can only evict page cache.");
+    lines.push("             Once that is exhausted the kernel's only remaining move is");
+    lines.push("             to kill a process — see MEMORY — OOM errors.");
+    lines.push(`             oom_kill so far ${Math.round(rate(m.oomKills))}   errors ${bar(m.errors)} ${pctText(m.errors)}%`);
   }
   return lines.join("\n");
 };
@@ -580,7 +597,7 @@ const terminals: Record<TerminalSign, { title: string; render: (telemetry: Telem
   load: { title: "LOAD AVERAGE — 1m / 5m / 15m", render: formatUptime },
   memory: { title: "MEMORY — utilization baseline", render: formatMemory },
   "memory-rss": { title: "MEMORY — top resident sets", render: formatMemoryRss },
-  "memory-swap": { title: "MEMORY — swap churn", render: formatMemorySwap },
+  "memory-reclaim": { title: "MEMORY — reclaim & relief", render: formatMemoryReclaim },
   "memory-faults": { title: "MEMORY — page faults", render: formatMemoryFaults },
   "memory-oom": { title: "MEMORY — OOM errors", render: formatMemoryOom },
   storage: { title: "STORAGE — iostat service & queue", render: formatStorage },
