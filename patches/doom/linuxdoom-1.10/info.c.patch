@@ -14,7 +14,7 @@
 
 --- a/info.c
 +++ b/info.c
-@@ -1067,10 +1067,21 @@
+@@ -1067,10 +1067,21 @@ state_t	states[NUMSTATES] = {
      {SPR_TGRN,32769,4,{NULL},S_GREENTORCH3,0,0},	// S_GREENTORCH2
      {SPR_TGRN,32770,4,{NULL},S_GREENTORCH4,0,0},	// S_GREENTORCH3
      {SPR_TGRN,32771,4,{NULL},S_GREENTORCH,0,0},	// S_GREENTORCH4
@@ -40,7 +40,7 @@
      {SPR_SMBT,32768,4,{NULL},S_BTORCHSHRT2,0,0},	// S_BTORCHSHRT
      {SPR_SMBT,32769,4,{NULL},S_BTORCHSHRT3,0,0},	// S_BTORCHSHRT2
      {SPR_SMBT,32770,4,{NULL},S_BTORCHSHRT4,0,0},	// S_BTORCHSHRT3
-@@ -1099,7 +1110,116 @@
+@@ -1099,7 +1110,138 @@ state_t	states[NUMSTATES] = {
      {SPR_TLP2,32768,4,{NULL},S_TECH2LAMP2,0,0},	// S_TECH2LAMP
      {SPR_TLP2,32769,4,{NULL},S_TECH2LAMP3,0,0},	// S_TECH2LAMP2
      {SPR_TLP2,32770,4,{NULL},S_TECH2LAMP4,0,0},	// S_TECH2LAMP3
@@ -154,11 +154,33 @@
 +    {SPR_APBX,32770,4,{NULL},S_NULL,0,0},		// S_DP_PGFAULT_IMPL3
 +    {SPR_BFE1,32768,3,{NULL},S_DP_PGFAULT_SPRK2,0,0},	// S_DP_PGFAULT_SPRK1 (spark spray)
 +    {SPR_BFE1,32769,3,{NULL},S_DP_PGFAULT_SPRK3,0,0},	// S_DP_PGFAULT_SPRK2
-+    {SPR_BFE1,32770,4,{NULL},S_NULL,0,0}		// S_DP_PGFAULT_SPRK3
++    {SPR_BFE1,32770,4,{NULL},S_NULL,0,0},		// S_DP_PGFAULT_SPRK3
++    // Disk I/O circuit orbs. A = the static billboard the driver hand-moves along
++    // the spiral; B/C bloom in on spawn (and on the summit hand-off, where the
++    // request becomes its own completion); D/E fade out at the far end.
++    {SPR_IFOG,32768,-1,{NULL},S_NULL,0,0},		// S_DP_IOREQ (static amber orb)
++    {SPR_IFOG,32769,3,{NULL},S_DP_IOREQ_BLOOM2,0,0},	// S_DP_IOREQ_BLOOM1 (ring)
++    {SPR_IFOG,32770,2,{NULL},S_DP_IOREQ,0,0},		// S_DP_IOREQ_BLOOM2 (settle)
++    {SPR_IFOG,32771,3,{NULL},S_DP_IOREQ_FADE2,0,0},	// S_DP_IOREQ_FADE1
++    {SPR_IFOG,32772,3,{NULL},S_NULL,0,0},		// S_DP_IOREQ_FADE2
++    {SPR_TFOG,32768,-1,{NULL},S_NULL,0,0},		// S_DP_IOCOMP (static silver orb)
++    {SPR_TFOG,32769,3,{NULL},S_DP_IOCOMP_BLOOM2,0,0},	// S_DP_IOCOMP_BLOOM1 (ring)
++    {SPR_TFOG,32770,2,{NULL},S_DP_IOCOMP,0,0},		// S_DP_IOCOMP_BLOOM2 (settle)
++    {SPR_TFOG,32771,3,{NULL},S_DP_IOCOMP_FADE2,0,0},	// S_DP_IOCOMP_FADE1
++    {SPR_TFOG,32772,3,{NULL},S_NULL,0,0},		// S_DP_IOCOMP_FADE2
++    // D-state attribution tints. Static frames only -- the pile is motionless, so
++    // the hue IS the readout. Not fullbright, matching the neutral S_DP_IOTASK
++    // (frame A): a sleeping thread should sit in the pen's own pulsing light.
++    {SPR_SOUL,1,-1,{NULL},S_NULL,0,0},			// S_DP_IOTASK_DISK (amber, B)
++    {SPR_SOUL,2,-1,{NULL},S_NULL,0,0},			// S_DP_IOTASK_NET (violet, C)
++    {SPR_BON2,32768,2,{NULL},S_DP_IOTASK_DBLOOM2,0,0},	// S_DP_IOTASK_DBLOOM1
++    {SPR_BON2,32769,2,{NULL},S_DP_IOTASK_DISK,0,0},	// S_DP_IOTASK_DBLOOM2
++    {SPR_BON2,32768,2,{NULL},S_DP_IOTASK_NBLOOM2,0,0},	// S_DP_IOTASK_NBLOOM1
++    {SPR_BON2,32769,2,{NULL},S_DP_IOTASK_NET,0,0}	// S_DP_IOTASK_NBLOOM2
  };
  
  
-@@ -4665,6 +4785,246 @@
+@@ -4665,6 +4807,300 @@ mobjinfo_t mobjinfo[NUMMOBJTYPES] = {
  	sfx_None,		// activesound
  	MF_NOBLOCKMAP,		// flags
  	S_NULL		// raisestate
@@ -400,6 +422,60 @@
 +	sfx_None,		// activesound
 +	// Non-blocking + no clipping: the bolts ride a scripted lane path (p_tick.c),
 +	// passing straight through the RAM hologram curtain the player is held at.
++	MF_NOGRAVITY|MF_NOBLOCKMAP|MF_NOCLIP,		// flags
++	S_NULL		// raisestate
++    },
++
++    {		// MT_DP_IOREQ -- amber I/O request orb, ascending to the device
++	-1,		// doomednum (runtime-spawned only)
++	S_DP_IOREQ_BLOOM1,	// spawnstate (bloom-in, then -> static S_DP_IOREQ)
++	1000,		// spawnhealth
++	S_NULL,		// seestate
++	sfx_None,		// seesound
++	8,		// reactiontime
++	sfx_None,		// attacksound
++	S_NULL,		// painstate
++	0,		// painchance
++	sfx_None,		// painsound
++	S_NULL,		// meleestate
++	S_NULL,		// missilestate
++	S_NULL,		// deathstate
++	S_NULL,		// xdeathstate
++	sfx_None,		// deathsound
++	0,		// speed
++	6*FRACUNIT,		// radius
++	16*FRACUNIT,		// height
++	100,		// mass
++	0,		// damage
++	sfx_None,		// activesound
++	// Non-blocking + no clipping: the orbs ride a scripted spiral path (p_tick.c)
++	// up the climb the player is walking, and must never shove or trip them.
++	MF_NOGRAVITY|MF_NOBLOCKMAP|MF_NOCLIP,		// flags
++	S_NULL		// raisestate
++    },
++
++    {		// MT_DP_IOCOMP -- silver completion orb, descending back to the submitter
++	-1,		// doomednum (runtime-spawned only)
++	S_DP_IOCOMP_BLOOM1,	// spawnstate (bloom-in, then -> static S_DP_IOCOMP)
++	1000,		// spawnhealth
++	S_NULL,		// seestate
++	sfx_None,		// seesound
++	8,		// reactiontime
++	sfx_None,		// attacksound
++	S_NULL,		// painstate
++	0,		// painchance
++	sfx_None,		// painsound
++	S_NULL,		// meleestate
++	S_NULL,		// missilestate
++	S_NULL,		// deathstate
++	S_NULL,		// xdeathstate
++	sfx_None,		// deathsound
++	0,		// speed
++	6*FRACUNIT,		// radius
++	16*FRACUNIT,		// height
++	100,		// mass
++	0,		// damage
++	sfx_None,		// activesound
 +	MF_NOGRAVITY|MF_NOBLOCKMAP|MF_NOCLIP,		// flags
 +	S_NULL		// raisestate
      }

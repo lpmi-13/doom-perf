@@ -40,7 +40,11 @@ export const reserved = {
     namePrefixes: ["DPC", "DPL", "DPF", "DPR", "DPSG", "DPP"], // legacy CPU/shared
     // run-queue + I/O-wait orbs (PINS/SOUL); BON1*/BON2* = orb spawn/despawn FX
     // frames (bloom/burst/fade) + completion sparks (engine patch 0037).
-    spriteReplacements: ["PINSA0", "SOULA0", "BON1A0", "BON1B0", "BON1C0", "BON1D0", "BON2A0", "BON2B0", "BON2C0", "BON2D0"],
+    // SOUL B/C are the D-state ATTRIBUTION tints (amber = blocked on storage,
+    // violet = blocked on the network). They live here, not in the storage/network
+    // blocks, because the pen and the SOUL name belong to the CPU wing — one wing
+    // owns one sprite name, which is the invariant that keeps this registry useful.
+    spriteReplacements: ["PINSA0", "SOULA0", "SOULB0", "SOULC0", "BON1A0", "BON1B0", "BON1C0", "BON1D0", "BON2A0", "BON2B0", "BON2C0", "BON2D0"],
   },
   memory: {
     sectorTags: [500, 559], // page cells 500-544 (retired), reclaim-sluice pool 546 + dam gate 547, baron pen 548, minor/major fault meters 549/550, RSS-reliquary barrel pads 551-555, swap tributary 557 + inflow 558 (545 retired)
@@ -66,6 +70,19 @@ export const reserved = {
       // vent needs no new mobj/state; nothing else in the map spawns puffs (the
       // player firing a hitscan weapon at a wall is the only other source).
       "PUFFA0", "PUFFB0", "PUFFC0", "PUFFD0",
+      // Page-fault RANGE (fault-range-volley). Bolt looks: MISL A = gold orb,
+      // PLSS A/B = electric arc, BFS1 A = violet streak. Impact styles: MISL B-D =
+      // ripple, PLSE A-C = soft absorb, APBX A-C = converging ring, BFE1 A-C =
+      // spark spray. Nothing in the lab fires rockets/plasma/BFG/arachno rounds.
+      // (These were consumed by the fault range but went UNRECORDED here until the
+      // disk wing tried to claim APBX/PLSE -- the collision this registry exists to
+      // prevent. Record a claim in the SAME change that spends it.)
+      "MISLA0", "MISLB0", "MISLC0", "MISLD0",
+      "PLSSA0", "PLSSB0",
+      "BFS1A0",
+      "PLSEA0", "PLSEB0", "PLSEC0",
+      "APBXA0", "APBXB0", "APBXC0",
+      "BFE1A0", "BFE1B0", "BFE1C0",
     ],
   },
   storage: {
@@ -73,7 +90,18 @@ export const reserved = {
     lineTags: [660, 699],
     lights: [130, 134], // reserved sentinels (unused until live I/O display)
     namePrefix: "DPD", // DPDISK (label) + DPD... for platters/queue/latency art
-    spriteReplacements: [],
+    // I/O request CIRCUIT orbs (disk queue circuit, DISK_QUEUE_CIRCUIT_PLAN.md).
+    // IFOG (item-respawn fog) = amber REQUEST ascending to the platter; TFOG
+    // (teleport fog) = silver COMPLETION descending back. Both are 5+-frame rot-0
+    // names the IWAD already animates, and the lab has no teleporters and no item
+    // respawn, so nothing else can spawn them. Silver, NOT green or cyan -- green
+    // is the CPU wing's D-state orb, cyan the network wing's RX packet.
+    // Verified free against the C state table, not just this file: APBX/PLSE/BFE1/
+    // MISL/PLSS/BFS1 all LOOK free here but are spent by the memory fault range.
+    spriteReplacements: [
+      "IFOGA0", "IFOGB0", "IFOGC0", "IFOGD0", "IFOGE0",
+      "TFOGA0", "TFOGB0", "TFOGC0", "TFOGD0", "TFOGE0",
+    ],
   },
   network: {
     sectorTags: [700, 759],

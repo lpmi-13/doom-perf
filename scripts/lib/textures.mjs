@@ -428,6 +428,45 @@ export const buildOrbPatch = (ramp) => {
   });
 };
 
+// Doom Perf: a SHADED orb, for the disk wing's I/O circuit. buildOrbPatch above
+// ramps concentrically from the centre out, which reads as a flat disc -- fine for
+// a small static pip, but the circuit orbs are the wing's headline moving element
+// and were reading as plain dots. This shades from an OFF-CENTRE highlight instead,
+// so the ball catches light from one side like a sphere, and adds a faint fresnel
+// rim so the silhouette stays crisp against a bright wall. Same canvas and offsets
+// as buildOrbPatch, so it is a drop-in for the static frames; the bloom/fade FX
+// frames still come from buildFxPatch.
+export const buildShadedOrbPatch = (ramp, { highlight = 0.34, rim = 0.45 } = {}) => {
+  const { width, height } = orbSpriteSize;
+  const TRANSPARENT = 247;
+  const pixels = new Uint8Array(width * height).fill(TRANSPARENT);
+  const cx = (width - 1) / 2;
+  const cy = (height - 1) / 2;
+  const radius = width / 2 - 1;
+  const lx = cx - radius * highlight;
+  const ly = cy - radius * highlight;
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const dx = x - cx;
+      const dy = y - cy;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist > radius) continue;
+      // Distance from the highlight drives the shade; the rim term lifts the very
+      // edge back up so the orb reads as a lit sphere rather than a gradient smear.
+      const lit = Math.sqrt((x - lx) ** 2 + (y - ly) ** 2) / (radius * 1.55);
+      const edge = (dist / radius) ** 6 * rim;
+      const t = Math.min(1, Math.max(0, lit - edge));
+      const k = Math.min(ramp.length - 1, Math.floor(t * ramp.length));
+      pixels[y * width + x] = ramp[k];
+    }
+  }
+  return buildPatch(pixels, width, height, {
+    leftOffset: Math.round(width / 2),
+    topOffset: height,
+    transparent: TRANSPARENT,
+  });
+};
+
 // Doom Perf: spawn/despawn "polish" effect frames for the run-queue orbs (engine
 // patch 0037). A radial disc or ring on a `size` canvas, ramped from the inner
 // edge (ramp[0], brightest) to the outer edge (ramp[last]); innerFrac=0 gives a

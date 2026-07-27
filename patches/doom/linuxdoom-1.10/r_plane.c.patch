@@ -12,7 +12,7 @@
 
 --- a/r_plane.c
 +++ b/r_plane.c
-@@ -44,6 +44,16 @@
+@@ -44,6 +44,14 @@ rcsid[] = "$Id: r_plane.c,v 1.4 1997/02/03 16:47:55 b1 Exp $";
  planefunction_t		floorfunc;
  planefunction_t		ceilingfunc;
  
@@ -20,8 +20,6 @@
 +// instrument floors in the CPU room.
 +#define DOOMPERF_CPU_CORE_DISPLAY_LIGHT		160
 +#define DOOMPERF_CPU_RUN_QUEUE_DISPLAY_LIGHT	144
-+// Storage (disk) wing: the media-pit queue channel's floor (reserved sentinel).
-+#define DOOMPERF_DISK_QUEUE_DISPLAY_LIGHT	134
 +// Storage (disk) wing: the summit platter floor (rotating utilization tracks).
 +#define DOOMPERF_DISK_PLATTER_DISPLAY_LIGHT	130
 +extern int doomperf_cpu_floor_display;
@@ -29,7 +27,7 @@
  //
  // opening
  //
-@@ -420,6 +430,19 @@
+@@ -420,6 +428,17 @@ void R_DrawPlanes (void)
  	}
  	
  	// regular flat
@@ -39,8 +37,6 @@
 +		doomperf_cpu_floor_display = 1;
 +	    else if (pl->lightlevel == DOOMPERF_CPU_RUN_QUEUE_DISPLAY_LIGHT)
 +		doomperf_cpu_floor_display = 2;
-+	    else if (pl->lightlevel == DOOMPERF_DISK_QUEUE_DISPLAY_LIGHT)
-+		doomperf_cpu_floor_display = 3;
 +	    else if (pl->lightlevel == DOOMPERF_DISK_PLATTER_DISPLAY_LIGHT)
 +		doomperf_cpu_floor_display = 4;
 +	    else
@@ -49,7 +45,7 @@
  	ds_source = W_CacheLumpNum(firstflat +
  				   flattranslation[pl->picnum],
  				   PU_STATIC);
-@@ -449,5 +472,6 @@
+@@ -449,5 +468,6 @@ void R_DrawPlanes (void)
  	}
  	
  	Z_ChangeTag (ds_source, PU_CACHE);

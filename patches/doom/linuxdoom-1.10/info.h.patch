@@ -13,7 +13,7 @@
 
 --- a/info.h
 +++ b/info.h
-@@ -1140,6 +1140,123 @@
+@@ -1140,6 +1140,156 @@ typedef enum
      S_TECH2LAMP2,
      S_TECH2LAMP3,
      S_TECH2LAMP4,
@@ -134,10 +134,43 @@
 +    S_DP_PGFAULT_SPRK1,
 +    S_DP_PGFAULT_SPRK2,
 +    S_DP_PGFAULT_SPRK3,
++    // Doom Perf disk I/O CIRCUIT (disk queue circuit). A request is ONE orb making
++    // a ROUND TRIP: it ascends the spiral climb as an amber REQUEST (SPR_IFOG),
++    // reaches the platter at the summit -- the device -- and returns as a silver
++    // COMPLETION (SPR_TFOG) descending to the foot, where the submitter waits.
++    // That return leg is precisely what separates a disk queue from the CPU run
++    // queue: a task goes in one end of the subway and out the other, but an I/O
++    // request comes BACK to whoever issued it. Silver, not green or cyan -- green
++    // is the CPU wing's D-state orb and cyan the network wing's RX packet.
++    // Frames ride the item-respawn and teleport fogs (A static, B/C bloom, D/E
++    // fade); the lab has no teleporters and no item respawn, so nothing else can
++    // spawn them.
++    S_DP_IOREQ,
++    S_DP_IOREQ_BLOOM1,
++    S_DP_IOREQ_BLOOM2,
++    S_DP_IOREQ_FADE1,
++    S_DP_IOREQ_FADE2,
++    S_DP_IOCOMP,
++    S_DP_IOCOMP_BLOOM1,
++    S_DP_IOCOMP_BLOOM2,
++    S_DP_IOCOMP_FADE1,
++    S_DP_IOCOMP_FADE2,
++    // D-state ATTRIBUTION tints for the CPU wing's I/O-wait pile. Uninterruptible
++    // sleep is not disk-exclusive -- NFS hard mounts, CIFS, iSCSI and NBD park
++    // tasks in D indefinitely, as do direct reclaim and kernel lock contention --
++    // so the pile can say WHICH pressure is holding these threads. Amber = blocked
++    // on storage, violet = blocked on the network, riding the soulsphere's spare
++    // B and C frames (the CPU wing already owns SOUL A for the neutral green).
++    S_DP_IOTASK_DISK,
++    S_DP_IOTASK_NET,
++    S_DP_IOTASK_DBLOOM1,
++    S_DP_IOTASK_DBLOOM2,
++    S_DP_IOTASK_NBLOOM1,
++    S_DP_IOTASK_NBLOOM2,
      NUMSTATES
  } statenum_t;
  
-@@ -1298,6 +1415,15 @@
+@@ -1298,6 +1448,17 @@ typedef enum {
      MT_MISC84,
      MT_MISC85,
      MT_MISC86,
@@ -150,6 +183,8 @@
 +    MT_DP_MEMBOOKC,
 +    MT_DP_MEMCAP,
 +    MT_DP_PGFAULT,
++    MT_DP_IOREQ,
++    MT_DP_IOCOMP,
      NUMMOBJTYPES
  
  } mobjtype_t;

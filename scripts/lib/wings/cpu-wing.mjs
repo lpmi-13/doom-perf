@@ -608,6 +608,14 @@ const flats = [
 const sprites = [
   { name: "PINSA0", build: () => buildOrbPatch([4, 194, 196, 198, 200, 203]) },
   { name: "SOULA0", build: () => buildOrbPatch([4, 112, 114, 116, 118, 121]) },
+  // D-state ATTRIBUTION tints, on the soulsphere's spare B/C frames. procs_blocked
+  // is a count with NO attribution (telling causes apart needs per-PID wchan or
+  // delayacct, which we do not collect), so LIVE always uses the neutral green A.
+  // The sims know their own scenario: disk saturation tints the pile amber (the
+  // storage wing's gold) and network saturation violet (the network wing's TX
+  // hue), so the same pen can show WHICH pressure is holding the threads.
+  { name: "SOULB0", build: () => buildOrbPatch([4, 231, 165, 163, 161, 159]) }, // blocked on storage
+  { name: "SOULC0", build: () => buildOrbPatch([4, 250, 251, 252, 253, 254]) }, // blocked on network
   // Spawn/despawn polish frames (engine patch 0037). The orb mobj states chain
   // bloom -> static orb on spawn, and burst/fade -> S_NULL on despawn; sparks are
   // a separate completion mobj. BON1* = blue CPU-orb FX, BON2* = green I/O-orb FX

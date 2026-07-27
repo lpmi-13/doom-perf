@@ -30,7 +30,7 @@
  //-----------------------------------------------------------------------------
  //
  // $Id:$
-@@ -30,9 +30,2591 @@
+@@ -30,9 +30,3144 @@
  
  #include "doomstat.h"
  
@@ -246,11 +246,14 @@
 +// fixed-point) so the permille scale can't overflow a 32-bit intermediate, and the
 +// fill EASES toward its target so a slow df change reads as a rising tide. The disk
 +// sims synthesize a plausible fill; live uses the browser-pushed value.
-+// Heights sit within one step (24) of the surrounding rim (floor 24) so the basin
-+// is escapable: LOW 0 is a shallow dry basin, HIGH 22 brims just under the rim.
++// Heights sit within one step (24) of the surrounding rim so the basin is
++// escapable: LOW is a shallow dry basin one step down, HIGH brims just under the
++// rim. These are ABSOLUTE map heights, so they track the cistern hall's floor
++// (CIST_FLOOR in storage-wing.mjs, now 48 -- the hall moved up a face when the
++// step ring went from six sides to ten).
 +#define DOOMPERF_DISK_CISTERN_TAG	616
-+#define DOOMPERF_DISK_CISTERN_LOW	(0)		// dry basin floor (map units)
-+#define DOOMPERF_DISK_CISTERN_HIGH	(22)		// brimming, just under the rim
++#define DOOMPERF_DISK_CISTERN_LOW	(24)		// dry basin floor (map units)
++#define DOOMPERF_DISK_CISTERN_HIGH	(46)		// brimming, just under the rim (48)
 +#define DOOMPERF_DISK_CISTERN_STEP	(2 * FRACUNIT)	// ease per tic
 +
 +void DoomPerf_UpdateDiskUsage (void)
@@ -300,6 +303,492 @@
 +    }
 +}
 +
++// Doom Perf: disk QUEUE DEPTH as permille of the rated queue. The block layer's
++// request queue is a HARD-CAPPED vessel (/sys/block/<dev>/queue/nr_requests,
++// typically 64-256 blk-mq tags): when the tags run out a submitter does not queue,
++// it BLOCKS. Live mode uses the browser-pushed value; the disk sims synthesize it.
++// Mode 3 (high utilization) keeps a shallow queue -- a busy disk that KEEPS UP
++// barely backs up -- while mode 4 (saturation) pins near the cap and breathes
++// there. Queue depth is no longer drawn as a floor readout of its own; it now
++// feeds only the request circuit's spawn burstiness (a backlogged device
++// dispatches in ragged batches as tags free -- see DoomPerf_DiskGap below).
++static int DoomPerf_DiskQueuePermille (void)
++{
++    switch (doomperf_sim_mode)
++    {
++      case 3:
++	return 40 + (leveltime % 30);
++      case 4:
++	return 930 + ((leveltime / 3) % 70);
++      default:
++	return doomperf_storage_queue;
++    }
++}
++
++// Doom Perf: the I/O REQUEST CIRCUIT (storage wing). One request is ONE orb making
++// a ROUND TRIP up and back down the spiral climb: it ascends as an amber REQUEST
++// (MT_DP_IOREQ), reaches the platter at the summit -- the device -- and returns as
++// a silver COMPLETION (MT_DP_IOCOMP) descending to the foot, where the submitter
++// is waiting. The return leg is the point: a CPU task enters one end of the run
++// queue and leaves the other, but an I/O request comes BACK to whoever issued it.
++// Modelling it as one orb (rather than two independent streams) makes the
++// population self-regulating and puts a real round trip on screen.
++//
++// Three live signals ride this one mechanism:
++//   spawn rate  <- doomperf_storage_iops   (flow: the rate work enters the device)
++//   transit speed <- doomperf_storage_await (latency: a slow disk = a slow lap)
++//   burstiness  <- doomperf_storage_queue  (backlog: a queued device dispatches in
++//                                           ragged batches; DoomPerf_DiskGap)
++//
++// Path: a full revolution at radius 336 -- the inner strip of the step walkway,
++// 24 out from the deck rim (R_DECK 312), so the orbs float just above the stairs
++// near the central tower -- climbing the whole 240-unit spiral, then a wind INWARD
++// across the deck, then a tight VORTEX around the spindle in the open sky shaft
++// above the platter -- 780 degrees of spiral in all. Coordinates are WORLD and
++// hardcoded, mirroring how the other storage instruments pin their geometry: the
++// storage wing is SOUTH, so the builder maps local (u,v) -> world (-u,-v), about
++// centre local (0,1197) -> world (0,-1197). Keep in step with storage-wing.mjs if
++// the ring radii ever move.
++//
++// The node SPACING is a hard geometric constraint, not a style choice. The chord
++// between adjacent nodes sags toward the centre by cos(half the angular step), so
++// a coarse step pulls the path inside the deck wall even though every node sits
++// safely in the channel. The first cut used one node per hex FACE and the whole
++// circuit ran through the middle of the tower. At 30-degree steps on r=336 the
++// sag is cos(15) -> 325, which clears the deck wall (312) and stays inside the
++// outer wall (360). Any change to the node count must re-check that sag -- and
++// likewise for the vortex, where 60-degree steps on r=130 sag to 113 and so keep
++// clear of the solid spindle drum (R_DRUM 100) by the same ~13 units.
++//
++// Why the vortex exists at all: everything below the summit and inside R_DECK is
++// SOLID (drum, platter and deck all have their floors at the summit), so a tight
++// helix hugging the spindle simply cannot be flown on the climbing leg -- the
++// only open space at those heights is the step walkway outside R_DECK. Above the
++// summit the shaft from the platter floor up to C_SKY is clear, and that is where
++// the path can finally wind in close and fast.
++// Shared orb retirement helper; defined with the run-queue driver further down.
++static void DoomPerf_RqDespawn (mobj_t* mo, statenum_t state);
++
++#define DOOMPERF_DISK_CIRCUIT_NODES	21
++#define DOOMPERF_DISK_CIRCUIT_SEGS	(DOOMPERF_DISK_CIRCUIT_NODES - 1)
++#define DOOMPERF_DISK_CIRCUIT_SPAN	1000	// progress units per segment
++#define DOOMPERF_DISK_CIRCUIT_UP \
++    (DOOMPERF_DISK_CIRCUIT_SEGS * DOOMPERF_DISK_CIRCUIT_SPAN)	// 20000: serviced
++#define DOOMPERF_DISK_CIRCUIT_END	(2 * DOOMPERF_DISK_CIRCUIT_UP)	// 40000: home
++#define DOOMPERF_DISK_ORB_MAX		48	// hard cap on live circuit orbs (WASM perf)
++// Two decks, 32 units (twice an orb's height) apart: outbound submissions ride
++// the upper carriageway, homebound completions the lower, so the two streams read
++// apart by POSITION and not by colour alone. The node z tracks the climb, so the
++// lower deck floats ~12 above the step it passes over at its tightest (a
++// descending completion crossing the top step) and more everywhere else.
++#define DOOMPERF_DISK_ORB_Z_UP		56	// ascending: upper deck
++#define DOOMPERF_DISK_ORB_Z_DOWN	24	// descending: lower deck
++// A segment averages ~158 world units per 1000 progress, so world speed is about
++// (progress/tic * 5.5) units/sec. A sprinting player does ~583, and anything near
++// that reads as a blur rather than a request you can follow: these give ~111 u/s
++// when the disk is dragging and ~288 u/s when it is quick. (Segments are NOT all
++// the same length -- the inward wind and the vortex are shorter than a climb
++// chord, so an orb decelerates as it closes on the device while its ANGULAR rate
++// doubles. That is the intended reading: it whips in around the spindle.)
++#define DOOMPERF_DISK_ORB_SPEED_MIN	20	// progress/tic at full latency
++#define DOOMPERF_DISK_ORB_SPEED_MAX	52	// progress/tic on an idle-fast disk
++// The RETURN leg does not carry the queue's latency. Await is dominated by time
++// spent waiting for service; once the device has actually handled the request the
++// completion comes back quickly. So the descent runs fast and at a near-constant
++// rate, which also makes it read as RELEASE rather than as more congestion --
++// the whole reason for showing the return at all. A side effect worth having:
++// completions clear the circuit quickly, so under saturation you see
++// proportionally FEWER of them, which is exactly what collapsed throughput means.
++#define DOOMPERF_DISK_ORB_SPEED_RETURN	64	// progress/tic homebound (~356 u/s)
++
++// Nodes 0..12 -- THE CLIMB. One full revolution at r=336 (the inner strip of the
++// step walkway, 30 degrees apart), rising 20 per node from the foot (0) to summit
++// (240). Node 12 lands directly above node 0: passing over its own start is what
++// makes the path read as a HELIX rather than as a ring. This leg is deliberately
++// gentle (6.5 degrees of pitch) because it runs alongside the player as they walk
++// the same climb.
++// Nodes 13..15 -- THE WIND-IN. The path crosses the deck at the same 30-degree
++// cadence while the radius shrinks 336 -> 130, replacing what was once a straight
++// radial dash to the platter centre (a dog-leg that read as a hard line across
++// the top of the tower). Segments shorten as it goes, so an orb visibly slows as
++// it closes on the device.
++// Nodes 16..20 -- THE VORTEX. Now clear of the deck, the path whips around the
++// spindle at r=130 in the open sky shaft, 60 degrees per node and 300 degrees in
++// all, rising 312 -> 372. Double the angular rate of the climb, so a request that
++// has spent a long lap crawling up the outside finishes by spinning tightly into
++// the read head. The completion unwinds back out along these same nodes, and the
++// whole vortex stays outside R_DRUM (100) so orbs never vanish into the pillar.
++static const int doomperf_disk_circuit_x[DOOMPERF_DISK_CIRCUIT_NODES] =
++    {     0,  -168,  -291,  -336,  -291,  -168,     0,   168,   291,   336,   291,   168,     0,  -130,  -165,  -130,   -65,    65,   130,    65,   -65 };
++static const int doomperf_disk_circuit_y[DOOMPERF_DISK_CIRCUIT_NODES] =
++    {  -861,  -906, -1029, -1197, -1365, -1488, -1533, -1488, -1365, -1197, -1029,  -906,  -861,  -972, -1102, -1197, -1310, -1310, -1197, -1084, -1084 };
++static const int doomperf_disk_circuit_z[DOOMPERF_DISK_CIRCUIT_NODES] =
++    {     0,    20,    40,    60,    80,   100,   120,   140,   160,   180,   200,   220,   240,   264,   288,   312,   324,   336,   348,   360,   372 };
++
++static mobj_t*	doomperf_disk_orb[DOOMPERF_DISK_ORB_MAX];
++static int	doomperf_disk_orb_p[DOOMPERF_DISK_ORB_MAX];
++static int	doomperf_disk_orb_gap;
++static int	doomperf_disk_orb_nextgap;
++static int	doomperf_disk_orb_mode = -1;	// data source the circuit was seeded for
++
++// Aggregate completed-operations rate as permille. Live uses the browser-pushed
++// value; mode 3 (high utilization) runs a fast, dense circuit -- a busy disk that
++// KEEPS UP -- while mode 4 (saturation) deliberately runs SLOWER and thinner: once
++// the queue caps, throughput collapses even though pressure is at its peak. That
++// contrast -- a brisk dense stream vs a slow sparse one -- is the wing's lesson.
++static int DoomPerf_DiskFlowPermille (void)
++{
++    switch (doomperf_sim_mode)
++    {
++      case 3:
++	return 780 + (leveltime % 90);
++      case 4:
++	return 150 + ((leveltime / 5) % 60);
++      default:
++	return doomperf_storage_iops;
++    }
++}
++
++// Effective service time as permille of full scale; drives transit speed so a
++// high-latency disk visibly drags its requests around the lap.
++static int DoomPerf_DiskLatencyPermille (void)
++{
++    switch (doomperf_sim_mode)
++    {
++      case 3:
++	return 26 + (leveltime % 16);
++      case 4:
++	return 660 + ((leveltime * 3) % 220);
++      default:
++	return doomperf_storage_await;
++    }
++}
++
++// A bursty inter-spawn gap (tics) around `mean`, the same mean-preserving trick
++// the network lane uses (DoomPerf_NetGap): ~60% of the time a tight gap (a clump)
++// and ~40% a wide one (a lull), so average density still tracks `mean` while the
++// stream travels in batches instead of an even train.
++//
++// Real disk I/O is never a metronome -- writeback runs on a timer
++// (dirty_writeback_centisecs, 5s by default), fsync storms arrive all at once,
++// readahead fetches in batches, and blk-mq recycles tags in clumps. A SATURATED
++// device is the burstiest of all: at the tag cap a submission can only proceed
++// when a completion frees a tag, so work goes out in ragged batches. Hence
++// `burst` (0..1000) widens the split -- at 0 both outcomes collapse to `mean`
++// (a near-even train), at 1000 they spread to ~0.3x / ~2.05x.
++static int DoomPerf_DiskGap (int mean, int burst)
++{
++    int		scale;
++    int		g;
++
++    if (burst < 0)
++	burst = 0;
++    if (burst > 1000)
++	burst = 1000;
++
++    // Tight branch shrinks 1.0 -> 0.3, wide branch grows 1.0 -> 2.05. With the
++    // 154/256 split these stay mean-preserving across the whole burst range.
++    scale = (P_Random () < 154)
++	? 1000 - (700 * burst) / 1000
++	: 1000 + (1050 * burst) / 1000;
++
++    g = (mean * scale) / 1000;
++    return (g < 3) ? 3 : g;
++}
++
++// Place an orb at progress p along the circuit. 0..UP ascends node 0 -> 12;
++// UP..END descends the same nodes in reverse, so the return leg retraces the
++// outbound path -- but on its OWN DECK. Submissions ride the upper level and
++// completions the lower, like the two carriageways of a double-deck bridge, so
++// the two streams are told apart by position and not by colour alone. The decks
++// are 32 units apart, twice an orb's height, and both float clear of the step
++// they pass over so neither ever drags on the stairs.
++static void DoomPerf_DiskOrbPos (int p, fixed_t* x, fixed_t* y, fixed_t* z)
++{
++    int		q;
++    int		seg;
++    int		t;
++    int		a;
++    int		b;
++    int		deck;
++
++    deck = (p < DOOMPERF_DISK_CIRCUIT_UP)
++	? DOOMPERF_DISK_ORB_Z_UP
++	: DOOMPERF_DISK_ORB_Z_DOWN;
++
++    q = (p <= DOOMPERF_DISK_CIRCUIT_UP)
++	? p
++	: DOOMPERF_DISK_CIRCUIT_END - p;	// mirror for the descent
++    if (q < 0)
++	q = 0;
++    if (q > DOOMPERF_DISK_CIRCUIT_UP)
++	q = DOOMPERF_DISK_CIRCUIT_UP;
++
++    seg = q / DOOMPERF_DISK_CIRCUIT_SPAN;
++    if (seg >= DOOMPERF_DISK_CIRCUIT_SEGS)
++	seg = DOOMPERF_DISK_CIRCUIT_SEGS - 1;
++    t = q - seg * DOOMPERF_DISK_CIRCUIT_SPAN;
++
++    a = seg;
++    b = seg + 1;
++    // Lerp in MAP UNITS, shift to fixed-point last: a fixed_t span scaled by a
++    // permille wraps a 32-bit intermediate.
++    *x = (doomperf_disk_circuit_x[a]
++	  + ((doomperf_disk_circuit_x[b] - doomperf_disk_circuit_x[a]) * t) / DOOMPERF_DISK_CIRCUIT_SPAN)
++	* FRACUNIT;
++    *y = (doomperf_disk_circuit_y[a]
++	  + ((doomperf_disk_circuit_y[b] - doomperf_disk_circuit_y[a]) * t) / DOOMPERF_DISK_CIRCUIT_SPAN)
++	* FRACUNIT;
++    *z = (doomperf_disk_circuit_z[a]
++	  + ((doomperf_disk_circuit_z[b] - doomperf_disk_circuit_z[a]) * t) / DOOMPERF_DISK_CIRCUIT_SPAN
++	  + deck)
++	* FRACUNIT;
++}
++
++// Seed the circuit at level start so it is ALREADY RUNNING the moment the player
++// arrives, instead of filling from empty over the first lap.
++//
++// The orbs are placed at the ages they would have had if the circuit had been
++// turning forever, which means spreading them evenly over the LAP TIME and then
++// mapping each age through its own leg's speed -- NOT spreading them evenly over
++// progress. The two legs run at different speeds, so a uniform spread of progress
++// would put equal numbers on each, when in truth the slower ascent holds
++// proportionally more. They also start in their settled state with no arrival
++// bloom, because they are meant to have been in flight for a while already.
++static void DoomPerf_DiskSeedCircuit (int speed, int gap)
++{
++    int		up_tics;
++    int		down_tics;
++    int		lap;
++    int		want;
++    int		n;
++    int		t;
++    int		p;
++    int		ascending;
++    fixed_t	x;
++    fixed_t	y;
++    fixed_t	z;
++    mobj_t*	mo;
++
++    if (speed < 1)
++	speed = 1;
++    if (gap < 1)
++	gap = 1;
++
++    up_tics = DOOMPERF_DISK_CIRCUIT_UP / speed;
++    down_tics = DOOMPERF_DISK_CIRCUIT_UP / DOOMPERF_DISK_ORB_SPEED_RETURN;
++    lap = up_tics + down_tics;
++
++    want = lap / gap;			// steady-state population
++    if (want > DOOMPERF_DISK_ORB_MAX)
++	want = DOOMPERF_DISK_ORB_MAX;
++    if (want < 1)
++	return;
++
++    for (n = 0; n < want; n++)
++    {
++	// Even spread over the lap, jittered so the seed is not a rigid ladder.
++	t = (lap * n) / want + (P_Random () % (lap / want + 1));
++	if (t >= lap)
++	    t -= lap;
++
++	ascending = (t < up_tics);
++	p = ascending
++	    ? t * speed
++	    : DOOMPERF_DISK_CIRCUIT_UP
++	      + (t - up_tics) * DOOMPERF_DISK_ORB_SPEED_RETURN;
++	if (p >= DOOMPERF_DISK_CIRCUIT_END)
++	    p = DOOMPERF_DISK_CIRCUIT_END - 1;
++	if (p < 0)
++	    p = 0;
++	ascending = (p < DOOMPERF_DISK_CIRCUIT_UP);
++
++	DoomPerf_DiskOrbPos (p, &x, &y, &z);
++	mo = P_SpawnMobj (x, y, z, ascending ? MT_DP_IOREQ : MT_DP_IOCOMP);
++	mo->momx = mo->momy = mo->momz = 0;
++	P_SetMobjState (mo, ascending ? S_DP_IOREQ : S_DP_IOCOMP);
++	doomperf_disk_orb[n] = mo;
++	doomperf_disk_orb_p[n] = p;
++    }
++}
++
++void DoomPerf_UpdateDiskCircuit (void)
++{
++    int		flow;
++    int		latency;
++    int		speed;
++    int		gap;
++    int		live;
++    int		reseed;
++    int		i;
++    fixed_t	x;
++    fixed_t	y;
++    fixed_t	z;
++    mobj_t*	mo;
++
++    flow = DoomPerf_DiskFlowPermille();
++    if (flow < 0)
++	flow = 0;
++    if (flow > 1000)
++	flow = 1000;
++
++    latency = DoomPerf_DiskLatencyPermille();
++    if (latency < 0)
++	latency = 0;
++    if (latency > 1000)
++	latency = 1000;
++
++    // Higher await -> slower lap. Speed is the whole point of the return leg
++    // being visible: you watch a request take longer to come home.
++    speed = DOOMPERF_DISK_ORB_SPEED_MAX
++	- ((DOOMPERF_DISK_ORB_SPEED_MAX - DOOMPERF_DISK_ORB_SPEED_MIN) * latency) / 1000;
++
++    // Cadence is set against the LAP TIME so that even sustained heavy traffic
++    // stays clear of DOOMPERF_DISK_ORB_MAX. Pegging the cap is not a stall (the
++    // circuit keeps turning, issuing as completions free slots) but it does make
++    // every flow above the peg look identical, which throws away the signal.
++    // Rescaled by the same 1.25x the lap grew when the tower went from six faces
++    // to ten (16 segments -> 20), so the steady-state populations are unchanged.
++    gap = 69 - (48 * flow) / 1000;	// ~0.5/sec at a trickle, ~1.7/sec at full flow
++    if (gap < 10)
++	gap = 10;
++
++    // Level reload frees every mobj; drop the dangling pool refs on the first tic,
++    // the same guard the run-queue pool uses. Without it, switching data source
++    // leaves the circuit advancing freed mobjs -- which reads as orbs stuck
++    // motionless mid-climb, and is a use-after-free besides. Then SEED the circuit
++    // so it is already running the instant the player walks in, rather than
++    // filling from empty over the first lap (the mistake the memory wing's spire
++    // made, where an early arrival watched every book still flying to its shelf).
++    reseed = 0;
++    if (leveltime == 0)
++    {
++	// Reload already freed every mobj -- drop the refs WITHOUT touching them.
++	for (i = 0; i < DOOMPERF_DISK_ORB_MAX; i++)
++	    doomperf_disk_orb[i] = NULL;
++	reseed = 1;
++    }
++    else if (doomperf_sim_mode != doomperf_disk_orb_mode)
++    {
++	// A data-source switch is a new scenario and should present its steady
++	// state at once, for the same reason the level start does: otherwise the
++	// player watches the circuit migrate from the OLD population to the new
++	// one for a full lap -- the old orbs scattered along the whole spiral
++	// while the new ones climb from the foot as a wave. Retire what is in
++	// flight (these mobjs are live, so fade them properly) and re-seed.
++	for (i = 0; i < DOOMPERF_DISK_ORB_MAX; i++)
++	{
++	    if (doomperf_disk_orb[i])
++		DoomPerf_RqDespawn (doomperf_disk_orb[i],
++				    (doomperf_disk_orb_p[i] < DOOMPERF_DISK_CIRCUIT_UP)
++				    ? S_DP_IOREQ_FADE1 : S_DP_IOCOMP_FADE1);
++	    doomperf_disk_orb[i] = NULL;
++	}
++	reseed = 1;
++    }
++    if (reseed)
++    {
++	doomperf_disk_orb_mode = doomperf_sim_mode;
++	doomperf_disk_orb_gap = 0;
++	doomperf_disk_orb_nextgap = 0;
++	DoomPerf_DiskSeedCircuit (speed, gap);
++    }
++
++    // Advance every live orb; hand off to a completion at the summit, retire it
++    // at the foot.
++    live = 0;
++    for (i = 0; i < DOOMPERF_DISK_ORB_MAX; i++)
++    {
++	mo = doomperf_disk_orb[i];
++	if (!mo)
++	    continue;
++
++	// Ascending requests carry the queue's latency; homebound completions do
++	// not (see DOOMPERF_DISK_ORB_SPEED_RETURN).
++	doomperf_disk_orb_p[i] +=
++	    (doomperf_disk_orb_p[i] < DOOMPERF_DISK_CIRCUIT_UP)
++	    ? speed
++	    : DOOMPERF_DISK_ORB_SPEED_RETURN;
++	if (doomperf_disk_orb_p[i] >= DOOMPERF_DISK_CIRCUIT_END)
++	{
++	    // Home: the completion reaches the submitter and fades.
++	    DoomPerf_RqDespawn (mo, S_DP_IOCOMP_FADE1);
++	    doomperf_disk_orb[i] = NULL;
++	    continue;
++	}
++
++	// Crossing the summit: the device services the request and it turns
++	// around as its own completion. Swapping type in place (rather than
++	// killing one orb and spawning another) is what makes it read as a
++	// round trip instead of two unrelated streams.
++	if (mo->type == MT_DP_IOREQ
++	    && doomperf_disk_orb_p[i] >= DOOMPERF_DISK_CIRCUIT_UP)
++	{
++	    mo->type = MT_DP_IOCOMP;
++	    P_SetMobjState (mo, S_DP_IOCOMP_BLOOM1);
++	}
++
++	DoomPerf_DiskOrbPos (doomperf_disk_orb_p[i], &x, &y, &z);
++	P_UnsetThingPosition (mo);
++	mo->x = x;
++	mo->y = y;
++	mo->z = z;
++	P_SetThingPosition (mo);
++	// P_SetThingPosition does NOT refresh these -- only P_SpawnMobj and
++	// P_TryMove do -- while P_ZMovement's floor clamp ("if (mo->z <=
++	// mo->floorz) mo->z = mo->floorz", p_mobj.c) is NOT gated by MF_NOGRAVITY;
++	// only the gravity branch below it is. A hand-positioned orb therefore
++	// keeps its SPAWN subsector's floor height forever, and the moment it
++	// travels BELOW that height the engine snaps it back up. Seeded orbs are
++	// placed all along the spiral, so the ones seeded high descended into a
++	// stale floor and rode it down -- reading as completions stuck too high
++	// until, one lap later, every seeded orb had been replaced by one spawned
++	// at the foot (whose floor is genuinely low). This is the first DoomPerf
++	// instrument whose entities DESCEND after spawning, which is why no other
++	// wing has needed this.
++	mo->floorz = mo->subsector->sector->floorheight;
++	mo->ceilingz = mo->subsector->sector->ceilingheight;
++	live++;
++    }
++
++    // Spawn new requests at the foot at a cadence set by the flow rate. An idle
++    // disk issues nothing at all; a saturated one issues little, because its
++    // throughput has collapsed even though its queue is backed up.
++    if (flow <= 0)
++	return;
++
++    // Cadence is tuned against the LAP TIME so the two disk sims differ in
++    // density as well as speed: mode 3 (healthy-busy) settles around 24 orbs
++    // moving briskly, mode 4 (saturated) around 17 dragging -- high throughput
++    // versus collapsed throughput, both plainly countable. Sustained heavy LIVE
++    // traffic can reach the DOOMPERF_DISK_ORB_MAX ceiling, where issuing simply
++    // becomes gated by completions freeing slots; the circuit stays continuously
++    // full rather than stalling, which is the honest reading of a device at its
++    // limit.
++    if (++doomperf_disk_orb_gap < doomperf_disk_orb_nextgap)
++	return;
++    doomperf_disk_orb_gap = 0;
++    // Burstiness rises with the QUEUE, not the flow rate: a device with a backlog
++    // dispatches in ragged batches as tags free, while an unloaded one issues a
++    // fairly even train. The floor keeps even a quiet disk from looking clockwork.
++    doomperf_disk_orb_nextgap =
++	DoomPerf_DiskGap (gap, 200 + (800 * DoomPerf_DiskQueuePermille ()) / 1000);
++    if (live >= DOOMPERF_DISK_ORB_MAX)
++	return;
++
++    for (i = 0; i < DOOMPERF_DISK_ORB_MAX; i++)
++    {
++	if (doomperf_disk_orb[i])
++	    continue;
++	DoomPerf_DiskOrbPos (0, &x, &y, &z);
++	mo = P_SpawnMobj (x, y, z, MT_DP_IOREQ);
++	mo->momx = mo->momy = mo->momz = 0;
++	doomperf_disk_orb[i] = mo;
++	doomperf_disk_orb_p[i] = 0;
++	break;
++    }
++}
++
 +// Doom Perf: the per-device IOPS COUNTER BANK (storage wing). The busiest block
 +// devices from diskstats stand as a row of standpipe columns (sector tags
 +// DOOMPERF_DISK_DEV_TAG_BASE .. +SLOTS-1, column 0 the busiest); each column's
@@ -308,12 +797,14 @@
 +// The disk sims synthesize a full, staggered bank; live uses the per-device values
 +// the browser pushes. Tags start at 630 to stay clear of the (now dead) ring-
 +// platter tags 620..622 still scanned by DoomPerf_UpdatePlatter.
-+// LOW (76) rests one step (20) below the surrounding walkway (floor 96) so an idle
-+// column is an escapable shallow slot; HIGH (160) rises well above the walk as a
-+// clear riser bar (a busy column is a step-up wall, not a pit).
++// LOW rests one step (20) below the surrounding walkway so an idle column is an
++// escapable shallow slot; HIGH rises well above the walk as a clear riser bar (a
++// busy column is a step-up wall, not a pit). Both are ABSOLUTE map heights and so
++// track the IOPS hall's floor (IOPS_FLOOR in storage-wing.mjs, now 168 -- the hall
++// moved up when the step ring went from six sides to ten).
 +#define DOOMPERF_DISK_DEV_TAG_BASE	630
-+#define DOOMPERF_DISK_DEV_LOW		(76)	// idle/inactive column floor (map units)
-+#define DOOMPERF_DISK_DEV_HIGH		(160)	// busy column floor (a clear riser bar)
++#define DOOMPERF_DISK_DEV_LOW		(148)	// idle/inactive column floor (map units)
++#define DOOMPERF_DISK_DEV_HIGH		(232)	// busy column floor (a clear riser bar)
 +
 +void DoomPerf_UpdateDiskDevices (void)
 +{
@@ -1515,6 +2006,54 @@
 +static int	doomperf_rq_qn[DOOMPERF_RQ_GATE_COUNT];
 +static int	doomperf_rq_phase[DOOMPERF_RQ_GATE_COUNT];
 +static mobj_t*	doomperf_rq_run[DOOMPERF_RQ_MAX_RUN];
++// D-state ATTRIBUTION. Uninterruptible sleep is NOT disk-exclusive: NFS hard
++// mounts, CIFS, iSCSI and NBD park tasks in D indefinitely, and so do memory
++// direct reclaim, balance_dirty_pages and kernel lock contention. /proc/stat's
++// procs_blocked is a COUNT WITH NO ATTRIBUTION -- separating the causes needs
++// per-PID wchan or delayacct blkio_ticks (off by default since 5.14), neither of
++// which the collector reads. So LIVE mode stays deliberately NEUTRAL green:
++// naming a cause we cannot observe would be a lie told in colour.
++//
++// The sims DO know their own scenario, so they say so -- disk saturation tints
++// the pile amber (the storage wing's hue), network saturation violet (the network
++// wing's) -- which lets the two be compared directly.
++#define DOOMPERF_BLOCKED_NEUTRAL	0
++#define DOOMPERF_BLOCKED_DISK		1
++#define DOOMPERF_BLOCKED_NET		2
++
++static int	doomperf_rq_io_flavor = DOOMPERF_BLOCKED_NEUTRAL;
++
++static int DoomPerf_BlockedFlavor (void)
++{
++    switch (doomperf_sim_mode)
++    {
++      case 4:				// SIM: HIGH DISK SATURATION
++	return DOOMPERF_BLOCKED_DISK;
++      case 9:				// SIM: HIGH NETWORK SATURATION
++	return DOOMPERF_BLOCKED_NET;
++      default:
++	return DOOMPERF_BLOCKED_NEUTRAL;
++    }
++}
++
++static statenum_t DoomPerf_BlockedBloomState (int flavor)
++{
++    if (flavor == DOOMPERF_BLOCKED_DISK)
++	return S_DP_IOTASK_DBLOOM1;
++    if (flavor == DOOMPERF_BLOCKED_NET)
++	return S_DP_IOTASK_NBLOOM1;
++    return S_DP_IOTASK_BLOOM1;
++}
++
++static statenum_t DoomPerf_BlockedStaticState (int flavor)
++{
++    if (flavor == DOOMPERF_BLOCKED_DISK)
++	return S_DP_IOTASK_DISK;
++    if (flavor == DOOMPERF_BLOCKED_NET)
++	return S_DP_IOTASK_NET;
++    return S_DP_IOTASK;
++}
++
 +static mobj_t*	doomperf_rq_io[DOOMPERF_RQ_MAX_IO];
 +
 +// Ease one orb's momentum toward the map-unit target (tx,ty): it decelerates into
@@ -1834,6 +2373,17 @@
 +	while (io_live < DOOMPERF_RQ_MAX_IO && doomperf_rq_io[io_live])
 +	    io_live++;
 +
++	// Switching scenario must not leave a two-tone pile: re-tint everything
++	// already standing, so the pen always shows one coherent answer.
++	if (DoomPerf_BlockedFlavor() != doomperf_rq_io_flavor)
++	{
++	    doomperf_rq_io_flavor = DoomPerf_BlockedFlavor();
++	    for (i = 0; i < DOOMPERF_RQ_MAX_IO; i++)
++		if (doomperf_rq_io[i])
++		    P_SetMobjState (doomperf_rq_io[i],
++				    DoomPerf_BlockedStaticState (doomperf_rq_io_flavor));
++	}
++
 +	// Pop from the top when the pile shrinks (threads woke up): a soft fade.
 +	while (io_live > io_target)
 +	{
@@ -1861,6 +2411,9 @@
 +	    mo->flags &= ~MF_SOLID;
 +	    mo->flags |= MF_NOGRAVITY;
 +	    mo->momx = mo->momy = mo->momz = 0;
++	    // Override the type's own spawnstate with the attributed bloom chain,
++	    // so the orb blooms in and settles on the right hue.
++	    P_SetMobjState (mo, DoomPerf_BlockedBloomState (doomperf_rq_io_flavor));
 +	    doomperf_rq_io[io_live++] = mo;
 +	}
 +    }
@@ -2622,7 +3175,7 @@
  //
  // THINKERS
  // All thinkers should be allocated by Z_Malloc
-@@ -130,11 +2712,11 @@
+@@ -130,11 +3265,11 @@
  void P_Ticker (void)
  {
      int		i;
@@ -2636,7 +3189,7 @@
      // pause if in menu and at least one tic has been run
      if ( !netgame
  	 && menuactive
-@@ -143,16 +2725,33 @@
+@@ -143,16 +3278,34 @@
      {
  	return;
      }
@@ -2648,6 +3201,7 @@
 +    DoomPerf_UpdatePlatter ();
 +    DoomPerf_UpdateDiskDashboard ();
 +    DoomPerf_UpdateDiskUsage ();
++    DoomPerf_UpdateDiskCircuit ();
 +    DoomPerf_UpdateDiskDevices ();
 +    DoomPerf_UpdateMemoryWing ();
 +    DoomPerf_UpdateMemoryFalls ();

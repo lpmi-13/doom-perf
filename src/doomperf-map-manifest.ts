@@ -97,9 +97,9 @@ export const mapManifest = {
       "segments": [
         {
           "ax": 128,
-          "ay": -1906,
+          "ay": -1994,
           "bx": -128,
-          "by": -1906
+          "by": -1994
         }
       ]
     },
@@ -108,9 +108,9 @@ export const mapManifest = {
       "segments": [
         {
           "ax": -600,
-          "ay": -1116,
+          "ay": -1177,
           "bx": -856,
-          "by": -1116
+          "by": -1177
         }
       ]
     },
@@ -119,9 +119,9 @@ export const mapManifest = {
       "segments": [
         {
           "ax": 846,
-          "ay": -1516,
+          "ay": -1481,
           "bx": 590,
-          "by": -1516
+          "by": -1481
         }
       ]
     },
@@ -165,9 +165,9 @@ export const mapManifest = {
       "segments": [
         {
           "ax": -160,
-          "ay": -1794,
+          "ay": -1882,
           "bx": -160,
-          "by": -1858
+          "by": -1946
         }
       ]
     }

@@ -40,7 +40,7 @@
  //
  // A column is a vertical slice/span from a wall texture that,
  //  given the DOOM style restrictions on the view orientation,
-@@ -137,9 +151,25 @@
+@@ -137,9 +151,27 @@
      // This is as fast as it gets.
      do 
      {
@@ -48,7 +48,9 @@
 -	//  using a lighting/special effects LUT.
 -	*dest = dc_colormap[dc_source[(frac>>FRACBITS)&127]];
 +	if (doomperf_cpu_column_display == 31)
-+	    *dest = dc_colormap[R_DoomPerfDiskSpindlePixel((frac>>FRACBITS)&127)];
++	    // Spindle base texture is 256 tall (DPDSPIN), so the util fill + streaks
++	    // span the FULL drum height in one piece rather than tiling at 128.
++	    *dest = dc_colormap[R_DoomPerfDiskSpindlePixel((frac>>FRACBITS)&255)];
 +	else if (doomperf_cpu_column_display == 30)
 +	    *dest = dc_colormap[R_DoomPerfDiskDashboardPixel(
 +				    doomperf_cpu_column_texture_x,
@@ -69,7 +71,7 @@
  	
  	dest += SCREENWIDTH; 
  	frac += fracstep;
-@@ -514,6 +544,690 @@
+@@ -514,6 +546,704 @@
  // just for profiling
  int			dscount;
  
@@ -614,12 +616,16 @@
 +    return t;
 +}
 +
-+// Platter geometry, world units (south wing: local u=0,v=1024 -> world 0,-1024).
++// Platter geometry, world units (south wing: local u,v -> world -u,-v). CY is
++// the storage wing's ring centre CV negated; it moved 1153 -> 1197 when the step
++// ring went from six sides to ten (a decagon's inradius is 0.951R, not 0.866R, so
++// the centre had to push out to keep the near face on the entrance throat at
++// v=704). Keep it in step with storage-wing.mjs.
 +#define DOOMPERF_PLATTER_CX	0
-+#define DOOMPERF_PLATTER_CY	(-1153)
-+#define DOOMPERF_PLATTER_R	200	// rim radius (fills the disk ring; +25% hex)
++#define DOOMPERF_PLATTER_CY	(-1197)
++#define DOOMPERF_PLATTER_R	200	// rim radius (fills the disk ring)
 +#define DOOMPERF_PLATTER_HUB	75	// inner hole under the central drum
-+#define DOOMPERF_PLATTER_INNER	86	// closest VISIBLE platter radius (hex drum inradius)
++#define DOOMPERF_PLATTER_INNER	86	// closest VISIBLE platter radius (drum inradius)
 +#define DOOMPERF_PLATTER_BLACK	0	// palette pure black: the idle disk ring
 +#define DOOMPERF_PLATTER_GOLD	231	// light-yellow base hue (darkened outward)
 +#define DOOMPERF_PLATTER_DARKEST 25	// deepest colormap level reached at the rim
@@ -702,8 +708,12 @@
 +}
 +
 +// The central SPINDLE drum (a vertical pillar): a glowing fill rises to %util and
-+// bright throughput streaks travel UP the wall. ty is the texture row (127=bottom)
-+// supplied by r_segs.c, so the fill/streaks lock to the drum surface.
++// bright throughput streaks travel UP the wall. The drum's base texture (DPDSPIN)
++// is 256 tall and its wall is an exact 256u fit, so ty is the texture row over the
++// FULL drum height (0 = top, 255 = bottom) -- the util thermometer reads once from
++// floor to crown instead of tiling twice. r_segs.c supplies ty (masked &255 in
++// R_DrawColumn) so the fill/streaks lock to the drum surface.
++#define DOOMPERF_SPINDLE_TEXH	256
 +static byte R_DoomPerfDiskSpindlePixel (int ty)
 +{
 +    int		util;
@@ -720,19 +730,25 @@
 +    thr = R_DoomPerfDiskThroughputPermille();
 +    tx = doomperf_cpu_column_texture_x & 63;
 +
-+    fill_ty = 127 - (util * 127) / 1000;		// glowing fill rises with util
++    // Glowing fill rises with util across the whole 256u drum.
++    fill_ty = (DOOMPERF_SPINDLE_TEXH - 1)
++	- (util * (DOOMPERF_SPINDLE_TEXH - 1)) / 1000;
 +
 +    // Rising streaks (throughput): a per-column head climbs (ty -> 0) over time.
 +    // The time term is halved (>>1) for a calm, ~50%-slower rise that stays
-+    // visually concordant with the now purely load-driven platter.
++    // visually concordant with the load-driven platter. Distances (head cycle,
++    // trail, wrap) scale with the taller drum so the streaks look the same density
++    // as before, just spanning the full height.
 +    speed = 1 + thr / 150;
-+    trail = 10 + thr / 16;
++    trail = 20 + thr / 8;
 +    seed = tx * 31 + (tx >> 2) * 7;
-+    head_y = (127 - (((leveltime * speed) / 2 + seed * 11) & 127)) & 127;
-+    offset = (ty - head_y + 128) & 127;
++    head_y = ((DOOMPERF_SPINDLE_TEXH - 1)
++	      - (((leveltime * speed) / 2 + seed * 11) & (DOOMPERF_SPINDLE_TEXH - 1)))
++	     & (DOOMPERF_SPINDLE_TEXH - 1);
++    offset = (ty - head_y + DOOMPERF_SPINDLE_TEXH) & (DOOMPERF_SPINDLE_TEXH - 1);
 +    if (offset < 2)
 +	return DOOMPERF_DISK_GOLD;			// bright streak head
-+    if (offset < trail && ty >= fill_ty - 16)
++    if (offset < trail && ty >= fill_ty - 32)
 +	return DOOMPERF_DISK_RED;			// streak trail near the fill
 +
 +    if (ty >= fill_ty)
@@ -760,7 +776,7 @@
  
  //
  // Draws the actual span.
-@@ -553,7 +1267,21 @@
+@@ -553,7 +1283,21 @@
  
  	// Lookup pixel from flat texture tile,
  	//  re-index using light/colormap.
@@ -783,7 +799,7 @@
  
  	// Next step in u,v.
  	xfrac += ds_xstep; 
-@@ -676,8 +1404,20 @@
+@@ -676,8 +1420,20 @@
  	spot = ((yfrac>>(16-6))&(63*64)) + ((xfrac>>16)&63);
  	// Lowres/blocky mode does it twice,
  	//  while scale is adjusted appropriately.
