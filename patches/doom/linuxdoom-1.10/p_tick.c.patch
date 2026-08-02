@@ -17,6 +17,8 @@
 #   (+)   memory-fall-temper (cascades recoloured to match the pool surface)
 #   (+)   swap-cap-state (swapless hosts: welded pipe + "OOM KILL" placard swapped in,
 #         capped-vent alarm, and the baron gate lit from the same pool-fill reading)
+#   (+)   disk-queue-couriers (plate mobjs physically ferried scheduler-top -> device-top,
+#         so the two-tier IO queue is seen to drain to the hardware)
 #
 # Order-independent: this is the only Doom Perf patch that touches p_tick.c.
 # Regenerate by diffing a clean tree against the staged build tree;
@@ -30,7 +32,7 @@
  //-----------------------------------------------------------------------------
  //
  // $Id:$
-@@ -30,9 +30,3144 @@
+@@ -30,9 +30,3423 @@
  
  #include "doomstat.h"
  
@@ -855,6 +857,285 @@
 +    }
 +}
 +
++// Doom Perf: the two-tier DISK IO QUEUE rendered as STACKS OF 3D PLATES (storage
++// wing, face-7 alcove). Each shaft holds a pool of billboard plate mobjs
++// (MT_DP_DISKPLATE) hand-stacked from the floor up: shaft 0 = DEVICE rack (amber,
++// S_DP_PLATE_DEV), shaft 1 = SCHEDULER magazine (ember-red, S_DP_PLATE_SCHED). The
++// number shown is the live fill (permille the browser pushes into
++// doomperf_storage_device_queue / _sched_backlog; the disk sims push their own).
++// Unused plates park far below, out of view. Coords are the shaft world-centres
++// (storage-wing.mjs: device local (-693,949), scheduler (-693,1141); toWorld =
++// (-u,-v)), kept here as the request circuit keeps its path -- fragile to a map
++// move, so they are commented at both ends.
++#define DOOMPERF_PLATE_MAX	12			// plates per shaft (fills the 256-tall shaft)
++#define DOOMPERF_PLATE_BASE	(176 * FRACUNIT)	// bottom plate z = shaft floor
++#define DOOMPERF_PLATE_STEP	(16 * FRACUNIT)		// vertical spacing per plate
++#define DOOMPERF_PLATE_HIDE	(-4000 * FRACUNIT)	// park unused plates out of sight
++#define DOOMPERF_PLATE_DEV_X	(693 * FRACUNIT)
++#define DOOMPERF_PLATE_DEV_Y	(-949 * FRACUNIT)
++#define DOOMPERF_PLATE_SCHED_X	(693 * FRACUNIT)
++#define DOOMPERF_PLATE_SCHED_Y	(-1141 * FRACUNIT)
++
++// Dispatcher COURIERS: a small pool of plate mobjs that physically ferry a plate
++// from the SCHEDULER stack top, across the central nave, onto the DEVICE stack top
++// -- so the two-tier queue is seen to DRAIN to the hardware, not sit as two static
++// stacks. Cadence follows dispatch throughput (aggregate IOPS, floored by the
++// backlog so a towering-but-tag-starved queue still visibly bleeds down). Each
++// flight ducks to a fixed cruise altitude crossing the nave so the plate never pokes
++// above the nave's low ceiling (320); the shafts themselves clear to 432. Shaft
++// centres are duplicated in MAP UNITS here because the courier lerps in map units
++// and shifts to fixed-point LAST ([[fixed-point-lerp-overflow]]).
++#define DOOMPERF_PLATE_BASE_U	176			// shaft-floor / bottom plate z (map units)
++#define DOOMPERF_PLATE_STEP_U	16			// per-plate spacing (map units)
++#define DOOMPERF_PLATE_DEV_UX	693
++#define DOOMPERF_PLATE_DEV_UY	(-949)
++#define DOOMPERF_PLATE_SCHED_UX	693
++#define DOOMPERF_PLATE_SCHED_UY	(-1141)
++#define DOOMPERF_PLATE_COURIERS	5			// couriers that may be in flight at once
++#define DOOMPERF_COURIER_DUR	24			// tics per scheduler->device flight
++#define DOOMPERF_COURIER_HOLD	5			// tics settled on the device top before idle
++#define DOOMPERF_COURIER_CRUISE	240			// mid-flight altitude, map units (nave ceil = 320)
++#define DOOMPERF_DISPATCH_SLOW	40			// tics between launches when barely busy
++#define DOOMPERF_DISPATCH_FAST	10			// tics between launches when saturated
++
++static mobj_t*	doomperf_disk_plate[2][DOOMPERF_PLATE_MAX];
++static mobj_t*	doomperf_disk_courier[DOOMPERF_PLATE_COURIERS];
++static int	doomperf_disk_courier_t[DOOMPERF_PLATE_COURIERS];	// flight tic, or -1 when idle
++static int	doomperf_disk_dispatch_timer;				// tics until the next launch
++
++// Map-unit height of the LIP just above a stack of the given permille fill -- where a
++// dispatched courier lands (and where the next stacked plate would sit).
++static int DoomPerf_PlateTopU (int fill)
++{
++    int		count;
++
++    if (fill < 0)
++	fill = 0;
++    if (fill > 1000)
++	fill = 1000;
++    count = (fill * DOOMPERF_PLATE_MAX) / 1000;
++    return DOOMPERF_PLATE_BASE_U + count * DOOMPERF_PLATE_STEP_U;
++}
++
++// Courier world position at flight tic t (0..DUR). x is constant (both shafts share
++// world x); y lerps scheduler->device; z blends the straight top-to-top line toward a
++// fixed cruise altitude at mid-flight (w peaks at 1000 over the nave) so the plate
++// always dips safely under the low nave ceiling. Lerp in MAP UNITS, << to fixed last.
++static void DoomPerf_CourierPos (int t, int schedTopU, int devTopU,
++				 fixed_t* x, fixed_t* y, fixed_t* z)
++{
++    int		uy;
++    int		lin;	// straight scheduler-top -> device-top height (map units)
++    int		w;	// 0..1000, peaks at mid-flight
++    int		uz;
++
++    uy = DOOMPERF_PLATE_SCHED_UY
++	 + ((DOOMPERF_PLATE_DEV_UY - DOOMPERF_PLATE_SCHED_UY) * t) / DOOMPERF_COURIER_DUR;
++    lin = schedTopU + ((devTopU - schedTopU) * t) / DOOMPERF_COURIER_DUR;
++    w = (4000 * t * (DOOMPERF_COURIER_DUR - t))
++	/ (DOOMPERF_COURIER_DUR * DOOMPERF_COURIER_DUR);
++    uz = (lin * (1000 - w) + DOOMPERF_COURIER_CRUISE * w) / 1000;
++
++    *x = DOOMPERF_PLATE_DEV_UX * FRACUNIT;	// == scheduler ux; both shafts share world x
++    *y = uy * FRACUNIT;
++    *z = uz * FRACUNIT;
++}
++
++static void DoomPerf_SeedDiskPlates (void)
++{
++    int		shaft;
++    int		k;
++    fixed_t	sx;
++    fixed_t	sy;
++    mobj_t*	mo;
++
++    for (shaft = 0; shaft < 2; shaft++)
++    {
++	sx = shaft ? DOOMPERF_PLATE_SCHED_X : DOOMPERF_PLATE_DEV_X;
++	sy = shaft ? DOOMPERF_PLATE_SCHED_Y : DOOMPERF_PLATE_DEV_Y;
++	for (k = 0; k < DOOMPERF_PLATE_MAX; k++)
++	{
++	    mo = P_SpawnMobj (sx, sy, DOOMPERF_PLATE_HIDE, MT_DP_DISKPLATE);
++	    mo->momx = mo->momy = mo->momz = 0;
++	    P_SetMobjState (mo, shaft ? S_DP_PLATE_SCHED : S_DP_PLATE_DEV);
++	    doomperf_disk_plate[shaft][k] = mo;
++	}
++    }
++
++    // Dispatcher courier pool: parked out of sight and idle until launched.
++    for (k = 0; k < DOOMPERF_PLATE_COURIERS; k++)
++    {
++	mo = P_SpawnMobj (DOOMPERF_PLATE_SCHED_X, DOOMPERF_PLATE_SCHED_Y,
++			  DOOMPERF_PLATE_HIDE, MT_DP_DISKPLATE);
++	mo->momx = mo->momy = mo->momz = 0;
++	P_SetMobjState (mo, S_DP_PLATE_SCHED);
++	doomperf_disk_courier[k] = mo;
++	doomperf_disk_courier_t[k] = -1;
++    }
++    doomperf_disk_dispatch_timer = 0;
++}
++
++void DoomPerf_UpdateDiskPlates (void)
++{
++    int		shaft;
++    int		k;
++    int		fill;
++    int		count;
++    fixed_t	sx;
++    fixed_t	sy;
++    mobj_t*	mo;
++
++    // A level (re)load frees every mobj and resets leveltime; drop the stale
++    // pointers so we don't touch freed memory, then respawn the pool.
++    if (leveltime == 0)
++    {
++	for (shaft = 0; shaft < 2; shaft++)
++	    for (k = 0; k < DOOMPERF_PLATE_MAX; k++)
++		doomperf_disk_plate[shaft][k] = NULL;
++	for (k = 0; k < DOOMPERF_PLATE_COURIERS; k++)
++	{
++	    doomperf_disk_courier[k] = NULL;
++	    doomperf_disk_courier_t[k] = -1;
++	}
++	doomperf_disk_dispatch_timer = 0;
++    }
++    if (!doomperf_disk_plate[0][0])
++	DoomPerf_SeedDiskPlates ();
++
++    for (shaft = 0; shaft < 2; shaft++)
++    {
++	fill = shaft ? doomperf_storage_sched_backlog : doomperf_storage_device_queue;
++	if (fill < 0)
++	    fill = 0;
++	if (fill > 1000)
++	    fill = 1000;
++	count = (fill * DOOMPERF_PLATE_MAX) / 1000;	// whole plates shown
++	sx = shaft ? DOOMPERF_PLATE_SCHED_X : DOOMPERF_PLATE_DEV_X;
++	sy = shaft ? DOOMPERF_PLATE_SCHED_Y : DOOMPERF_PLATE_DEV_Y;
++
++	for (k = 0; k < DOOMPERF_PLATE_MAX; k++)
++	{
++	    mo = doomperf_disk_plate[shaft][k];
++	    if (!mo)
++		continue;
++	    P_UnsetThingPosition (mo);
++	    mo->x = sx;
++	    mo->y = sy;
++	    if (k < count)
++	    {
++		mo->z = DOOMPERF_PLATE_BASE + k * DOOMPERF_PLATE_STEP;
++		P_SetThingPosition (mo);
++		mo->floorz = mo->subsector->sector->floorheight;
++		mo->ceilingz = mo->subsector->sector->ceilingheight;
++	    }
++	    else
++	    {
++		// Park below the map. Set floorz to the parked z so P_ZMovement's
++		// (non-NOGRAVITY-gated) floor clamp can't snap the plate back up
++		// -- see [[hand-positioned-mobj-floorz]].
++		mo->z = DOOMPERF_PLATE_HIDE;
++		P_SetThingPosition (mo);
++		mo->floorz = mo->z;
++		mo->ceilingz = mo->z;
++	    }
++	}
++    }
++
++    // ----- Dispatcher couriers: ferry a plate scheduler-top -> device-top each
++    // launch so the queue is SEEN to drain to the hardware. A plate lifts off the
++    // scheduler magazine (red), arcs across the nave, reddens->ambers at mid-flight,
++    // and settles onto the device rack (amber). Launch cadence tracks dispatch
++    // throughput; while idle, couriers park out of sight.
++    {
++	int	devFill;
++	int	schedFill;
++	int	devTopU;
++	int	schedTopU;
++	int	iops;
++	int	drive;
++	int	active;
++	int	t;
++	int	ft;
++	fixed_t	cx;
++	fixed_t	cy;
++	fixed_t	cz;
++
++	devFill = doomperf_storage_device_queue;
++	schedFill = doomperf_storage_sched_backlog;
++	iops = doomperf_storage_iops;
++	if (iops < 0)
++	    iops = 0;
++	if (iops > 1000)
++	    iops = 1000;
++	devTopU = DoomPerf_PlateTopU (devFill);
++	schedTopU = DoomPerf_PlateTopU (schedFill);
++
++	// Dispatch while there is anything queued OR the device is doing real work;
++	// an idle disk shows no phantom traffic. Rate = IOPS floored by half the
++	// backlog so a towering-but-tag-starved queue still bleeds down visibly.
++	active = (devFill > 0) || (schedFill > 0) || (iops > 20);
++	drive = iops + schedFill / 2;
++	if (drive > 1000)
++	    drive = 1000;
++
++	if (doomperf_disk_dispatch_timer > 0)
++	    doomperf_disk_dispatch_timer--;
++	if (active && doomperf_disk_dispatch_timer == 0)
++	{
++	    for (k = 0; k < DOOMPERF_PLATE_COURIERS; k++)
++	    {
++		if (doomperf_disk_courier_t[k] < 0)
++		{
++		    doomperf_disk_courier_t[k] = 0;
++		    if (doomperf_disk_courier[k])
++			P_SetMobjState (doomperf_disk_courier[k], S_DP_PLATE_SCHED);
++		    break;
++		}
++	    }
++	    doomperf_disk_dispatch_timer = DOOMPERF_DISPATCH_SLOW
++		- ((DOOMPERF_DISPATCH_SLOW - DOOMPERF_DISPATCH_FAST) * drive) / 1000;
++	}
++	else if (!active)
++	    doomperf_disk_dispatch_timer = 0;	// fire the instant activity resumes
++
++	for (k = 0; k < DOOMPERF_PLATE_COURIERS; k++)
++	{
++	    mo = doomperf_disk_courier[k];
++	    if (!mo)
++		continue;
++	    t = doomperf_disk_courier_t[k];
++
++	    P_UnsetThingPosition (mo);
++	    if (t < 0)
++	    {
++		// Idle: parked out of sight. floorz = z so P_ZMovement can't snap it
++		// ([[hand-positioned-mobj-floorz]]).
++		mo->x = DOOMPERF_PLATE_SCHED_X;
++		mo->y = DOOMPERF_PLATE_SCHED_Y;
++		mo->z = DOOMPERF_PLATE_HIDE;
++		P_SetThingPosition (mo);
++		mo->floorz = mo->ceilingz = mo->z;
++		continue;
++	    }
++
++	    ft = (t > DOOMPERF_COURIER_DUR) ? DOOMPERF_COURIER_DUR : t;	// hold at top
++	    DoomPerf_CourierPos (ft, schedTopU, devTopU, &cx, &cy, &cz);
++	    mo->x = cx;
++	    mo->y = cy;
++	    mo->z = cz;
++	    P_SetThingPosition (mo);
++	    mo->floorz = mo->ceilingz = mo->z;	// hand-positioned; skip P_ZMovement
++
++	    // Halfway across, the scheduler request becomes a device request.
++	    if (t == DOOMPERF_COURIER_DUR / 2)
++		P_SetMobjState (mo, S_DP_PLATE_DEV);
++
++	    if (++doomperf_disk_courier_t[k] > DOOMPERF_COURIER_DUR + DOOMPERF_COURIER_HOLD)
++		doomperf_disk_courier_t[k] = -1;	// arrived + settled; back to idle
++	}
++    }
++}
++
 +// Doom Perf: MEMORY wing instruments, one independent station per USE signal.
 +// Tags 500..544 are the retired page cells (Station A, superseded by the spire);
 +// 546/547 + 557/558 are the RECLAIM SLUICE (Station B: saturation pool, dam gate,
@@ -948,9 +1229,9 @@
 +// major faults are LOWER rather than higher (there is no swap to fault back in from --
 +// only file-backed pages can refault), and the backlog has nowhere to go but the OOM
 +// killer, which fires steadily instead of the vent breathing.
-+#define DOOMPERF_SIM_MEM_UTIL		5
-+#define DOOMPERF_SIM_MEM_SAT_SWAP	6
-+#define DOOMPERF_SIM_MEM_SAT_NOSWAP	7
++#define DOOMPERF_SIM_MEM_UTIL		6
++#define DOOMPERF_SIM_MEM_SAT_SWAP	7
++#define DOOMPERF_SIM_MEM_SAT_NOSWAP	8
 +
 +static int DoomPerf_EffectiveMemoryUtil (void)
 +{
@@ -3175,7 +3456,7 @@
  //
  // THINKERS
  // All thinkers should be allocated by Z_Malloc
-@@ -130,11 +3265,11 @@
+@@ -130,11 +3544,11 @@
  void P_Ticker (void)
  {
      int		i;
@@ -3189,7 +3470,7 @@
      // pause if in menu and at least one tic has been run
      if ( !netgame
  	 && menuactive
-@@ -143,16 +3278,34 @@
+@@ -143,16 +3557,35 @@
      {
  	return;
      }
@@ -3203,6 +3484,7 @@
 +    DoomPerf_UpdateDiskUsage ();
 +    DoomPerf_UpdateDiskCircuit ();
 +    DoomPerf_UpdateDiskDevices ();
++    DoomPerf_UpdateDiskPlates ();
 +    DoomPerf_UpdateMemoryWing ();
 +    DoomPerf_UpdateMemoryFalls ();
 +    DoomPerf_UpdateSwapCap ();

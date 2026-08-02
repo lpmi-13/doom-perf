@@ -471,6 +471,14 @@ const formatStorage = (telemetry: TelemetrySnapshot): string => {
   lines.push(columns.map(([, width], i) => padStart(cells[i], width)).join(""));
   lines.push("");
   lines.push(`queue depth  ${bar(clamp(rate(s.queueDepth) / 8))} ${rate(s.queueDepth).toFixed(2)}`);
+  // The two tiers of that aqu-sz total (the Disk IO queue alcove's split): the
+  // device queue fills toward its hardware cap and pegs; the scheduler backlog is
+  // unbounded and towers over the device tier once the device saturates.
+  const devCap = rate(s.deviceQueueCap);
+  const devQ = rate(s.deviceQueue);
+  const devFill = devCap > 0 ? clamp(devQ / devCap) : clamp(devQ / 32);
+  lines.push(`  device q   ${bar(devFill)} ${devQ.toFixed(2)} / ${devCap > 0 ? devCap.toFixed(0) : "?"}  in-flight (capped)`);
+  lines.push(`  scheduler  ${bar(clamp(rate(s.schedBacklog) / 8))} ${rate(s.schedBacklog).toFixed(2)}  waiting (unbounded)`);
   lines.push(`await (ms)   ${bar(clamp(rate(s.awaitMillis) / 250))} ${rate(s.awaitMillis).toFixed(2)} ms`);
   lines.push(`utilization  ${bar(s.utilization)} ${pctText(s.utilization)}%`);
   lines.push(`saturation   ${bar(s.saturation)} ${pctText(s.saturation)}%   (queue + await)`);
@@ -537,6 +545,38 @@ const formatStorageIops = (telemetry: TelemetrySnapshot): string => {
   for (let i = rows.length; i < 4; i += 1) lines.push("");
   lines.push("");
   lines.push(`aggregate IOPS  ${Math.round(rate(s.iops))} ops/s   (reads + writes, all devices)`);
+  return lines.join("\n");
+};
+
+// STORAGE wing — the two-tier IO queue behind the face-7 rack: the DEVICE tier
+// (in-flight, hard-capped by the hardware queue depth) vs the SCHEDULER backlog
+// (block-layer, effectively unbounded), and which tier the disk is actually bound
+// by. A shallow cap (SATA-class) saturates on tag exhaustion — the device rack pegs
+// and the scheduler towers; a deep cap (NVMe) rarely exhausts tags, so it saturates
+// on %util/await and the scheduler stays near-empty.
+const formatStorageQueue = (telemetry: TelemetrySnapshot): string => {
+  const s = telemetry.storage;
+  const cap = rate(s.deviceQueueCap);
+  const dev = rate(s.deviceQueue);
+  const sched = rate(s.schedBacklog);
+  const total = rate(s.queueDepth);
+  const util = clamp(s.utilization);
+  const shallow = cap > 0 && cap <= 64;
+  const devBar = shallow ? clamp(dev / cap) : clamp(dev / Math.max(total, 1));
+  const lines: string[] = [];
+  lines.push("$ iostat -x 1   ·   queue detail");
+  lines.push("");
+  lines.push(`aqu-sz total  ${bar(clamp(total / 8))} ${total.toFixed(2)} reqs`);
+  lines.push(`  device q    ${bar(devBar)} ${dev.toFixed(2)} / ${cap > 0 ? cap.toFixed(0) : "?"} reqs  in-flight`);
+  lines.push(`  scheduler   ${bar(clamp(sched / Math.max(total, 1)))} ${sched.toFixed(2)} reqs  waiting (unbounded)`);
+  lines.push(`%util         ${bar(util)} ${pctText(util)}%   (device busy time)`);
+  lines.push("");
+  const satBy = shallow
+    ? `tag exhaustion — shallow queue (cap ${cap.toFixed(0)}); scheduler backs up`
+    : cap > 0
+      ? `%util + await — deep queue (cap ${cap.toFixed(0)}); tags rarely exhaust`
+      : "%util + await — cap unexposed; occupancy tracks its recent peak";
+  lines.push(`saturates by  ${satBy}`);
   return lines.join("\n");
 };
 
@@ -673,6 +713,7 @@ const terminals: Record<TerminalSign, { title: string; render: (telemetry: Telem
   storage: { title: "STORAGE — iostat service & queue", render: formatStorage },
   "storage-usage": { title: "STORAGE — df / capacity", render: formatStorageUsage },
   "storage-iops": { title: "STORAGE — per-device IOPS", render: formatStorageIops },
+  "storage-queue": { title: "STORAGE — IO queue (device vs scheduler)", render: formatStorageQueue },
   network: { title: "NETWORK — per-interface throughput", render: formatNetwork },
   "network-sockets": { title: "NETWORK — TCP socket state census", render: formatNetworkSockets },
   "network-queues": { title: "NETWORK — SendQ / RecvQ backlog", render: formatNetworkQueues },

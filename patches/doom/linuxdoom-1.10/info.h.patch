@@ -13,7 +13,7 @@
 
 --- a/info.h
 +++ b/info.h
-@@ -1140,6 +1140,156 @@ typedef enum
+@@ -1140,6 +1140,158 @@
      S_TECH2LAMP2,
      S_TECH2LAMP3,
      S_TECH2LAMP4,
@@ -167,10 +167,12 @@
 +    S_DP_IOTASK_DBLOOM2,
 +    S_DP_IOTASK_NBLOOM1,
 +    S_DP_IOTASK_NBLOOM2,
++    S_DP_PLATE_DEV,
++    S_DP_PLATE_SCHED,
      NUMSTATES
  } statenum_t;
  
-@@ -1298,6 +1448,17 @@ typedef enum {
+@@ -1298,6 +1450,18 @@
      MT_MISC84,
      MT_MISC85,
      MT_MISC86,
@@ -185,6 +187,7 @@
 +    MT_DP_PGFAULT,
 +    MT_DP_IOREQ,
 +    MT_DP_IOCOMP,
++    MT_DP_DISKPLATE,
      NUMMOBJTYPES
  
  } mobjtype_t;

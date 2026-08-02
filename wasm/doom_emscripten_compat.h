@@ -70,6 +70,13 @@ extern int doomperf_storage_iops;
 extern int doomperf_storage_dev_count;
 extern int doomperf_storage_dev_iops[DOOMPERF_STORAGE_DEV_SLOTS];
 
+// Two-tier DISK IO QUEUE fills (permille) for the face-7 rack: the device tier
+// (in-flight, tag 650) and the scheduler backlog (tag 651). Set from the browser
+// (DoomPerf_SetStorageDeviceQueue / DoomPerf_SetStorageSchedBacklog); read by
+// DoomPerf_UpdateDiskQueueRack in p_tick.c.
+extern int doomperf_storage_device_queue;
+extern int doomperf_storage_sched_backlog;
+
 // Width (samples) of the metrics-dashboard graph ring. Shared so p_tick.c (which
 // owns/advances the ring) and r_draw.c (which plots it) agree on the row stride.
 #define DOOMPERF_DASH_SAMPLES 15

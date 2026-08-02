@@ -35,6 +35,8 @@ int doomperf_storage_usage = 0;                              // df / used fracti
 int doomperf_storage_iops = 0;                               // aggregate ops/s (permille of full scale)
 int doomperf_storage_dev_count = 0;                          // active devices in the IOPS counter bank
 int doomperf_storage_dev_iops[DOOMPERF_STORAGE_DEV_SLOTS];   // per-device ops/s (permille of full scale)
+int doomperf_storage_device_queue = 0;                       // face-7 device rack fill: in-flight tags (permille)
+int doomperf_storage_sched_backlog = 0;                      // face-7 scheduler magazine fill: backlog (permille)
 int doomperf_memory_util = 0;
 int doomperf_memory_saturation = 0;
 int doomperf_memory_errors = 0;
@@ -243,6 +245,22 @@ void DoomPerf_SetStorageDeviceIops(int index, int permille)
     if (index < 0 || index >= DOOMPERF_STORAGE_DEV_SLOTS)
         return;
     doomperf_storage_dev_iops[index] = DoomPerf_ClampPermille(permille);
+}
+
+// The two-tier DISK IO QUEUE fills for the face-7 rack, each a permille the browser
+// computes with the cap-adaptive scaling (shallow deviceQueue/cap vs deep
+// deviceQueue/high-water). Read by p_tick.c DoomPerf_UpdateDiskQueueRack, which
+// raises the device rack (tag 650) and the taller scheduler magazine (tag 651).
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_SetStorageDeviceQueue(int permille)
+{
+    doomperf_storage_device_queue = DoomPerf_ClampPermille(permille);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_SetStorageSchedBacklog(int permille)
+{
+    doomperf_storage_sched_backlog = DoomPerf_ClampPermille(permille);
 }
 
 // Memory utilization is 1 - MemAvailable/MemTotal. It drives the memory wing's

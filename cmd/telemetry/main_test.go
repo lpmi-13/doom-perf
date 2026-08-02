@@ -5,6 +5,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -206,6 +208,94 @@ func TestReduceStorageAggregatesIopsAndRanksDevices(t *testing.T) {
 	// util is the max over devices (nvme0's 0.9 > sda's 0.5).
 	if result.Utilization != 0.9 {
 		t.Fatalf("Utilization = %v, want 0.9 (busiest device)", result.Utilization)
+	}
+}
+
+func TestReadDeviceQueueCapPrefersSpecificSource(t *testing.T) {
+	write := func(base, rel, val string) {
+		p := filepath.Join(base, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(val+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// SATA/SCSI queue_depth wins over everything else.
+	sata := t.TempDir()
+	write(sata, "device/queue_depth", "31")
+	write(sata, "mq/0/nr_tags", "256")
+	write(sata, "queue/nr_requests", "128")
+	if got := readDeviceQueueCap(sata); got != 31 {
+		t.Fatalf("SATA cap = %d, want 31 (device/queue_depth)", got)
+	}
+
+	// No SCSI attribute (NVMe): sum the per-hw-queue tags.
+	nvme := t.TempDir()
+	write(nvme, "mq/0/nr_tags", "1023")
+	write(nvme, "mq/1/nr_tags", "1023")
+	write(nvme, "queue/nr_requests", "1023")
+	if got := readDeviceQueueCap(nvme); got != 2046 {
+		t.Fatalf("NVMe cap = %d, want 2046 (sum of mq/*/nr_tags)", got)
+	}
+
+	// Neither queue_depth nor mq tags: fall back to nr_requests.
+	basic := t.TempDir()
+	write(basic, "queue/nr_requests", "64")
+	if got := readDeviceQueueCap(basic); got != 64 {
+		t.Fatalf("fallback cap = %d, want 64 (queue/nr_requests)", got)
+	}
+
+	// Nothing exposed: unknown rim.
+	if got := readDeviceQueueCap(t.TempDir()); got != 0 {
+		t.Fatalf("bare device cap = %d, want 0 (unknown)", got)
+	}
+}
+
+func TestReduceStorageSplitsDeviceAndSchedulerQueue(t *testing.T) {
+	previous := map[string]diskCounter{
+		"sda":   {name: "sda"},
+		"nvme0": {name: "nvme0"},
+	}
+	// Over 1s: nvme0 is the busiest by in-flight (24 vs sda's 4). aqu-sz comes
+	// from weightedIO: nvme0 = 30000/1000 = 30, sda = 5000/1000 = 5.
+	//   device tier   = busiest in-flight = 24, its cap = 32.
+	//   scheduler tier= max(aqu-sz - in-flight) = max(30-24, 5-4) = 6.
+	disks := []diskCounter{
+		{name: "sda", reads: 10, weightedIO: 5000, inFlight: 4, queueCap: 32},
+		{name: "nvme0", reads: 20, weightedIO: 30000, inFlight: 24, queueCap: 32},
+	}
+	result, _ := reduceStorage(disks, previous, 1.0)
+
+	if result.QueueDepth != 30 {
+		t.Fatalf("QueueDepth = %v, want 30 (busiest aqu-sz)", result.QueueDepth)
+	}
+	if result.DeviceQueue != 24 {
+		t.Fatalf("DeviceQueue = %v, want 24 (busiest in-flight)", result.DeviceQueue)
+	}
+	if result.DeviceQueueCap != 32 {
+		t.Fatalf("DeviceQueueCap = %v, want 32 (busiest device's cap)", result.DeviceQueueCap)
+	}
+	if result.SchedBacklog != 6 {
+		t.Fatalf("SchedBacklog = %v, want 6 (aqu-sz - in-flight, busiest)", result.SchedBacklog)
+	}
+}
+
+// When no device exposes an in-flight gauge, the device tier reads zero but the
+// rim (cap) still falls back to the first device that publishes queue_depth, so
+// the alcove can draw the empty basin at its true height.
+func TestReduceStorageDeviceCapFallsBackWhenIdle(t *testing.T) {
+	previous := map[string]diskCounter{"sda": {name: "sda"}}
+	disks := []diskCounter{
+		{name: "sda", reads: 10, weightedIO: 2000, inFlight: 0, queueCap: 31},
+	}
+	result, _ := reduceStorage(disks, previous, 1.0)
+	if result.DeviceQueue != 0 {
+		t.Fatalf("DeviceQueue = %v, want 0 (idle)", result.DeviceQueue)
+	}
+	if result.DeviceQueueCap != 31 {
+		t.Fatalf("DeviceQueueCap = %v, want 31 (fallback rim)", result.DeviceQueueCap)
 	}
 }
 

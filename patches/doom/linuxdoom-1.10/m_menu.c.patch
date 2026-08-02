@@ -53,7 +53,7 @@
  };
  
  menu_t  MainDef =
-@@ -268,6 +263,56 @@
+@@ -268,6 +263,63 @@
      0
  };
  
@@ -70,6 +70,12 @@
 +    mode_simsat,
 +    mode_simdiskutil,
 +    mode_simdisksat,
++    // The DEEP-queue twin of mode_simdisksat, kept ADJACENT so the shallow/deep disk
++    // saturation pair is flipped between back to back — the contrast is the lesson.
++    // Inserting here renumbers memory to 6/7/8 and network to 9/10: the engine drives
++    // memory off DOOMPERF_SIM_MEM_* (updated to match), network is never referenced
++    // engine-side, and src/index.ts's scenario synthesis follows.
++    mode_simdisksatdeep,
 +    mode_simmemutil,
 +    mode_simmemsat,
 +    // The swapless twin of mode_simmemsat, kept ADJACENT to it deliberately: the two
@@ -90,6 +96,7 @@
 +    {1,"",M_ChooseMode,'s'},
 +    {1,"",M_ChooseMode,'d'},
 +    {1,"",M_ChooseMode,'k'},
++    {1,"",M_ChooseMode,'q'},
 +    {1,"",M_ChooseMode,'m'},
 +    {1,"",M_ChooseMode,'p'},
 +    {1,"",M_ChooseMode,'o'},
@@ -110,7 +117,7 @@
  
  //
  // EPISODE SELECT
-@@ -338,11 +383,6 @@
+@@ -338,11 +390,6 @@
  //
  enum
  {
@@ -122,7 +129,7 @@
      mousesens,
      option_empty2,
      soundvol,
-@@ -351,11 +391,6 @@
+@@ -351,11 +398,6 @@
  
  menuitem_t OptionsMenu[]=
  {
@@ -134,7 +141,7 @@
      {2,"M_MSENS",	M_ChangeSensitivity,'m'},
      {-1,"",0},
      {1,"M_SVOL",	M_Sound,'s'}
-@@ -855,7 +890,10 @@
+@@ -855,7 +897,10 @@
  //
  void M_DrawMainMenu(void)
  {
@@ -145,7 +152,7 @@
  }
  
  
-@@ -877,11 +915,101 @@
+@@ -877,11 +922,102 @@
  	M_StartMessage(NEWGAME,NULL,false);
  	return;
      }
@@ -174,7 +181,8 @@
 +    "SIM: HIGH CPU UTILIZATION",
 +    "SIM: HIGH CPU SATURATION",
 +    "SIM: HIGH DISK UTILIZATION",
-+    "SIM: HIGH DISK SATURATION",
++    "SIM: DISK SATURATION, SHALLOW QUEUE",
++    "SIM: DISK SATURATION, DEEP QUEUE",
 +    "SIM: HIGH MEMORY UTILIZATION",
 +    // The two saturation scenarios name their swap state outright rather than leaving
 +    // one of them as the bare default: an unqualified MEMORY SATURATION entry would
@@ -243,7 +251,7 @@
 +void M_ChooseMode(int choice)
 +{
 +    // 0 = live telemetry; 1/2 = simulated high CPU utilization/saturation
-+    // (read by the CPU room renderer); 3/4 disk, 5/6/7 memory, 8/9 network
++    // (read by the CPU room renderer); 3/4/5 disk, 6/7/8 memory, 9/10 network
 +    // (read by the browser's USE terminal scenarios). Memory has THREE: 5
 +    // utilization, 6 saturation with swap, 7 saturation with no swap.
 +    doomperf_sim_mode = choice;
@@ -252,7 +260,7 @@
  }
  
  
-@@ -945,24 +1073,14 @@
+@@ -945,24 +1081,14 @@
  // M_Options
  //
  char    detailNames[2][9]	= {"M_GDHIGH","M_GDLOW"};
@@ -277,7 +285,7 @@
  }
  
  void M_Options(int choice)
-@@ -1579,10 +1697,6 @@
+@@ -1579,10 +1705,6 @@
  	    M_EndGame(0);
  	    return true;
  				
@@ -288,7 +296,7 @@
  				
  	  case KEY_F9:            // Quickload
  	    S_StartSound(NULL,sfx_swtchn);
-@@ -1864,12 +1978,6 @@
+@@ -1864,12 +1986,6 @@
      switch ( gamemode )
      {
        case commercial:

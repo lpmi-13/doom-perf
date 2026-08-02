@@ -243,6 +243,11 @@ type DoomPerfEngine = {
   // Disk request-queue depth (iostat aqu-sz) as permille of a 24-request full
   // channel, driving the media-pit queue channel's flowing request blocks.
   _DoomPerf_SetStorageQueue?: (permille: number) => void;
+  // Two-tier DISK IO QUEUE fills for the face-7 rack, each a permille: the device
+  // tier (in-flight, tag 650) and the scheduler backlog (tag 651). The cap-adaptive
+  // scaling is done here in JS (see storageQueueFillPermille); sims 3/4 synthesize.
+  _DoomPerf_SetStorageDeviceQueue?: (permille: number) => void;
+  _DoomPerf_SetStorageSchedBacklog?: (permille: number) => void;
   // Pulse the media-pit metrics dashboard's IOPS graph (disk server-rack easter
   // egg). The engine decays the spike over a few seconds and scrolls it across
   // the IOPS section.
@@ -313,6 +318,51 @@ const clampRatio = (value: number) => Math.max(0, Math.min(1, value));
 const STORAGE_IOPS_FULLSCALE = 10000;
 const STORAGE_DEVICE_IOPS_FULLSCALE = 5000;
 
+// Rolling high-water marks for the two-tier queue rack. A deep-queue device (NVMe:
+// cap 1023+) never approaches tag exhaustion, so its rack fill can't scale to the
+// cap or it would read as permanently empty; instead it scales to a slowly-decaying
+// peak so occupancy is still legible. The scheduler backlog is unbounded, so it
+// always scales to its own peak. Reset would only matter on a device-class change.
+const QUEUE_HIGH_WATER_DECAY = 0.995; // per telemetry frame; ~slow bleed toward calm
+const QUEUE_SHALLOW_CAP = 64; // at/below this the rack is literal (SATA-class tags)
+const queueHighWater = { device: 0 };
+
+// The plate pool the engine stacks per shaft (p_tick.c DOOMPERF_PLATE_MAX). Kept in
+// sync here so the browser can drive LITERAL whole-plate COUNTS (one plate per queued
+// request) rather than a percentage fill scaled to the pool — which read as ~12
+// plates for a 7.8/8 device and didn't match the "N / cap in-flight" terminal.
+const DOOMPERF_PLATE_MAX = 12;
+// Permille that makes the engine's `permille * MAX / 1000` (integer) land on exactly
+// `count` plates — the +0.5 midpoint absorbs the truncation.
+const plateCountPermille = (count: number): number =>
+  Math.round(clampRatio((Math.max(0, count) + 0.5) / DOOMPERF_PLATE_MAX) * 1000);
+
+// Device-tier plate fill (permille) for the face-7 rack. Shallow cap (SATA-class):
+// LITERAL — one plate per in-flight request, topping out at the hardware cap, so the
+// stack height reads directly as "N of cap" and matches the terminal. Deep/unknown
+// cap (NVMe, 1023+): can't render hundreds of tags as plates, so occupancy scales to
+// a slowly-decaying high-water — a moving, readable column that never pegs on noise.
+const storageDeviceFillPermille = (storage: TelemetrySnapshot["storage"]): number => {
+  const cap = storage.deviceQueueCap ?? 0;
+  const dq = Math.max(0, storage.deviceQueue ?? 0);
+  if (cap > 0 && cap <= QUEUE_SHALLOW_CAP) {
+    return plateCountPermille(Math.min(Math.round(dq), cap, DOOMPERF_PLATE_MAX));
+  }
+  queueHighWater.device = Math.max(dq, queueHighWater.device * QUEUE_HIGH_WATER_DECAY);
+  const ref = Math.max(queueHighWater.device, 4); // floor so noise doesn't slam full
+  return Math.round(clampRatio(dq / ref) * 1000);
+};
+
+// Scheduler-tier plate fill (permille). The backlog is the tier that TOWERS, so it is
+// shown as a LITERAL waiting count (one plate per request) capped at the rack height
+// — it climbs above the device rack's shallow cap when the device saturates, and a
+// backlog past the rack height simply pegs full (the terminal carries the exact
+// number). A deep device keeps this near-empty, matching reality.
+const storageSchedFillPermille = (storage: TelemetrySnapshot["storage"]): number => {
+  const sb = Math.max(0, storage.schedBacklog ?? 0);
+  return plateCountPermille(Math.min(Math.round(sb), DOOMPERF_PLATE_MAX));
+};
+
 // Cumulative oom_kill count from the previous LIVE sample. When it rises we fire
 // the in-world Baron OOM-kill event once per new kill. This is gated on `isLive`:
 // in a scenario we push simulated telemetry (below), whose synthetic oom_kill
@@ -353,6 +403,10 @@ const pushTelemetryToEngine = (
   engine?._DoomPerf_SetStorageAwait?.(Math.round(clampRatio((telemetry.storage.awaitMillis ?? 0) / 250) * 1000));
   engine?._DoomPerf_SetStorageUtil?.(Math.round(clampRatio(telemetry.storage.utilization) * 1000));
   engine?._DoomPerf_SetStorageQueue?.(Math.round(clampRatio((telemetry.storage.queueDepth ?? 0) / 24) * 1000));
+  // Two-tier IO queue rack (face-7): device rack + scheduler magazine fills. Sims
+  // 3/4 synthesize a shallow-queue signature engine-side, so these are ignored then.
+  engine?._DoomPerf_SetStorageDeviceQueue?.(storageDeviceFillPermille(telemetry.storage));
+  engine?._DoomPerf_SetStorageSchedBacklog?.(storageSchedFillPermille(telemetry.storage));
   // Root-filesystem usage (`df /`) fills the disk-usage cistern.
   engine?._DoomPerf_SetStorageUsage?.(Math.round(clampRatio(telemetry.storage.usedRatio ?? 0) * 1000));
   // Aggregate IOPS drives the dashboard's (now real) IOPS graph; the per-device
@@ -387,7 +441,7 @@ const pushTelemetryToEngine = (
   // stand as barrels in front of the RSS terminal, slot 0 being the largest
   // resident set. Push each one's kernel OOM badness (/proc/<pid>/oom_score) so
   // the engine can glow a barrel brighter the closer that process is to being
-  // the OOM killer's next victim. Live values only — the memory sims (modes 5/6)
+  // the OOM killer's next victim. Live values only — the memory sims (modes 6/7/8)
   // synthesize their own glow engine-side.
   const topRss = telemetry.memory.topRss ?? [];
   const barrelSlots = 5;
@@ -464,24 +518,31 @@ const scenarioTelemetry = (
   engine: DoomPerfEngine | undefined
 ): TelemetrySnapshot | undefined => {
   const mode = engine?._DoomPerf_GetSimMode?.() ?? 0;
-  if (mode < 1 || mode > 9) {
+  if (mode < 1 || mode > 10) {
     return undefined;
   }
 
   const cpuMode = mode === 1 || mode === 2;
-  const diskMode = mode === 3 || mode === 4;
+  // Disk has THREE scenarios: 3 utilization (busy-healthy), 4 saturation on a
+  // SHALLOW device queue (SATA-class cap ~8 → tag exhaustion, the scheduler towers),
+  // 5 saturation on a DEEP queue (NVMe cap 1023 → tags never exhaust, so it
+  // saturates on %util/await and the scheduler stays near-empty). 4 and 5 are a
+  // matched, ADJACENT pair: same %util pegged, opposite queue signatures. Inserting
+  // 5 renumbers memory to 6/7/8 and network to 9/10; mirrors m_menu.c mode ordering.
+  const diskMode = mode === 3 || mode === 4 || mode === 5;
   const diskSaturated = mode === 4;
+  const diskDeep = mode === 5;
   // Memory has THREE scenarios: 5 utilization, 6 saturation on a swap-backed host,
   // 7 the same saturation on a host with NO swap configured. 6 and 7 are a matched
   // pair — identical pressure, one difference (is a relief valve fitted), and every
   // divergence below is a consequence of that one difference. Mirrors the engine's
   // DOOMPERF_SIM_MEM_* modes in p_tick.c; the two must stay in step or the terminal
   // and the room disagree.
-  const memoryMode = mode === 5 || mode === 6 || mode === 7;
-  const memorySaturated = mode === 6 || mode === 7;
-  const memoryNoSwap = mode === 7;
-  const networkMode = mode === 8 || mode === 9;
-  const networkSaturated = mode === 9;
+  const memoryMode = mode === 6 || mode === 7 || mode === 8;
+  const memorySaturated = mode === 7 || mode === 8;
+  const memoryNoSwap = mode === 8;
+  const networkMode = mode === 9 || mode === 10;
+  const networkSaturated = mode === 10;
   const count = Math.max(1, Math.min(doomPerfCpuCoreCapacity, engine?._DoomPerf_GetEffectiveCpuCoreCount?.() ?? 8));
   const now = Date.now();
   // CPU is the stressed signal only in the CPU scenario, where the engine
@@ -503,11 +564,12 @@ const scenarioTelemetry = (
     mode === 1 ? "sim: high CPU utilization"
     : mode === 2 ? "sim: high CPU saturation"
     : mode === 3 ? "sim: high disk utilization"
-    : mode === 4 ? "sim: high disk saturation"
-    : mode === 5 ? "sim: high memory utilization"
-    : mode === 6 ? "sim: memory saturation, swap configured"
-    : mode === 7 ? "sim: memory saturation, no swap configured"
-    : mode === 8 ? "sim: high network utilization"
+    : mode === 4 ? "sim: disk saturation, shallow queue"
+    : mode === 5 ? "sim: disk saturation, deep queue"
+    : mode === 6 ? "sim: high memory utilization"
+    : mode === 7 ? "sim: memory saturation, swap configured"
+    : mode === 8 ? "sim: memory saturation, no swap configured"
+    : mode === 9 ? "sim: high network utilization"
     : "sim: high network saturation";
   // Background memory stats so the memory and vmstat terminals are meaningful in
   // every scenario. Modes 5/6 follow the USE memory lab pattern: mode 5 is a
@@ -649,7 +711,7 @@ const scenarioTelemetry = (
         ),
         oomKills: memoryOomKills,
         oomKillsPerSecond: memoryNoSwap ? 0.24 + 0.12 * memoryWave : 0,
-        // oomScore mirrors the engine's barrel-glow synthesis for modes 5/6/7
+        // oomScore mirrors the engine's barrel-glow synthesis for modes 6/7/8
         // (DoomPerf_EffectiveMemoryProcOom — both saturation modes take the
         // full-badness profile), so the terminal's OOM readout and the in-world
         // barrels tell the same story in the demo.
@@ -720,49 +782,70 @@ const scenarioTelemetry = (
   // tag 616) and per-device IOPS (the IOPS BANK, tags 630-633). In the disk sims
   // the engine synthesizes ALL of these instruments itself (DoomPerf_UpdateDisk*),
   // so the terminal mirrors those synthesized values to tell the same story:
-  // mode 3 is ~61% full with a busy-but-healthy bank, mode 4 ~93% full with a
-  // saturated one. Every OTHER scenario shows `storageBase` — a quiet, healthy
+  // mode 3 is ~61% full with a busy-but-healthy bank, mode 4 ~93% full and shallow-
+  // queue saturated, mode 5 ~72% full and deep-queue saturated (fast NVMe screaming
+  // near its bandwidth ceiling). Every OTHER scenario shows `storageBase` — a quiet, healthy
   // simulated disk (same across all non-disk scenarios), never the host's real
   // stats. Fields map onto the iostat terminal's columns (rkB/s, wkB/s, await,
   // aqu-sz, %util) plus the df / per-device-IOPS terminals.
   const mib = 1024 * 1024;
   const wobble = 0.85 + 0.3 * Math.abs(Math.sin(now / 900));
   const diskSimTotalBytes = 512 * gib;
-  const diskSimUsedRatio = diskSaturated
-    ? clampRatio(0.93 + 0.008 * Math.abs(Math.sin(now / 2100)))
-    : clampRatio(0.61 + 0.012 * Math.abs(Math.sin(now / 2100)));
+  const diskSimUsedRatio = diskDeep
+    ? clampRatio(0.72 + 0.01 * Math.abs(Math.sin(now / 2100)))
+    : diskSaturated
+      ? clampRatio(0.93 + 0.008 * Math.abs(Math.sin(now / 2100)))
+      : clampRatio(0.61 + 0.012 * Math.abs(Math.sin(now / 2100)));
   // Four block devices, busiest first, in the same ops/s range the engine's bank
-  // columns rise to (mode 4 runs hotter than mode 3); the terminal's aggregate is
-  // their sum so its rows and its total stay self-consistent.
+  // columns rise to. Mode 4 (shallow) runs hotter than mode 3 but is seek-capped;
+  // mode 5 (deep) is a fast NVMe SCREAMING near its ceiling, so it pins the bank.
+  // The terminal's aggregate is their sum so rows and total stay self-consistent.
   const diskSimDevices = ["nvme0n1", "sda", "sdb", "dm-0"].map((name, slot) => ({
     name,
     iops: Math.max(
       0,
-      (diskSaturated ? 3950 - slot * 450 : 2900 - slot * 600) +
-        (diskSaturated ? 120 : 80) * Math.abs(Math.sin(now / 1400 + slot))
+      (diskDeep ? 8200 - slot * 900 : diskSaturated ? 3950 - slot * 450 : 2900 - slot * 600) +
+        (diskDeep ? 200 : diskSaturated ? 120 : 80) * Math.abs(Math.sin(now / 1400 + slot))
     ),
-    utilization: diskSaturated ? clampRatio(0.9 - slot * 0.05) : clampRatio(0.7 - slot * 0.08),
+    utilization: diskDeep
+      ? clampRatio(0.97 - slot * 0.03)
+      : diskSaturated
+        ? clampRatio(0.9 - slot * 0.05)
+        : clampRatio(0.7 - slot * 0.08),
   }));
   // The disk-sim branch is guarded by SimStorageTelemetry, so omitting any field a
   // storage terminal reads is a compile error (see src/telemetry/types.ts).
   const storageSim: SimStorageTelemetry = {
-    utilization: diskSaturated
-      ? clampRatio(0.985 + 0.012 * Math.sin(now / 2000))
-      : clampRatio(0.93 + 0.045 * Math.sin(now / 2000)),
+    utilization: diskDeep
+      ? clampRatio(0.99 + 0.008 * Math.sin(now / 2000))
+      : diskSaturated
+        ? clampRatio(0.985 + 0.012 * Math.sin(now / 2000))
+        : clampRatio(0.93 + 0.045 * Math.sin(now / 2000)),
     // Saturation (not raw utilization) is the health signal: ~100% busy is fine
-    // until the queue and await pile up, which only mode 4 does.
-    saturation: diskSaturated
-      ? clampRatio(0.6 + 0.4 * Math.abs(Math.sin(now / 2300)))
-      : clampRatio(0.05 + 0.04 * Math.abs(Math.sin(now / 1900))),
+    // until it actually backs up. Mode 4 backs up in the QUEUE (tag exhaustion);
+    // mode 5 backs up in %util + await (a deep device never exhausts tags).
+    saturation: diskDeep
+      ? clampRatio(0.55 + 0.4 * Math.abs(Math.sin(now / 2300)))
+      : diskSaturated
+        ? clampRatio(0.6 + 0.4 * Math.abs(Math.sin(now / 2300)))
+        : clampRatio(0.05 + 0.04 * Math.abs(Math.sin(now / 1900))),
     errors: 0,
-    // aqu-sz: mode 4 backs up well past the iostat bar's 8.0 full-scale.
-    queueDepth: diskSaturated ? 13 + 6 * Math.abs(Math.sin(now / 1700)) : 1.3 + 0.6 * Math.abs(Math.sin(now / 1500)),
-    // await (ms): mode 4 climbs toward a quarter-second; mode 3 stays single digit.
-    awaitMillis: diskSaturated ? 165 + 55 * Math.abs(Math.sin(now / 1300)) : 6.5 + 3 * Math.abs(Math.sin(now / 1100)),
-    // Contention makes the saturated media serve a little slower per request, so
-    // its throughput is lower than the merely-busy case.
-    readBytesPerSecond: (diskSaturated ? 96 : 168) * mib * wobble,
-    writeBytesPerSecond: (diskSaturated ? 64 : 120) * mib * wobble,
+    // aqu-sz total. Mode 4: a shallow queue backed up past the 8.0 bar. Mode 10: a
+    // deep queue with MANY in-flight (aqu-sz ≈ in-flight, since almost nothing waits).
+    queueDepth: diskDeep ? 92 + 42 * Math.abs(Math.sin(now / 1700)) : diskSaturated ? 13 + 6 * Math.abs(Math.sin(now / 1700)) : 1.3 + 0.6 * Math.abs(Math.sin(now / 1500)),
+    // Two-tier split. Mode 4: shallow cap (8), device PEGS at its rim and the
+    // scheduler backlog towers. Mode 10: deep cap (1023), in-flight rises but stays
+    // FAR under the cap and the scheduler stays near-empty. Mode 3: a few in flight.
+    deviceQueueCap: diskDeep ? 1023 : 8,
+    deviceQueue: diskDeep ? 92 + 40 * Math.abs(Math.sin(now / 1900)) : diskSaturated ? 7.6 + 0.4 * Math.abs(Math.sin(now / 1900)) : 1.0 + 0.4 * Math.abs(Math.sin(now / 1600)),
+    schedBacklog: diskDeep ? 0.4 + 0.4 * Math.abs(Math.sin(now / 1700)) : diskSaturated ? 6 + 6 * Math.abs(Math.sin(now / 1700)) : 0.3 + 0.2 * Math.abs(Math.sin(now / 1500)),
+    // await (ms): mode 4 climbs toward a quarter-second (queue wait); mode 5 is
+    // elevated but far lower (fast media, just maxed); mode 3 stays single digit.
+    awaitMillis: diskDeep ? 48 + 26 * Math.abs(Math.sin(now / 1300)) : diskSaturated ? 165 + 55 * Math.abs(Math.sin(now / 1300)) : 6.5 + 3 * Math.abs(Math.sin(now / 1100)),
+    // Throughput: shallow-saturated media serves SLOWLY (seek-bound); the deep device
+    // is bandwidth-bound, moving data near its ceiling; mode 3 is merely busy.
+    readBytesPerSecond: (diskDeep ? 1250 : diskSaturated ? 96 : 168) * mib * wobble,
+    writeBytesPerSecond: (diskDeep ? 820 : diskSaturated ? 64 : 120) * mib * wobble,
     iops: diskSimDevices.reduce((sum, d) => sum + d.iops, 0),
     devices: diskSimDevices,
     totalBytes: diskSimTotalBytes,
@@ -784,6 +867,9 @@ const scenarioTelemetry = (
     saturation: 0,
     errors: 0,
     queueDepth: 0.2 + 0.2 * Math.abs(Math.sin(now / 1500)),
+    deviceQueueCap: 8,
+    deviceQueue: 0.15 + 0.15 * Math.abs(Math.sin(now / 1500)),
+    schedBacklog: 0.05 + 0.05 * Math.abs(Math.sin(now / 1500)),
     awaitMillis: 1.6 + 1.2 * Math.abs(Math.sin(now / 1300)),
     readBytesPerSecond: (7 + 5 * Math.abs(Math.sin(now / 1100))) * mib,
     writeBytesPerSecond: (5 + 4 * Math.abs(Math.sin(now / 1250))) * mib,
@@ -1120,8 +1206,8 @@ const start = async () => {
     const refreshEffectiveTelemetry = (forceScenarioSample = false) => {
       const engine = getEngine();
       const mode = engine?._DoomPerf_GetSimMode?.() ?? 0;
-      // Must match scenarioTelemetry's own range check (1..9 — memory owns 5/6/7).
-      const inScenario = mode >= 1 && mode <= 9;
+      // Must match scenarioTelemetry's own range check (1..10 — 3/4/5 disk, 6/7/8 memory, 9/10 network).
+      const inScenario = mode >= 1 && mode <= 10;
       const now = Date.now();
       if (!inScenario) {
         lastScenario = undefined;

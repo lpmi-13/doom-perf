@@ -78,6 +78,7 @@ import {
   makeInscription,
   buildShadedOrbPatch,
   buildFxPatch,
+  drawCenteredText,
 } from "../textures.mjs";
 import { lump, buildPatch } from "../wad-bytes.mjs";
 
@@ -105,6 +106,45 @@ const screen = { texture: tex("TERM"), patch: tex("PTRM"), lines: ["DISK IO", "S
 // a computer screen with the server-details control panel below it, like the rest.
 const usageScreen = { texture: tex("UTRM"), patch: tex("PUTM"), lines: ["DISK USAGE", "DF ROOT"] };
 const iopsScreen = { texture: tex("ITRM"), patch: tex("PITM"), lines: ["DEVICE IOPS", "IOSTAT X"] };
+const queueScreen = { texture: tex("QTRM"), patch: tex("PQTM"), lines: ["DISK QUEUE", "DEV / SCHED"] };
+// A ONE-tall placard for the OUTER wall behind each IO-queue shaft, naming its tier
+// and tinted to its plate colour (amber = device rack, red = scheduler magazine) so
+// the two stacks are unambiguous. It reads "DEVICE / QUEUE" and "SCHEDULER / QUEUE"
+// (two stacked words -- the 146u-wide wall is too narrow for one line at a legible
+// size). CRUCIAL: 128 tall, and it hangs on a 128-tall SOFFIT wall, because vanilla
+// R_DrawColumn masks the texture Y with `& 127` -- a taller wall shows only the top
+// 128 rows, tiled, so a 256-tall placard doubled the top word and dropped "QUEUE".
+// Only the central ~146px shows on the 146u wall, so border + text sit inside
+// [55..201] (labelWidth 256 centres the placard across the wall).
+const queueLabelSize = { width: 256, height: 128 };
+const buildQueueLabelPatch = (lines, color, scale) => {
+  const { width: W, height: H } = queueLabelSize;
+  const px = new Uint8Array(W * H); // black placard (fill 0)
+  const L = 58;
+  const R = 198;
+  const T = 8;
+  const B = 120;
+  const hline = (y) => {
+    for (let x = L; x <= R; x += 1) px[y * W + x] = color;
+  };
+  const vline = (x) => {
+    for (let y = T; y <= B; y += 1) px[y * W + x] = color;
+  };
+  for (let t = 0; t < 3; t += 1) {
+    hline(T + t);
+    hline(B - t);
+    vline(L + t);
+    vline(R - t);
+  }
+  // Two words stacked at ONE shared scale (`scale` = the largest at which the longer
+  // word fits) so the placard reads as a balanced pair. The wall is top-pegged (a
+  // one-sided 128-tall soffit wall), so line[0] is the upper word.
+  drawCenteredText(px, W, H, lines[0], 30, scale, color, L + 10, R - 10);
+  drawCenteredText(px, W, H, lines[1], 72, scale, color, L + 10, R - 10);
+  return buildPatch(px, W, H);
+};
+const deviceLabel = { texture: tex("QLDEV"), patch: tex("PQLDV"), lines: ["DEVICE", "QUEUE"], color: 231, scale: 3 };
+const schedLabel = { texture: tex("QLSCH"), patch: tex("PQLSC"), lines: ["SCHEDULER", "QUEUE"], color: 176, scale: 2 };
 const signs = {
   read: { texture: tex("READ"), patch: tex("PRD"), text: "READ" },
   write: { texture: tex("WRITE"), patch: tex("PWR"), text: "WRITE" },
@@ -332,14 +372,17 @@ const faceSpanV = (i) => {
   return { mid: Math.round((a + b) / 2), lo: Math.min(a, b), hi: Math.max(a, b) };
 };
 
-// ===== QUEUE hall (off face 7, lower-left -> squared axis-aligned chamber) =====
-// A plain alcove now: the queue-depth trough it used to hold is retired.
-// Earmarked for the AWAIT instrument's redesign.
+// ===== QUEUE hall (off face 7, lower-left): the DISK IO QUEUE two-tier rack =====
+// Widened to the FULL face width so a 256-wide read-point screen seats on the back
+// (-u) wall; the throat's inner edge already spans the whole face, so matching it
+// also removes the old T-junction narrowing at the throat seam.
 const QUEUE_FACE = 7;
 const QUEUE_FLOOR = stepFloor(QUEUE_FACE); // 192
 const queueFace = faceSpanV(QUEUE_FACE); // v 893..1197, mid 1045
 const QUEUE_INNER_U = stepRing[QUEUE_FACE][0] - 40; // -558: inner wall of the -u chamber
-const queueChamber = { u1: QUEUE_INNER_U - 224, v1: queueFace.mid - 72, u2: QUEUE_INNER_U, v2: queueFace.mid + 72 };
+const queueChamber = { u1: QUEUE_INNER_U - 224, v1: queueFace.lo, u2: QUEUE_INNER_U, v2: queueFace.hi };
+const QUEUE_SCREEN_U = queueChamber.u1; // -782: back wall (local -u) carrying the IO QUEUE screen
+const QUEUE_SCREEN_CV = queueFace.mid; //  1045: screen centre in v (also the nave centre)
 
 // ===== CISTERN hall (off face 1, lower-right): an angled throat squares up to an
 // axis-aligned chamber holding the recessed disk-usage tank (df /, floor display,
@@ -384,6 +427,7 @@ const build = (ctx) => {
   addWingEntrance(ctx);
 
   const backWall = localSideToWorld(direction, "top"); // far/deep wall (local +v)
+  const leftWall = localSideToWorld(direction, "left"); // queue chamber back wall (local -u)
 
   // Shared styles. The spiral climb's shell walls wear TEKWALL1 — the NETWORK wall
   // texture that now flanks the disk door in the atrium (see sideResource) — so the
@@ -562,16 +606,31 @@ const build = (ctx) => {
     });
   }
 
-  // ===== QUEUE hall (off face 7, lower-left): an angled throat squares up to a
-  // plain axis-aligned chamber.
+  // ===== QUEUE hall (off face 7, lower-left): the DISK IO QUEUE instrument. An
+  // angled throat squares up to a chamber, entered along -u, laid out front-to-back:
   //
-  // This hall used to hold the recessed queue-depth TROUGH -- a floor display
-  // (light sentinel 134, sector tag 610) that painted request blocks along
-  // world-x. That instrument is RETIRED, and so is the hydraulic gutter that
-  // briefly replaced it (a flooding channel that rang the climb): queue depth now
-  // rides the request circuit's spawn burstiness alone. The chamber is left as a
-  // plain alcove; it is the natural home for the AWAIT instrument when that gets
-  // its redesign. =====
+  //   approach walk   (full width, entrance side) -> shaft band -> terminal recess.
+  //   DEVICE rack     (tag 650, v 893..1005): in-flight requests dispatched to the
+  //                   hardware; its banded RACK riser grows as the engine raises the
+  //                   floor with deviceQueue.
+  //   central nave    (v 1005..1085): the walkway between the columns, leading to
+  //                   the read-point; a scripted dispatcher mobj will shuttle it.
+  //   SCHEDULER       (tag 651, v 1085..1197): block-layer backlog. A TALLER well
+  //     magazine      (ceiling 480 vs the device's 384) so it can TOWER over the
+  //                   device rim when the device saturates.
+  //   read-point      the IO QUEUE screen on the back (-u) wall, centred on the nave
+  //                   and flanked by the two rising columns; control panel below.
+  //
+  // ONE adaptive widget: both floors are engine-driven from the live split -- on a
+  // deep-queue device the device rack barely rises and the magazine stays flat,
+  // which is honest (such a device saturates on %util/await, not tags). Floors rest
+  // one short step (16u) below the walk so an empty queue reads as a shallow,
+  // escapable recess; the engine lerps them up in MAP UNITS
+  // ([[fixed-point-lerp-overflow]]). Reserved sector tags 650/651 from the storage
+  // block [600,659] (640-649 freed when the backpressure gutter was removed).
+  //
+  // The chamber is widened to the full face and the ceiling raised over the old flat
+  // 320 to seat the 256-wide screen and give the magazine room to climb. =====
   const queueThroat = [
     stepRing[QUEUE_FACE], //                            (-518,1197)
     stepRing[QUEUE_FACE + 1], //                        (-419, 893)
@@ -585,13 +644,75 @@ const build = (ctx) => {
     ceiling: QUEUE_FLOOR + 128,
     light: 184,
   });
-  areaRect(direction, "queue-chamber", queueChamber, {
+  const QUEUE_SHAFT_FLOOR = QUEUE_FLOOR - 16; //       176: flat shaft floor (base of the plate wall)
+  const QUEUE_SHAFT_CEIL = QUEUE_SHAFT_FLOOR + 256; // 432: a 256-tall outer wall the plate shader maps once
+  const QUEUE_BACK_U = queueChamber.u1; //            -782: back wall (carries the screen)
+  const QUEUE_TERM_U = QUEUE_BACK_U + 16; //          -766: terminal recess <-> shaft band seam
+  const QUEUE_FRONT_U = queueChamber.u2 - 62; //      -620: approach walk <-> shaft band seam
+  const QUEUE_NAVE_V1 = QUEUE_SCREEN_CV - 40; //      1005: device shaft | nave seam
+  const QUEUE_NAVE_V2 = QUEUE_SCREEN_CV + 40; //      1085: nave | scheduler shaft seam
+  const QUEUE_TERM_V1 = QUEUE_SCREEN_CV - terminalHalfWidthLocal; // 917: screen left edge
+  const QUEUE_TERM_V2 = QUEUE_SCREEN_CV + terminalHalfWidthLocal; // 1173: screen right edge
+  const queueWalk = { ...hallStyle, kind: "metric-hall", floor: QUEUE_FLOOR, ceiling: QUEUE_FLOOR + 128, floorFlat: "FLOOR0_3", light: 184 };
+  // Each shaft is a shallow well that HOLDS a stack of billboard plate sprites
+  // (MT_DP_DISKPLATE), hand-positioned by the engine (p_tick.c DoomPerf_UpdateDiskPlates)
+  // to the live device/scheduler fill. The walls are plain dark metal so the
+  // fullbright amber/red plates read against them; the floor is flat.
+  const queueShaft = { ...hallStyle, floorFlat: "FLOOR1_7", light: 148, floor: QUEUE_SHAFT_FLOOR, ceiling: QUEUE_SHAFT_CEIL };
+  // Approach walk (full width) + central nave leading to the read-point: the walkway.
+  areaRect(direction, "queue-front", { u1: QUEUE_FRONT_U, v1: queueChamber.v1, u2: queueChamber.u2, v2: queueChamber.v2 }, queueWalk);
+  areaRect(direction, "queue-nave", { u1: QUEUE_TERM_U, v1: QUEUE_NAVE_V1, u2: QUEUE_FRONT_U, v2: QUEUE_NAVE_V2 }, queueWalk);
+  // Device rack (left) and scheduler magazine (right) flank the nave; the engine
+  // stacks amber plates in the device well and red plates in the scheduler well
+  // (DoomPerf_UpdateDiskPlates spawns at these shafts' world centres).
+  //
+  // Each shaft's OUTER strip holds a recessed label NICHE: a one-placard (128) tall
+  // frame centred on the shaft wall's mid-line (240..368 of the 176..432 wall). The
+  // 128 height is what makes the sign render ONCE -- on the full 256-tall wall
+  // vanilla's `& 127` column mask tiles the placard (showing the top word twice and
+  // dropping "QUEUE"); a 128-tall wall maps the 128-tall placard exactly once. The
+  // sign rides the niche's one-sided OUTER wall, named by poly-edge index (edge 0 =
+  // the low-v wall for the south wing's device shaft, edge 2 = the high-v wall for
+  // the scheduler shaft); labelEdge (not labelSide) is used so the CPU-terminal
+  // control-panel heuristic (labelSide === "top") can't misfire on the step riser.
+  // The plate stacks live at the shaft centres (v 949 / 1141), clear of the niche.
+  const QUEUE_LABEL_FLOOR = QUEUE_SHAFT_FLOOR + 64; //  240: niche sill (centres the 128 band)
+  const QUEUE_LABEL_CEIL = QUEUE_LABEL_FLOOR + queueLabelSize.height; // 368
+  const QUEUE_NICHE_DEPTH = 18; // outer strip carrying the label
+  const deviceNicheV = queueChamber.v1 + QUEUE_NICHE_DEPTH; // 911: main-shaft | niche seam
+  const schedNicheV = queueChamber.v2 - QUEUE_NICHE_DEPTH; // 1179
+  const queueNiche = { ...queueShaft, floor: QUEUE_LABEL_FLOOR, ceiling: QUEUE_LABEL_CEIL, labelWidth: queueLabelSize.width };
+  areaRect(direction, "queue-device", { u1: QUEUE_TERM_U, v1: deviceNicheV, u2: QUEUE_FRONT_U, v2: QUEUE_NAVE_V1 }, {
+    ...queueShaft,
+    kind: "queue-device",
+  });
+  areaRect(direction, "queue-device-label", { u1: QUEUE_TERM_U, v1: queueChamber.v1, u2: QUEUE_FRONT_U, v2: deviceNicheV }, {
+    ...queueNiche,
+    labelEdge: 0, // low-v outer wall
+    labelTexture: deviceLabel.texture,
+  });
+  areaRect(direction, "queue-sched", { u1: QUEUE_TERM_U, v1: QUEUE_NAVE_V2, u2: QUEUE_FRONT_U, v2: schedNicheV }, {
+    ...queueShaft,
+    kind: "queue-sched",
+  });
+  areaRect(direction, "queue-sched-label", { u1: QUEUE_TERM_U, v1: schedNicheV, u2: QUEUE_FRONT_U, v2: queueChamber.v2 }, {
+    ...queueNiche,
+    labelEdge: 2, // high-v outer wall
+    labelTexture: schedLabel.texture,
+  });
+  // Read-point: the IO QUEUE screen on the back (-u) wall, flanked by wall so the
+  // 256-wide screen seats, with the control-panel strip on the step riser below it.
+  areaRect(direction, "queue-term-l", { u1: QUEUE_BACK_U, v1: queueChamber.v1, u2: QUEUE_TERM_U, v2: QUEUE_TERM_V1 }, queueWalk);
+  areaRect(direction, "queue-term-r", { u1: QUEUE_BACK_U, v1: QUEUE_TERM_V2, u2: QUEUE_TERM_U, v2: queueChamber.v2 }, queueWalk);
+  areaRect(direction, "queue-terminal", { u1: QUEUE_BACK_U, v1: QUEUE_TERM_V1, u2: QUEUE_TERM_U, v2: QUEUE_TERM_V2 }, {
     ...hallStyle,
-    kind: "metric-hall",
-    floor: QUEUE_FLOOR,
-    ceiling: QUEUE_FLOOR + 128,
-    floorFlat: "FLOOR0_3",
-    light: 184,
+    kind: "terminal",
+    floor: QUEUE_FLOOR + 16,
+    ceiling: QUEUE_FLOOR + 16 + terminalTextureSize.height,
+    light: 200,
+    labelSide: leftWall, // back (-u) wall = the IO QUEUE screen
+    labelTexture: queueScreen.texture,
+    controlPanel: true,
   });
 
   // ===== CISTERN hall (off face 1, stepRing[1..2]): the disk-usage instrument.
@@ -691,7 +812,7 @@ const build = (ctx) => {
 const textures = [
   // The three read-point screens (iostat / df / iostat -x), each a CPU-wing-style
   // simulated terminal so they match the rest of the game's terminals.
-  ...[screen, usageScreen, iopsScreen].map((s) => ({
+  ...[screen, usageScreen, iopsScreen, queueScreen].map((s) => ({
     texture: s.texture,
     patch: s.patch,
     width: terminalTextureSize.width,
@@ -704,6 +825,14 @@ const textures = [
     width: wallSignSize.width,
     height: wallSignSize.height,
     build: () => buildWallSignPatch(sign.text),
+  })),
+  // The two IO-queue tier placards (DEVICE QUEUE / SCHEDULER QUEUE).
+  ...[deviceLabel, schedLabel].map((s) => ({
+    texture: s.texture,
+    patch: s.patch,
+    width: queueLabelSize.width,
+    height: queueLabelSize.height,
+    build: () => buildQueueLabelPatch(s.lines, s.color, s.scale),
   })),
   {
     texture: gauge.texture,
@@ -770,6 +899,9 @@ const terminals = ({ terminalHalfWidth }) => [
   { sign: "storage", segments: [segment([-terminalHalfWidth, TP_TERM_WALL], [terminalHalfWidth, TP_TERM_WALL])] },
   { sign: "storage-usage", segments: [segment([CIST_TERM_CX - terminalHalfWidth, CIST_TERM_V], [CIST_TERM_CX + terminalHalfWidth, CIST_TERM_V])] },
   { sign: "storage-iops", segments: [segment([IOPS_TERM_CX - terminalHalfWidth, IOPS_TERM_V], [IOPS_TERM_CX + terminalHalfWidth, IOPS_TERM_V])] },
+  // IO QUEUE read-point: the screen rides the queue chamber's back (-u) wall, so it
+  // runs terminalHalfWidth either side of the chamber's v-centre (not of u).
+  { sign: "storage-queue", segments: [segment([QUEUE_SCREEN_U, QUEUE_SCREEN_CV - terminalHalfWidth], [QUEUE_SCREEN_U, QUEUE_SCREEN_CV + terminalHalfWidth])] },
 ];
 
 const easterEggs = () => {
@@ -796,6 +928,37 @@ const amberFlash = [4, 4, 231, 231, 165, 163]; //   brighter core for the ring f
 const silverRamp = [4, 80, 82, 84, 86, 88]; //      white core -> grey -> dark steel rim
 const silverFlash = [4, 4, 80, 80, 82, 84];
 
+// Disk IO QUEUE plate billboards (override IWAD CEYE A/B — an evil-eye decoration
+// the lab never spawns). A flattened disc lit from ABOVE (bright top, shadowed
+// underside) with a crisp top-rim highlight, so a stack reads as real 3D plates
+// from any angle. Ramps are dark->bright: amber = device rack, red = scheduler.
+const plateAmberRamp = [159, 161, 163, 165, 231, 4]; // deep amber -> gold -> white glint
+const plateRedRamp = [191, 187, 183, 179, 176, 4]; //  deep red   -> bright red -> white glint
+const plateSpriteSize = { width: 44, height: 16 };
+const buildPlateSprite = (ramp) => {
+  const { width: W, height: H } = plateSpriteSize;
+  const T = 247; // transparent key
+  const px = new Uint8Array(W * H).fill(T);
+  const cx = (W - 1) / 2;
+  const cy = (H - 1) / 2;
+  const rx = W / 2 - 2;
+  const ry = H / 2 - 2;
+  const last = ramp.length - 1;
+  for (let y = 0; y < H; y += 1) {
+    for (let x = 0; x < W; x += 1) {
+      const nx = (x - cx) / rx;
+      const ny = (y - cy) / ry;
+      const d = nx * nx + ny * ny;
+      if (d > 1) continue; // outside the plate disc
+      let t = 0.5 - ny * 0.62; // lit from above: top bright, underside shadowed
+      if (ny < -0.35 && d > 0.5) t += 0.35; // bright top-rim lip
+      t = Math.max(0, Math.min(1, t));
+      px[y * W + x] = ramp[Math.round(t * last)];
+    }
+  }
+  return buildPatch(px, W, H, { leftOffset: Math.round(W / 2), topOffset: H, transparent: T });
+};
+
 const sprites = [
   { name: "IFOGA0", build: () => buildShadedOrbPatch(amberRamp) }, //                               request static orb
   { name: "IFOGB0", build: () => buildFxPatch({ size: 22, ramp: amberRamp, outerFrac: 0.78 }) }, //  settle
@@ -807,6 +970,8 @@ const sprites = [
   { name: "TFOGC0", build: () => buildFxPatch({ size: 32, ramp: silverFlash, outerFrac: 0.72 }) },
   { name: "TFOGD0", build: () => buildFxPatch({ size: 32, ramp: silverRamp, innerFrac: 0.55 }) },
   { name: "TFOGE0", build: () => buildFxPatch({ size: 38, ramp: silverRamp, innerFrac: 0.72 }) },
+  { name: "CEYEA0", build: () => buildPlateSprite(plateAmberRamp) }, // device rack plate (amber)
+  { name: "CEYEB0", build: () => buildPlateSprite(plateRedRamp) }, //  scheduler magazine plate (red)
 ];
 
 export const storageWing = {

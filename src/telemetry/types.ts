@@ -97,7 +97,18 @@ export interface MemoryProcessTelemetry {
 }
 
 export interface StorageTelemetry extends ResourceTelemetry {
+  // aqu-sz: the average TOTAL queue length (waiting + in-service). Still drives
+  // the tower circuit; the two-tier split below feeds the Disk IO queue alcove.
   queueDepth?: number;
+  // deviceQueue    = in-flight requests at the hardware (diskstats field 9),
+  //                  hard-capped by deviceQueueCap.
+  // deviceQueueCap = device hardware queue depth (/sys/block/<dev>/device/queue_depth);
+  //                  0 when the device does not expose it (NVMe/virtio/cloud).
+  // schedBacklog   = requests still waiting in the block-layer scheduler queue
+  //                  (aqu-sz - in-flight, clamped >= 0); effectively unbounded.
+  deviceQueue?: number;
+  deviceQueueCap?: number;
+  schedBacklog?: number;
   awaitMillis?: number;
   readBytesPerSecond?: number;
   writeBytesPerSecond?: number;
@@ -205,7 +216,8 @@ export type SimMemoryTelemetry = MemoryTelemetry &
 // disk-sim branch only; the background branch carries live storage.
 export type SimStorageTelemetry = StorageTelemetry &
   Required<Pick<StorageTelemetry,
-    | "queueDepth" | "awaitMillis" | "readBytesPerSecond" | "writeBytesPerSecond"
+    | "queueDepth" | "deviceQueue" | "deviceQueueCap" | "schedBacklog"
+    | "awaitMillis" | "readBytesPerSecond" | "writeBytesPerSecond"
     | "iops" | "devices"
     | "usedBytes" | "totalBytes" | "availBytes" | "usedRatio">>;
 
@@ -252,6 +264,7 @@ export type TerminalSign =
   | "storage"
   | "storage-usage"
   | "storage-iops"
+  | "storage-queue"
   | "network"
   | "network-sockets"
   | "network-queues";

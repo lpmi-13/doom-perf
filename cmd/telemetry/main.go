@@ -138,8 +138,21 @@ type pressureLineTelemetry struct {
 
 type storageTelemetry struct {
 	resourceUSE
-	QueueDepth          float64 `json:"queueDepth"`
-	AwaitMillis         float64 `json:"awaitMillis"`
+	// QueueDepth is aqu-sz: the average TOTAL queue length over the interval
+	// (waiting + in-service), from diskstats weighted-time. It is the sum of the
+	// two tiers below and still drives the tower circuit's spawn burstiness.
+	QueueDepth float64 `json:"queueDepth"`
+	// DeviceQueue / DeviceQueueCap / SchedBacklog split that total into the two
+	// tiers the "Disk IO queue" alcove visualizes:
+	//   DeviceQueue    -- in-flight requests at the hardware (diskstats field 9),
+	//                     of the busiest device; hard-capped by DeviceQueueCap.
+	//   DeviceQueueCap -- that device's hardware queue depth (0 = unknown rim).
+	//   SchedBacklog   -- requests still waiting in the block-layer scheduler queue
+	//                     (aqu-sz - in-flight, clamped >= 0); effectively unbounded.
+	DeviceQueue    float64 `json:"deviceQueue"`
+	DeviceQueueCap float64 `json:"deviceQueueCap"`
+	SchedBacklog   float64 `json:"schedBacklog"`
+	AwaitMillis    float64 `json:"awaitMillis"`
 	ReadBytesPerSecond  float64 `json:"readBytesPerSecond"`
 	WriteBytesPerSecond float64 `json:"writeBytesPerSecond"`
 	// IOPS is the aggregate completed-operations rate (reads+writes/s) across all
@@ -252,6 +265,16 @@ type diskCounter struct {
 	writeMillis  uint64
 	ioMillis     uint64
 	weightedIO   uint64
+	// inFlight is diskstats field 9 ("I/Os currently in progress") -- an
+	// instantaneous gauge (not a monotonic counter), so it is read as-is with no
+	// delta. It is the device-tier queue occupancy: requests dispatched to the
+	// hardware and not yet completed.
+	inFlight uint64
+	// queueCap is the device hardware queue-depth cap on inFlight, resolved by
+	// readDeviceQueueCap from (in order) device/queue_depth, sum(mq/*/nr_tags), or
+	// queue/nr_requests. 0 only when none are exposed (rare: some virtio/loop); the
+	// visualization then falls back to the observed in-flight high-water for its rim.
+	queueCap uint64
 }
 
 type netCounter struct {
@@ -1112,9 +1135,25 @@ func reduceStorage(disks []diskCounter, previous map[string]diskCounter, elapsed
 		util := clamp(float64(ioMillis) / (elapsed * 1000))
 		queueDepth := float64(weightedIO) / (elapsed * 1000)
 		iops := float64(ios) / elapsed
+		// Device tier: in-flight is an instantaneous snapshot, aqu-sz is a
+		// time-average, so backlog = aqu-sz - in-flight is a pragmatic estimate of
+		// the waiting (scheduler) tier, not an exact partition; clamp it at zero.
+		inFlight := float64(disk.inFlight)
+		backlog := maxFloat(queueDepth-inFlight, 0)
 
 		result.Utilization = maxFloat(result.Utilization, util)
 		result.QueueDepth = maxFloat(result.QueueDepth, queueDepth)
+		result.SchedBacklog = maxFloat(result.SchedBacklog, backlog)
+		// Report the device tier for the busiest device by in-flight, pairing its
+		// cap with its occupancy so the alcove's rim matches its fill. Fall back to
+		// the first known cap so the rim is still drawn when everything is idle.
+		if inFlight > result.DeviceQueue {
+			result.DeviceQueue = inFlight
+			result.DeviceQueueCap = float64(disk.queueCap)
+		}
+		if result.DeviceQueueCap == 0 && disk.queueCap > 0 {
+			result.DeviceQueueCap = float64(disk.queueCap)
+		}
 		result.AwaitMillis = maxFloat(result.AwaitMillis, await)
 		result.ReadBytesPerSecond += float64(disk.readSectors-old.readSectors) * 512 / elapsed
 		result.WriteBytesPerSecond += float64(disk.writeSectors-old.writeSectors) * 512 / elapsed
@@ -1151,6 +1190,48 @@ func sampleRootFilesystem() (used, total, avail uint64, usedRatio float64) {
 		usedRatio = clamp(float64(used) / float64(used+avail))
 	}
 	return used, total, avail, usedRatio
+}
+
+// readSysUint reads a single unsigned integer from a sysfs attribute (e.g.
+// /sys/block/<dev>/device/queue_depth). A missing/unreadable/non-numeric file
+// returns 0, which callers treat as "attribute not exposed".
+func readSysUint(path string) uint64 {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	value, err := strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
+	if err != nil {
+		return 0
+	}
+	return value
+}
+
+// readDeviceQueueCap resolves a block device's hardware queue-depth cap (the bound
+// on in-flight requests) from sysfs, trying sources in order of specificity:
+//
+//	device/queue_depth  -- SATA/SCSI NCQ depth; absent on NVMe (no SCSI model)
+//	sum(mq/*/nr_tags)   -- blk-mq total hardware tags across hw queues; this is the
+//	                       aggregate ceiling that diskstats' aggregate in-flight can
+//	                       reach, so summing (not per-queue) keeps inFlight <= cap
+//	queue/nr_requests   -- block-layer request-queue depth; last-resort proxy
+//
+// `base` is the device's /sys/block/<dev> directory. Returns 0 only when none are
+// exposed (rare: some virtio/loop), which the alcove reads as "no datasheet rim".
+func readDeviceQueueCap(base string) uint64 {
+	if v := readSysUint(filepath.Join(base, "device", "queue_depth")); v > 0 {
+		return v
+	}
+	if entries, err := os.ReadDir(filepath.Join(base, "mq")); err == nil {
+		var tags uint64
+		for _, entry := range entries {
+			tags += readSysUint(filepath.Join(base, "mq", entry.Name(), "nr_tags"))
+		}
+		if tags > 0 {
+			return tags
+		}
+	}
+	return readSysUint(filepath.Join(base, "queue", "nr_requests"))
 }
 
 func readDiskCounters() ([]diskCounter, error) {
@@ -1194,8 +1275,10 @@ func readDiskCounters() ([]diskCounter, error) {
 			writes:       values[4],
 			writeSectors: values[6],
 			writeMillis:  values[7],
+			inFlight:     values[8],
 			ioMillis:     values[9],
 			weightedIO:   values[10],
+			queueCap:     readDeviceQueueCap(filepath.Join("/sys/block", name)),
 		})
 	}
 	return disks, scanner.Err()

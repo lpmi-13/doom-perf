@@ -98,9 +98,13 @@ export const reserved = {
     // is the CPU wing's D-state orb, cyan the network wing's RX packet.
     // Verified free against the C state table, not just this file: APBX/PLSE/BFE1/
     // MISL/PLSS/BFS1 all LOOK free here but are spent by the memory fault range.
+    // CEYE A/B (evil-eye decoration, doomednum 41, never spawned in the lab) are
+    // overridden as the disk IO QUEUE plate billboards: A = amber device plate,
+    // B = red scheduler plate (MT_DP_DISKPLATE, hand-stacked by p_tick.c).
     spriteReplacements: [
       "IFOGA0", "IFOGB0", "IFOGC0", "IFOGD0", "IFOGE0",
       "TFOGA0", "TFOGB0", "TFOGC0", "TFOGD0", "TFOGE0",
+      "CEYEA0", "CEYEB0",
     ],
   },
   network: {

@@ -14,7 +14,7 @@
 
 --- a/info.c
 +++ b/info.c
-@@ -1067,10 +1067,21 @@ state_t	states[NUMSTATES] = {
+@@ -1067,10 +1067,21 @@
      {SPR_TGRN,32769,4,{NULL},S_GREENTORCH3,0,0},	// S_GREENTORCH2
      {SPR_TGRN,32770,4,{NULL},S_GREENTORCH4,0,0},	// S_GREENTORCH3
      {SPR_TGRN,32771,4,{NULL},S_GREENTORCH,0,0},	// S_GREENTORCH4
@@ -40,7 +40,7 @@
      {SPR_SMBT,32768,4,{NULL},S_BTORCHSHRT2,0,0},	// S_BTORCHSHRT
      {SPR_SMBT,32769,4,{NULL},S_BTORCHSHRT3,0,0},	// S_BTORCHSHRT2
      {SPR_SMBT,32770,4,{NULL},S_BTORCHSHRT4,0,0},	// S_BTORCHSHRT3
-@@ -1099,7 +1110,138 @@ state_t	states[NUMSTATES] = {
+@@ -1099,7 +1110,143 @@
      {SPR_TLP2,32768,4,{NULL},S_TECH2LAMP2,0,0},	// S_TECH2LAMP
      {SPR_TLP2,32769,4,{NULL},S_TECH2LAMP3,0,0},	// S_TECH2LAMP2
      {SPR_TLP2,32770,4,{NULL},S_TECH2LAMP4,0,0},	// S_TECH2LAMP3
@@ -176,11 +176,16 @@
 +    {SPR_BON2,32768,2,{NULL},S_DP_IOTASK_DBLOOM2,0,0},	// S_DP_IOTASK_DBLOOM1
 +    {SPR_BON2,32769,2,{NULL},S_DP_IOTASK_DISK,0,0},	// S_DP_IOTASK_DBLOOM2
 +    {SPR_BON2,32768,2,{NULL},S_DP_IOTASK_NBLOOM2,0,0},	// S_DP_IOTASK_NBLOOM1
-+    {SPR_BON2,32769,2,{NULL},S_DP_IOTASK_NET,0,0}	// S_DP_IOTASK_NBLOOM2
++    {SPR_BON2,32769,2,{NULL},S_DP_IOTASK_NET,0,0},	// S_DP_IOTASK_NBLOOM2
++    // Disk IO QUEUE plate stack: hand-positioned billboard plates (p_tick.c
++    // DoomPerf_UpdateDiskPlates). CEYE frame A = amber device plate, B = red
++    // scheduler plate; both fullbright + static (tics -1). Art overrides CEYE.
++    {SPR_CEYE,32768,-1,{NULL},S_NULL,0,0},	// S_DP_PLATE_DEV
++    {SPR_CEYE,32769,-1,{NULL},S_NULL,0,0}	// S_DP_PLATE_SCHED
  };
  
  
-@@ -4665,6 +4807,300 @@ mobjinfo_t mobjinfo[NUMMOBJTYPES] = {
+@@ -4665,6 +4812,328 @@
  	sfx_None,		// activesound
  	MF_NOBLOCKMAP,		// flags
  	S_NULL		// raisestate
@@ -476,6 +481,34 @@
 +	100,		// mass
 +	0,		// damage
 +	sfx_None,		// activesound
++	MF_NOGRAVITY|MF_NOBLOCKMAP|MF_NOCLIP,		// flags
++	S_NULL		// raisestate
++    },
++
++    {		// MT_DP_DISKPLATE -- a billboard plate in the disk IO queue stacks
++	-1,		// doomednum (runtime-spawned only)
++	S_DP_PLATE_DEV,	// spawnstate (device amber; scheduler plates set S_DP_PLATE_SCHED)
++	1000,		// spawnhealth
++	S_NULL,		// seestate
++	sfx_None,		// seesound
++	8,		// reactiontime
++	sfx_None,		// attacksound
++	S_NULL,		// painstate
++	0,		// painchance
++	sfx_None,		// painsound
++	S_NULL,		// meleestate
++	S_NULL,		// missilestate
++	S_NULL,		// deathstate
++	S_NULL,		// xdeathstate
++	sfx_None,		// deathsound
++	0,		// speed
++	16*FRACUNIT,		// radius
++	8*FRACUNIT,		// height (a thin plate)
++	100,		// mass
++	0,		// damage
++	sfx_None,		// activesound
++	// Non-blocking + no clipping: plates are hand-stacked in the queue shafts and
++	// must never shove or trip the player walking the nave between them.
 +	MF_NOGRAVITY|MF_NOBLOCKMAP|MF_NOCLIP,		// flags
 +	S_NULL		// raisestate
      }
