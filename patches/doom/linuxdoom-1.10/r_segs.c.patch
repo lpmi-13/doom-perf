@@ -16,7 +16,7 @@
 
 --- a/r_segs.c
 +++ b/r_segs.c
-@@ -40,6 +40,50 @@
+@@ -40,6 +40,55 @@
  #include "r_sky.h"
  
  
@@ -58,6 +58,11 @@
 +	// Storage summit spindle drum: throughput streaks on the drum\'s lower
 +	// (two-sided) wall texture; gate on the bottom surface like the dashboard.
 +	doomperf_cpu_column_display = 31;
++    else if (surface == 2 && tag == 665)
++	// Storage disk-usage SUNBURST: a circular df-usage gauge on the back-wall
++	// display block\'s lower (two-sided) face; gate on the bottom surface like the
++	// dashboard and spindle so it can\'t bleed onto the metal cap band above it.
++	doomperf_cpu_column_display = 32;
 +    else
 +	doomperf_cpu_column_display = 0;
 +    doomperf_cpu_column_texture_x = texturecolumn;
@@ -67,7 +72,7 @@
  // OPTIMIZE: closed two sided lines as single sided
  
  // True if any of the segs textures might be visible.
-@@ -121,12 +165,13 @@
+@@ -121,12 +170,13 @@
  	
      lightnum = (frontsector->lightlevel >> LIGHTSEGSHIFT)+extralight;
  
@@ -86,7 +91,7 @@
  	walllights = scalelight[0];
      else if (lightnum >= LIGHTLEVELS)
  	walllights = scalelight[LIGHTLEVELS-1];
-@@ -284,7 +329,9 @@
+@@ -284,7 +334,9 @@
  	    dc_yh = yh;
  	    dc_texturemid = rw_midtexturemid;
  	    dc_source = R_GetColumn(midtexture,texturecolumn);
@@ -96,7 +101,7 @@
  	    ceilingclip[rw_x] = viewheight;
  	    floorclip[rw_x] = -1;
  	}
-@@ -306,7 +353,9 @@
+@@ -306,7 +358,9 @@
  		    dc_yh = mid;
  		    dc_texturemid = rw_toptexturemid;
  		    dc_source = R_GetColumn(toptexture,texturecolumn);
@@ -106,7 +111,7 @@
  		    ceilingclip[rw_x] = mid;
  		}
  		else
-@@ -336,7 +385,9 @@
+@@ -336,7 +390,9 @@
  		    dc_texturemid = rw_bottomtexturemid;
  		    dc_source = R_GetColumn(bottomtexture,
  					    texturecolumn);
@@ -116,7 +121,7 @@
  		    floorclip[rw_x] = mid;
  		}
  		else
-@@ -643,12 +694,10 @@
+@@ -643,12 +699,10 @@
  	{
  	    lightnum = (frontsector->lightlevel >> LIGHTSEGSHIFT)+extralight;
  

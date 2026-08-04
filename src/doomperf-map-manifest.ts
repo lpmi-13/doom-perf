@@ -93,17 +93,6 @@ export const mapManifest = {
       ]
     },
     {
-      "sign": "storage",
-      "segments": [
-        {
-          "ax": 128,
-          "ay": -1994,
-          "bx": -128,
-          "by": -1994
-        }
-      ]
-    },
-    {
       "sign": "storage-usage",
       "segments": [
         {

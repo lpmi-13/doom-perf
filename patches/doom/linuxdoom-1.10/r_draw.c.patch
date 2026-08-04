@@ -19,7 +19,7 @@
 
 --- a/r_draw.c
 +++ b/r_draw.c
-@@ -95,6 +95,20 @@
+@@ -95,6 +95,21 @@
  // just for profiling 
  int			dccount;
  
@@ -36,18 +36,28 @@
 +static byte R_DoomPerfDiskDashboardPixel (int tx, int ty, byte background);
 +static byte R_DoomPerfDiskPlatterPixel (fixed_t xfrac, fixed_t yfrac, byte background);
 +static byte R_DoomPerfDiskSpindlePixel (int ty);
++static byte R_DoomPerfDiskDonutPixel (int tx, int ty, byte background);
 +
  //
  // A column is a vertical slice/span from a wall texture that,
  //  given the DOOM style restrictions on the view orientation,
-@@ -137,9 +151,27 @@
+@@ -137,9 +152,36 @@
      // This is as fast as it gets.
      do 
      {
 -	// Re-map color indices from wall texture column
 -	//  using a lighting/special effects LUT.
 -	*dest = dc_colormap[dc_source[(frac>>FRACBITS)&127]];
-+	if (doomperf_cpu_column_display == 31)
++	if (doomperf_cpu_column_display == 32)
++	    // Disk-usage SUNBURST: a circular df-usage gauge on a 160-tall side wall, so
++	    // the DPDDISC base is 256 tall and tx/ty are masked with &255 (not &127) --
++	    // the full 160-tall/wide face must map without wrapping at 128. Drawn
++	    // FULLBRIGHT (colormaps[] not dc_colormap) so the wheel glows like a display.
++	    *dest = colormaps[R_DoomPerfDiskDonutPixel(
++				    doomperf_cpu_column_texture_x,
++				    (frac>>FRACBITS)&255,
++				    dc_source[(frac>>FRACBITS)&255])];
++	else if (doomperf_cpu_column_display == 31)
 +	    // Spindle base texture is 256 tall (DPDSPIN), so the util fill + streaks
 +	    // span the FULL drum height in one piece rather than tiling at 128.
 +	    *dest = dc_colormap[R_DoomPerfDiskSpindlePixel((frac>>FRACBITS)&255)];
@@ -71,7 +81,7 @@
  	
  	dest += SCREENWIDTH; 
  	frac += fracstep;
-@@ -514,6 +546,704 @@
+@@ -514,6 +556,848 @@
  // just for profiling
  int			dscount;
  
@@ -756,6 +766,150 @@
 +    return DOOMPERF_DISK_EMPTY;				// dark above the fill
 +}
 +
++// ===== Storage disk-usage SUNBURST (storage wing, cistern back wall). The `df /`
++// usage gauge rendered as a circular sunburst (line tag 665, DPDISC base, surface
++// 2): the used fraction of the disk fills the wheel clockwise from the top as a
++// rainbow-ringed sweep, and free capacity is left as a dark wedge; a bright outer
++// ring always shows the full circle (total capacity). Only total root-fs usage is
++// available from telemetry, so this is a COARSE "percentage full" reading -- the
++// rings/wedge colours are decorative structure, the swept ANGLE is the honest datum.
++// Drawn FULLBRIGHT (colormaps[] in R_DrawColumn) so it reads like a backlit display.
++// Fed by doomperf_storage_usage (sims 3/4 synthesize a fill), matching the old
++// cistern. Integer math throughout (isqrt for radius, a local angle fn for the sweep).
++#define DISC_CX		80		// canvas centre (160-wide/tall floor-to-ceiling face)
++#define DISC_CY		80
++#define DISC_OUTER	80		// disc radius (px) -- fills the 160-tall wall edge to edge
++#define DISC_INNER	18		// centre hub hole radius
++#define DISC_RINGS	5		// concentric depth rings
++#define DISC_RIM	193		// outer capacity outline: bright blue-white
++#define DISC_VOID	5		// free space / gaps / hub: near-black
++#define DISC_BINS	32		// angular wedges that get an independent outer radius
++
++static int R_DoomPerfDiskUsagePermille (void)
++{
++    int usage;
++
++    if (doomperf_sim_mode == 3)
++	usage = 610 + (leveltime % 16);
++    else if (doomperf_sim_mode == 4)
++	usage = 930 + (leveltime % 12);
++    else
++	usage = doomperf_storage_usage;
++    if (usage < 0)
++	usage = 0;
++    if (usage > 1000)
++	usage = 1000;
++    return usage;
++}
++
++// Angle of a pixel offset (x,y), replicating Doom's SlopeDiv + R_PointToAngle octant
++// logic LOCALLY. We must NOT call R_PointToAngle2 here: it sets the globals
++// viewx/viewy as a side effect, and doing that inside the column drawer moves the
++// camera to the map origin mid-frame -- so the rest of the view renders from the
++// atrium and other wings bleed in. tantoangle[]/ANG*/SLOPERANGE come from tables.h.
++static int R_DoomPerfSlopeDiv (unsigned num, unsigned den)
++{
++    unsigned	ans;
++
++    if (den < 512)
++	return SLOPERANGE;
++    ans = (num << 3) / (den >> 8);
++    return ans <= SLOPERANGE ? ans : SLOPERANGE;
++}
++
++static angle_t R_DoomPerfPointAngle (int x, int y)
++{
++    if (x == 0 && y == 0)
++	return 0;
++    // Scale the small pixel offsets up (SlopeDiv expects fixed_t-magnitude operands;
++    // it treats den < 512 as vertical). Multiply, not <<, so negatives stay defined.
++    x *= 4096;
++    y *= 4096;
++    if (x >= 0)
++    {
++	if (y >= 0)
++	    return (x > y) ? tantoangle[R_DoomPerfSlopeDiv(y, x)]
++			   : ANG90 - 1 - tantoangle[R_DoomPerfSlopeDiv(x, y)];
++	y = -y;
++	return (x > y) ? (angle_t)(0 - tantoangle[R_DoomPerfSlopeDiv(y, x)])
++		       : ANG270 + tantoangle[R_DoomPerfSlopeDiv(x, y)];
++    }
++    x = -x;
++    if (y >= 0)
++	return (x > y) ? ANG180 - 1 - tantoangle[R_DoomPerfSlopeDiv(y, x)]
++		       : ANG90 + tantoangle[R_DoomPerfSlopeDiv(x, y)];
++    y = -y;
++    return (x > y) ? ANG180 + tantoangle[R_DoomPerfSlopeDiv(y, x)]
++		   : ANG270 - 1 - tantoangle[R_DoomPerfSlopeDiv(x, y)];
++}
++
++// Per-wedge outer radius, jittered but STABLE (hashed from the angular bin, NOT from
++// time), so the sunburst's rim looks raggedly organic like a real disk-usage chart
++// even though only the total % is real telemetry. Range keeps a gap before the
++// capacity rim and clear of the hub.
++static int R_DoomPerfDiscBinRadius (unsigned bin)
++{
++    unsigned	h;
++    int		lo = DISC_OUTER - 27;		// shortest slice (inner disc stays solid)
++    int		hi = DISC_OUTER - 4;		// longest slice (still inside the rim)
++
++    h = bin * 2654435761u;			// Knuth multiplicative hash
++    h ^= h >> 15;
++    return lo + (int)(h % (unsigned)(hi - lo + 1));
++}
++
++static byte R_DoomPerfDiskDonutPixel (int tx, int ty, byte background)
++{
++    // A rainbow wheel echoing a disk-usage sunburst, indexed by 45-degree segment
++    // clockwise from the top: blue, purple, magenta, red, orange, gold, green, teal.
++    static const byte hue[8] = { 200, 253, 251, 176, 215, 231, 112, 197 };
++    int		dx;
++    int		dy;
++    int		r2;
++    int		r;
++    int		ringw;
++    angle_t	a;
++    unsigned	af;
++    unsigned	thresh;
++
++    tx &= 255;
++    ty &= 255;
++    dx = tx - DISC_CX;
++    dy = ty - DISC_CY;
++    r2 = dx * dx + dy * dy;
++    if (r2 > DISC_OUTER * DISC_OUTER)
++	return background;			// beyond the disc: the dark screen + bezel
++    r = R_DoomPerfISqrt(r2);			// 0 .. DISC_OUTER
++
++    if (r >= DISC_OUTER - 2)
++	return DISC_RIM;			// capacity outline (whole circle)
++    if (r < DISC_INNER)
++	return DISC_VOID;			// centre hub hole
++
++    // Angle of this pixel, measured CLOCKWISE FROM THE TOP (screen y grows downward,
++    // so feed (-dy, dx) to get 0 at 12 o'clock increasing toward 3 o'clock).
++    a = R_DoomPerfPointAngle(-dy, dx);
++    af = a >> 22;				// 0 .. 1023 around the circle
++    thresh = ((unsigned)R_DoomPerfDiskUsagePermille() << 10) / 1000; // used sweep, 0..1023
++    if (af >= thresh)
++	return DISC_VOID;			// free capacity: dark wedge
++
++    // Ragged outer edge: each angular wedge stops at its own jittered radius, so the
++    // filled area looks like real directory sizes rather than a perfect disc.
++    if (r > R_DoomPerfDiscBinRadius(af / (1024u / DISC_BINS)))
++	return DISC_VOID;
++
++    // Sunburst structure: thin dark gaps at each depth-ring boundary and at each
++    // 45-degree wedge boundary, so the filled sweep reads as segmented rings.
++    ringw = (DISC_OUTER - DISC_INNER) / DISC_RINGS;
++    if (((r - DISC_INNER) % ringw) == 0)
++	return DISC_VOID;			// ring gap
++    if ((af & 127) < 2)
++	return DISC_VOID;			// wedge gap (every 45 deg)
++
++    return hue[a >> 29];			// 8-segment rainbow wheel
++}
++
 +static byte
 +R_DoomPerfCpuFloorPixel
 +( fixed_t		xfrac,
@@ -776,7 +930,7 @@
  
  //
  // Draws the actual span.
-@@ -553,7 +1283,21 @@
+@@ -553,7 +1437,21 @@
  
  	// Lookup pixel from flat texture tile,
  	//  re-index using light/colormap.
@@ -799,7 +953,7 @@
  
  	// Next step in u,v.
  	xfrac += ds_xstep; 
-@@ -676,8 +1420,20 @@
+@@ -676,8 +1574,20 @@
  	spot = ((yfrac>>(16-6))&(63*64)) + ((xfrac>>16)&63);
  	// Lowres/blocky mode does it twice,
  	//  while scale is adjusted appropriately.

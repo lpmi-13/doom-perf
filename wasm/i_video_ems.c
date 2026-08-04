@@ -205,8 +205,9 @@ void DoomPerf_TriggerStorageIopsSpike(void)
 }
 
 // Root-filesystem usage (`df /`) as a permille of capacity. Drives the disk-usage
-// cistern's fluid level in the storage wing (p_tick.c DoomPerf_UpdateDiskUsage);
-// ignored there in a disk sim, which synthesizes its own fill.
+// CUBE plinth in the storage wing -- an isometric voxel gauge that fills bottom-up
+// (r_draw.c R_DoomPerfDiskCubePixel, line tag 665); ignored in a disk sim, which
+// synthesizes its own fill.
 EMSCRIPTEN_KEEPALIVE
 void DoomPerf_SetStorageUsage(int permille)
 {

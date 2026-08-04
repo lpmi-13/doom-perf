@@ -32,7 +32,7 @@
  //-----------------------------------------------------------------------------
  //
  // $Id:$
-@@ -30,9 +30,3423 @@
+@@ -30,9 +30,3365 @@
  
  #include "doomstat.h"
  
@@ -241,69 +241,11 @@
 +    doomperf_disk_dashboard[2][DOOMPERF_DASH_SAMPLES - 1] = read;
 +}
 +
-+// Doom Perf: the disk-usage CISTERN (storage wing). A recessed fluid tank whose
-+// floor rises with root-filesystem usage (`df /`): an empty disk reads as a
-+// near-dry basin, a full one brims just under the rim. Sector tag
-+// DOOMPERF_DISK_CISTERN_TAG. Heights are computed in map units (then shifted to
-+// fixed-point) so the permille scale can't overflow a 32-bit intermediate, and the
-+// fill EASES toward its target so a slow df change reads as a rising tide. The disk
-+// sims synthesize a plausible fill; live uses the browser-pushed value.
-+// Heights sit within one step (24) of the surrounding rim so the basin is
-+// escapable: LOW is a shallow dry basin one step down, HIGH brims just under the
-+// rim. These are ABSOLUTE map heights, so they track the cistern hall's floor
-+// (CIST_FLOOR in storage-wing.mjs, now 48 -- the hall moved up a face when the
-+// step ring went from six sides to ten).
-+#define DOOMPERF_DISK_CISTERN_TAG	616
-+#define DOOMPERF_DISK_CISTERN_LOW	(24)		// dry basin floor (map units)
-+#define DOOMPERF_DISK_CISTERN_HIGH	(46)		// brimming, just under the rim (48)
-+#define DOOMPERF_DISK_CISTERN_STEP	(2 * FRACUNIT)	// ease per tic
-+
-+void DoomPerf_UpdateDiskUsage (void)
-+{
-+    int		usage;
-+    int		fill;
-+    int		i;
-+    fixed_t	target_h;
-+    fixed_t	cur;
-+
-+    if (doomperf_sim_mode == 3)
-+	usage = 610 + (leveltime % 16);
-+    else if (doomperf_sim_mode == 4)
-+	usage = 930 + (leveltime % 12);
-+    else
-+	usage = doomperf_storage_usage;
-+    if (usage < 0)
-+	usage = 0;
-+    if (usage > 1000)
-+	usage = 1000;
-+
-+    fill = DOOMPERF_DISK_CISTERN_LOW
-+	+ ((DOOMPERF_DISK_CISTERN_HIGH - DOOMPERF_DISK_CISTERN_LOW) * usage) / 1000;
-+    target_h = fill * FRACUNIT;
-+
-+    for (i = 0; i < numsectors; i++)
-+    {
-+	if (sectors[i].tag != DOOMPERF_DISK_CISTERN_TAG)
-+	    continue;
-+	cur = sectors[i].floorheight;
-+	if (cur < target_h)
-+	{
-+	    cur += DOOMPERF_DISK_CISTERN_STEP;
-+	    if (cur > target_h)
-+		cur = target_h;
-+	}
-+	else if (cur > target_h)
-+	{
-+	    cur -= DOOMPERF_DISK_CISTERN_STEP;
-+	    if (cur < target_h)
-+		cur = target_h;
-+	}
-+	sectors[i].floorheight = cur;
-+	// Glow a touch brighter as the tank fills (kept clear of the 130/134
-+	// storage sentinels and the 144/160 CPU sentinels).
-+	sectors[i].lightlevel = (short)(164 + (usage * 40) / 1000);
-+    }
-+}
++// Doom Perf: disk-usage (`df /`) is now a WALL instrument -- the circular SUNBURST
++// on the cistern back wall (line tag 665, R_DoomPerfDiskDonutPixel in r_draw.c),
++// which reads doomperf_storage_usage directly in texture space. The old recessed
++// fluid tank (sector tag 616, floor-raised here by DoomPerf_UpdateDiskUsage) is
++// gone, so no per-tic sector work is needed for disk usage any more.
 +
 +// Doom Perf: disk QUEUE DEPTH as permille of the rated queue. The block layer's
 +// request queue is a HARD-CAPPED vessel (/sys/block/<dev>/queue/nr_requests,
@@ -3456,7 +3398,7 @@
  //
  // THINKERS
  // All thinkers should be allocated by Z_Malloc
-@@ -130,11 +3544,11 @@
+@@ -130,11 +3486,11 @@
  void P_Ticker (void)
  {
      int		i;
@@ -3470,7 +3412,7 @@
      // pause if in menu and at least one tic has been run
      if ( !netgame
  	 && menuactive
-@@ -143,16 +3557,35 @@
+@@ -143,16 +3499,34 @@
      {
  	return;
      }
@@ -3481,7 +3423,6 @@
 +    DoomPerf_UpdatePillars ();
 +    DoomPerf_UpdatePlatter ();
 +    DoomPerf_UpdateDiskDashboard ();
-+    DoomPerf_UpdateDiskUsage ();
 +    DoomPerf_UpdateDiskCircuit ();
 +    DoomPerf_UpdateDiskDevices ();
 +    DoomPerf_UpdateDiskPlates ();

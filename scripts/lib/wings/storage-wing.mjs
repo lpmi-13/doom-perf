@@ -28,9 +28,9 @@
 //               retired -- queue depth rides the request circuit's spawn
 //               burstiness now, not a floor readout.
 //   CISTERN     off step face 1 (lower-right, squared chamber): the disk-usage
-//     hall      instrument -- a recessed fluid tank whose floor the engine raises
-//               with `df /` usage (sector tag 616, DoomPerf_UpdateDiskUsage) plus a
-//               df read-point terminal on the back wall.
+//     hall      instrument -- a circular SUNBURST display on the back wall that fills
+//               with `df /` usage (line tag 665, R_DoomPerfDiskDonutPixel); the df
+//               read-point overlay is aimed at it.
 //   IOPS BANK   off step face 6 (upper-left, squared chamber): a row of four
 //     hall      per-device standpipe columns whose floors rise with each device's
 //               ops/s (sector tags 630..633, DoomPerf_UpdateDiskDevices) plus an
@@ -80,7 +80,7 @@ import {
   buildFxPatch,
   drawCenteredText,
 } from "../textures.mjs";
-import { lump, buildPatch } from "../wad-bytes.mjs";
+import { buildPatch } from "../wad-bytes.mjs";
 
 const ids = reserved.storage;
 const tex = (suffix) => wingName("storage", suffix);
@@ -151,11 +151,17 @@ const signs = {
   rate: { texture: tex("RATE"), patch: tex("PRAT"), text: "IO RATE" },
   await: { texture: tex("AWAIT"), patch: tex("PAWT"), text: "AWAIT" },
 };
-// Cistern fluid flat: a still, dark storage-medium pool (metallic blue), distinct
-// from the memory wing's green swap nukage so a full cistern reads as "capacity",
-// not "toxic". The engine drives the tank's floor height + glow (p_tick.c
-// DoomPerf_UpdateDiskUsage, sector tag 616); this is just its surface.
-const cisternFlat = tex("CIST");
+// Disk-usage SUNBURST base wall (the cistern's +u side-wall display). A dark round
+// screen with a glowing electric-blue bezel; the engine shader (line tag 665,
+// R_DoomPerfDiskDonutPixel) overrides every pixel INSIDE the circle it draws,
+// falling back to this base only in the dark corners outside the disc. 256 square (a
+// power of two, so a >128-wide/tall face doesn't tile it): the display face is 160x160
+// (floor-to-ceiling), which samples the top-left 160x160 of this texture. The engine
+// masks tx/ty with &255 (see R_DrawColumn display 32) so the full 160 maps without
+// wrapping.
+const discTex = { texture: tex("DISC"), patch: tex("PDSC") };
+const DISC_FACE = 160; // the display face is 160x160 (fills the 160-tall side wall)
+const discTexSize = { width: 256, height: 256 };
 const gauge = { texture: tex("GAUG"), patch: tex("PGAU") };
 const tubeRead = { texture: tex("RTUB"), patch: tex("PRTU") };
 const tubeWrite = { texture: tex("WTUB"), patch: tex("PWTU") };
@@ -221,17 +227,28 @@ const buildSpindlePatch = () => {
   return buildPatch(px, W, H);
 };
 
-// Cistern fluid flat: a still, dark metallic-blue pool with faint horizontal
-// ripple bands (Doom blue ramp ~200..204), distinct from the memory wing's green
-// swap nukage so a full cistern reads as "capacity", not "toxic". 64x64 flat.
-const buildCisternFlat = () => {
-  const size = 64;
-  const px = new Uint8Array(size * size).fill(202);
-  for (let y = 0; y < size; y += 1) {
-    const band = y % 16 < 2 ? 204 : y % 8 < 1 ? 200 : 202;
-    for (let x = 0; x < size; x += 1) px[y * size + x] = band;
+// Disk-usage SUNBURST base patch: a near-black display panel with a thin glowing
+// electric-blue bezel, 256x256 but only the top-left DISC_FACE (160x160) is ever seen
+// (the 160-tall side wall samples texel rows/cols 0..159). The engine shader (line tag
+// 665) paints the circular sunburst over this; the base only shows in the dark corners
+// outside the disc, so the bezel reads as a monitor frame. Fullbright in-engine (drawn
+// via colormaps[]), so the blue bezel glows even in the dim hall.
+const buildDiscPatch = () => {
+  const { width: W, height: H } = discTexSize;
+  const px = new Uint8Array(W * H).fill(5); // near-black screen
+  const bezel = 196; // electric blue
+  const F = DISC_FACE; // frame the 160x160 visible region (top-left of the texture)
+  for (let t = 0; t < 2; t += 1) {
+    for (let x = 0; x < F; x += 1) {
+      px[t * W + x] = bezel;
+      px[(F - 1 - t) * W + x] = bezel;
+    }
+    for (let y = 0; y < F; y += 1) {
+      px[y * W + t] = bezel;
+      px[y * W + (F - 1 - t)] = bezel;
+    }
   }
-  return lump(cisternFlat, Buffer.from(px));
+  return buildPatch(px, W, H);
 };
 
 // "IO VAULT" inscription flats, generated for the entry threshold (placed below).
@@ -355,8 +372,7 @@ const TP_FLOOR = stepFloor(TP_FACE); // 120
 const TP_HALF = stepRing[TP_FACE][0]; // 160: half the axis-aligned far face
 const TP_CEIL = TP_FLOOR + 208; // 328
 const TP_PANEL_Z = TP_FLOOR + 128; // 248: top of the 128-tall display band
-const TP_BACK = FAR_V + 288; // 1978: terminal recess front
-const TP_TERM_WALL = TP_BACK + 16; // 1994: screen face (one-sided dead end)
+const TP_BACK = FAR_V + 288; // 1978: dead-end wall (tube-panel decoration)
 const SERVER_PANEL_HEIGHT = 64;
 const terminalHalfWidthLocal = terminalTextureSize.width / 2; // 128
 
@@ -385,9 +401,12 @@ const QUEUE_SCREEN_U = queueChamber.u1; // -782: back wall (local -u) carrying t
 const QUEUE_SCREEN_CV = queueFace.mid; //  1045: screen centre in v (also the nave centre)
 
 // ===== CISTERN hall (off face 1, lower-right): an angled throat squares up to an
-// axis-aligned chamber holding the recessed disk-usage tank (df /, floor display,
-// engine tag 616) with a df read-point terminal on its back (+v) wall. Mirrors the
-// queue hall's throat->chamber pattern on the opposite (+u) side. =====
+// axis-aligned chamber whose back wall carries a circular SUNBURST disk-usage
+// display (df /, line tag 665) inset between two wall flanks. Mirrors the queue
+// hall's throat->chamber pattern on the opposite (+u) side. The chamber floor is now
+// open (the old central plinth/blue fluid cistern is gone); the sunburst is a
+// coarse-grained "percentage full" wheel -- the used fraction fills clockwise from
+// the top as a rainbow-ringed sweep, free space stays a dark wedge. =====
 const CIST_FACE = 1;
 const CIST_FLOOR = stepFloor(CIST_FACE); // 48
 const CIST_CEIL = CIST_FLOOR + 160; // 208
@@ -396,11 +415,29 @@ const cistFace = faceSpanV(CIST_FACE); // v 893..1197, mid 1045
 // identical segment at the stepRing[2] vertex (v=1197) — clean two-sided meshing,
 // no collinear split. (The IOPS hall likewise matches the QUEUE hall's -40 on -u.)
 const CIST_INNER_U = stepRing[CIST_FACE + 1][0] + 50; // 568: inner (near) wall of the +u chamber
+// The df read-point TERMINAL sits centred on the back (+v) wall; the disk-usage
+// SUNBURST is on the +u SIDE wall (perpendicular) -- facing the terminal, the player
+// turns 90 deg right to face the sunburst. So the chamber keeps its original 320
+// width (terminal fits the back wall alone).
 const cistChamber = { u1: CIST_INNER_U, v1: cistFace.mid - 132, u2: CIST_INNER_U + 320, v2: cistFace.mid + 132 };
-const cistTank = { u1: cistChamber.u1 + 38, v1: cistChamber.v1 + 68, u2: cistChamber.u2 - 58, v2: cistChamber.v1 + 180 };
-const CIST_TERM_V = cistChamber.v2; // 1177: screen face on the chamber's back wall
+const CIST_TERM_V = cistChamber.v2; // 1177: the chamber's back wall
 const CIST_TERM_CX = Math.round((cistChamber.u1 + cistChamber.u2) / 2); // 728
-const cistTerm = { u1: CIST_TERM_CX - terminalHalfWidthLocal, v1: CIST_TERM_V - 16, u2: CIST_TERM_CX + terminalHalfWidthLocal, v2: CIST_TERM_V };
+const cistTerm = { u1: CIST_TERM_CX - terminalHalfWidthLocal, v1: CIST_TERM_V - 16, u2: CIST_TERM_CX + terminalHalfWidthLocal, v2: CIST_TERM_V }; // u 600..856
+// The disk-usage SUNBURST display: a FULL-HEIGHT solid block inset in the +u SIDE wall
+// so the circle runs floor-to-ceiling (block floor == ceiling == CIST_CEIL, so its -u
+// lower texture spans the whole 160-tall wall, no cap band). The -u face is DISC_FACE
+// (160) wide in v and 160 tall -> a round circle filling the wall. Centred on the
+// wall's usable span (between the front wall and the back-wall terminal strip) and
+// flanked above/below by solid wall so only that -u face shows it (cist-disc(-f/-b)).
+const CIST_DISC_SIZE = DISC_FACE; // 160
+const CIST_DISC_DEPTH = 16; // how far the block insets from the +u wall
+const CIST_DISC_CV = Math.round((cistChamber.v1 + (CIST_TERM_V - 16)) / 2); // 1037: centre of the usable side wall
+const cistDisc = {
+  u1: cistChamber.u2 - CIST_DISC_DEPTH, // 872: room-facing (-u) display face
+  u2: cistChamber.u2, // 888: the +u wall
+  v1: CIST_DISC_CV - CIST_DISC_SIZE / 2, // 957
+  v2: CIST_DISC_CV + CIST_DISC_SIZE / 2, // 1117
+};
 
 // ===== IOPS BANK hall (off face 6, upper-left): a throat squares up to a chamber
 // holding a row of four per-device standpipe columns (engine tags 630..633) whose
@@ -538,22 +575,13 @@ const build = (ctx) => {
     floor: TP_FLOOR + SERVER_PANEL_HEIGHT,
     ceiling: TP_FLOOR + SERVER_PANEL_HEIGHT,
   });
-  // iostat terminal: a one-step lectern recess at the dead end; its far one-sided
-  // wall carries the DISK IO screen (read-point wired in terminals()). controlPanel
-  // puts the keyboard/server-details strip on the step riser below the screen, so
-  // it matches the CPU/memory/network terminals (the south back wall rotates to
-  // world "bottom", so the labelSide==="top" shortcut can't fire — the flag is
-  // required; see isControlPanelRecess in build-doomperf-map.mjs).
-  areaRect(direction, "storage-terminal", { u1: -terminalHalfWidthLocal, v1: TP_BACK, u2: terminalHalfWidthLocal, v2: TP_TERM_WALL }, {
-    ...hallStyle,
-    kind: "terminal",
-    floor: TP_FLOOR + 16,
-    ceiling: TP_FLOOR + 16 + terminalTextureSize.height,
-    light: 200,
-    labelSide: backWall, // far wall (local +v) = the screen
-    labelTexture: screen.texture,
-    controlPanel: true,
-  });
+  // Back wall (dead end, room face = world "top"): read/write tube panels that
+  // mirror the west wall's pneumatic tubes. The aggregate `iostat -x 1 2` read-point
+  // that used to sit here was removed — its service/queue/IOPS/df detail is already
+  // covered by the AWAIT gauges, the IO-QUEUE hall, the per-device IOPS bank and the
+  // df cistern — so the dead end is now plain wall decoration rather than a terminal.
+  panel("tp-back-read", { u1: -72, v1: TP_BACK, u2: 0, v2: TP_BACK + 16 }, tubeRead.texture, "top");
+  panel("tp-back-write", { u1: 0, v1: TP_BACK, u2: 72, v2: TP_BACK + 16 }, tubeWrite.texture, "top");
 
   // ===== AWAIT hall (off face 2, the +u face just above the cistern): an angled
   // throat squares up to an axis-aligned gauge chamber so the gauge recesses land
@@ -716,13 +744,13 @@ const build = (ctx) => {
   });
 
   // ===== CISTERN hall (off face 1, stepRing[1..2]): the disk-usage instrument.
-  // An angled throat squares up to an axis-aligned chamber; a recessed tank
-  // (engine tag 616, `df /` fill) sits centred with a walk-around rim, and a df
-  // read-point terminal rides the chamber's back (+v) wall. =====
+  // An angled throat squares up to an axis-aligned chamber; the back wall carries a
+  // circular SUNBURST display (line tag 665, `df /` fill) inset between two wall
+  // flanks, with the chamber floor left open in front of it. =====
   const cistWalk = { ...hallStyle, kind: "cistern-walk", floorFlat: "FLOOR0_3", light: 184 };
   // No throat placard: the throat's outer edge (edge 1) is the two-sided seam it
   // shares with the adjacent AWAIT throat, which can't carry a label. The hall is
-  // identified by its df read-point terminal instead.
+  // identified by its df read-point overlay instead.
   areaPoly(direction, "cist-throat", [stepRing[CIST_FACE], stepRing[CIST_FACE + 1], [CIST_INNER_U, stepRing[CIST_FACE + 1][1]], [CIST_INNER_U, stepRing[CIST_FACE][1]]], {
     ...cistWalk,
     kind: "metric-hall",
@@ -730,34 +758,42 @@ const build = (ctx) => {
     ceiling: CIST_CEIL,
   });
   const cistRim = { ...cistWalk, floor: CIST_FLOOR, ceiling: CIST_CEIL };
-  areaRect(direction, "cist-front", { u1: cistChamber.u1, v1: cistChamber.v1, u2: cistChamber.u2, v2: cistTank.v1 }, cistRim);
-  areaRect(direction, "cist-rim-left", { u1: cistChamber.u1, v1: cistTank.v1, u2: cistTank.u1, v2: cistTank.v2 }, cistRim);
-  areaRect(direction, "cist-rim-right", { u1: cistTank.u2, v1: cistTank.v1, u2: cistChamber.u2, v2: cistTank.v2 }, cistRim);
-  areaRect(direction, "cist-back", { u1: cistChamber.u1, v1: cistTank.v2, u2: cistChamber.u2, v2: cistTerm.v1 }, cistRim);
-  // The tank itself: a shallow fluid basin the engine raises with `df /` usage.
-  // DOOMPERF_DISK_CISTERN_LOW/HIGH in p_tick.c are absolute map heights and must
-  // track CIST_FLOOR (LOW = CIST_FLOOR - 24, HIGH = LOW + 22).
-  areaRect(direction, "cist-tank", cistTank, {
-    ...cistWalk,
-    kind: "cistern",
-    floor: CIST_FLOOR - 24, // engine drives 24 (empty) .. 46 (brimming); tag 616
-    ceiling: CIST_CEIL,
-    floorFlat: cisternFlat,
-    light: 164,
-    tag: ids.sectorTags[0] + 16, // 616
-  });
-  // df terminal on the back wall, flanked by wall so the 256-wide screen seats.
+  // Open chamber floor: from the throat up to the back-wall terminal strip, and out
+  // to the +u display inset (cistDisc.u1). The +u strip beside it is tiled below.
+  areaRect(direction, "cist-floor", { u1: cistChamber.u1, v1: cistChamber.v1, u2: cistDisc.u1, v2: cistTerm.v1 }, cistRim);
+  // Back (+v) wall: a walkable flank, the df read-point TERMINAL recess (centred, its
+  // screen on the far wall), then a flank -- the sunburst is NOT here, it's on +u.
   areaRect(direction, "cist-term-l", { u1: cistChamber.u1, v1: cistTerm.v1, u2: cistTerm.u1, v2: cistTerm.v2 }, cistRim);
-  areaRect(direction, "cist-term-r", { u1: cistTerm.u2, v1: cistTerm.v1, u2: cistChamber.u2, v2: cistTerm.v2 }, cistRim);
   areaRect(direction, "cist-terminal", cistTerm, {
     ...cistWalk,
     kind: "terminal",
     floor: CIST_FLOOR + 16,
     ceiling: CIST_FLOOR + 16 + terminalTextureSize.height,
     light: 200,
-    labelSide: backWall, // far wall (local +v) = the screen
+    labelSide: backWall, // far wall (local +v) = the df screen
     labelTexture: usageScreen.texture,
     controlPanel: true,
+  });
+  areaRect(direction, "cist-term-r", { u1: cistTerm.u2, v1: cistTerm.v1, u2: cistChamber.u2, v2: cistTerm.v2 }, cistRim);
+  // Sunburst display block on the +u SIDE wall: a SOLID block (floor == ceiling, like
+  // the spindle drum) whose room-facing (-u) lower texture (floor 48 -> block top 176
+  // = a 128-tall span matching the 128-tall DPDISC texture 1:1) carries the disk-usage
+  // sunburst shader (line tag 665, surface 2). `riserWall` sets that -u face; `wall` is
+  // the metal cap (176 -> 208). Flanked in v by solid wall (floor == ceiling == 208,
+  // riser = hall wall) so only the -u face shows the circle. Fed by doomperf_storage_usage.
+  const cistFlank = { ...cistRim, kind: "cist-wall", floor: CIST_CEIL, ceiling: CIST_CEIL, riserWall: cistWalk.wall };
+  areaRect(direction, "cist-disc-f", { u1: cistDisc.u1, v1: cistChamber.v1, u2: cistDisc.u2, v2: cistDisc.v1 }, cistFlank);
+  areaRect(direction, "cist-disc-b", { u1: cistDisc.u1, v1: cistDisc.v2, u2: cistDisc.u2, v2: cistTerm.v1 }, cistFlank);
+  areaRect(direction, "cist-disc", cistDisc, {
+    ...cistWalk,
+    kind: "cube-plinth", // solid block: riserWall on the -u face
+    floor: CIST_CEIL, // 208: block top == chamber ceiling -> lower texture is the FULL
+    ceiling: CIST_CEIL, // 160-tall wall (48..208), floor-to-ceiling, no cap band
+    floorFlat: "FLOOR0_3",
+    wall: cistWalk.wall,
+    riserWall: discTex.texture, // 160-tall circular display on the -u (room-facing) face
+    light: 208,
+    lineTag: ids.lineTags[0] + 5, // 665
   });
 
   // ===== IOPS BANK hall (off face 6, stepRing[6..7]): the per-device IOPS
@@ -876,10 +912,17 @@ const textures = [
     height: storageDisplayTextureSize.height,
     build: buildStorageDisplayPatch,
   },
+  {
+    texture: discTex.texture,
+    patch: discTex.patch,
+    width: discTexSize.width,
+    height: discTexSize.height,
+    build: buildDiscPatch,
+  },
 ];
 
-// Floor-name inscription flat ("IO VAULT") + the cistern fluid flat.
-const flats = [...ioInscription.flats, buildCisternFlat()];
+// Floor-name inscription flat ("IO VAULT").
+const flats = [...ioInscription.flats];
 
 const toWorld = ([u, v]) => [-u, -v];
 const segment = (a, b) => {
@@ -896,7 +939,11 @@ const segment = (a, b) => {
 // screens are off-centre (their chambers sit to the +u/-u side), so they run
 // terminalHalfWidth either side of the chamber's u-centre, not of u=0.
 const terminals = ({ terminalHalfWidth }) => [
-  { sign: "storage", segments: [segment([-terminalHalfWidth, TP_TERM_WALL], [terminalHalfWidth, TP_TERM_WALL])] },
+  // (The aggregate `iostat -x 1 2` read-point that used to ride the THROUGHPUT hall's
+  // dead-end wall was removed — that wall is now tube-panel decoration; its detail is
+  // covered by the AWAIT / IO-QUEUE / IOPS / df read-points below.)
+  // df read-point: the restored terminal screen on the back wall (the sunburst sits
+  // to its right as a separate visual instrument).
   { sign: "storage-usage", segments: [segment([CIST_TERM_CX - terminalHalfWidth, CIST_TERM_V], [CIST_TERM_CX + terminalHalfWidth, CIST_TERM_V])] },
   { sign: "storage-iops", segments: [segment([IOPS_TERM_CX - terminalHalfWidth, IOPS_TERM_V], [IOPS_TERM_CX + terminalHalfWidth, IOPS_TERM_V])] },
   // IO QUEUE read-point: the screen rides the queue chamber's back (-u) wall, so it

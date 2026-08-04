@@ -778,8 +778,8 @@ const scenarioTelemetry = (
   // busy, but the queue and service time stay low) or full saturation (mode 4 —
   // the request queue and await blow out while throughput plateaus under
   // contention), and also stand up the two other USE axes with their own in-world
-  // instruments: root-filesystem capacity (`df /`, the disk-usage CISTERN, sector
-  // tag 616) and per-device IOPS (the IOPS BANK, tags 630-633). In the disk sims
+  // instruments: root-filesystem capacity (`df /`, the disk-usage CUBE plinth, line
+  // tag 665) and per-device IOPS (the IOPS BANK, tags 630-633). In the disk sims
   // the engine synthesizes ALL of these instruments itself (DoomPerf_UpdateDisk*),
   // so the terminal mirrors those synthesized values to tell the same story:
   // mode 3 is ~61% full with a busy-but-healthy bank, mode 4 ~93% full and shallow-
