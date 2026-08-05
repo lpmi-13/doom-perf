@@ -32,7 +32,7 @@
  //-----------------------------------------------------------------------------
  //
  // $Id:$
-@@ -30,9 +30,3365 @@
+@@ -30,9 +30,3538 @@
  
  #include "doomstat.h"
  
@@ -733,69 +733,242 @@
 +    }
 +}
 +
-+// Doom Perf: the per-device IOPS COUNTER BANK (storage wing). The busiest block
-+// devices from diskstats stand as a row of standpipe columns (sector tags
-+// DOOMPERF_DISK_DEV_TAG_BASE .. +SLOTS-1, column 0 the busiest); each column's
-+// floor rises with that device's completed-operations rate, so the bank reads as a
-+// live row of bar meters. Columns past the active device count rest deep and dim.
-+// The disk sims synthesize a full, staggered bank; live uses the per-device values
-+// the browser pushes. Tags start at 630 to stay clear of the (now dead) ring-
-+// platter tags 620..622 still scanned by DoomPerf_UpdatePlatter.
-+// LOW rests one step (20) below the surrounding walkway so an idle column is an
-+// escapable shallow slot; HIGH rises well above the walk as a clear riser bar (a
-+// busy column is a step-up wall, not a pit). Both are ABSOLUTE map heights and so
-+// track the IOPS hall's floor (IOPS_FLOOR in storage-wing.mjs, now 168 -- the hall
-+// moved up when the step ring went from six sides to ten).
++// Doom Perf: the per-device RAIN GAUGES (storage wing). The busiest block devices
++// from diskstats each get a free-standing light-tube gauge (sector tags
++// DOOMPERF_DISK_DEV_TAG_BASE .. +SLOTS-1, slot 0 the busiest) -- a raised glowing
++// pedestal under a bright downlight. A column of rain drops (MT_DP_DISKRAIN) falls
++// through each: the FALL SPEED tracks the device's completed-operations rate
++// (doomperf_storage_dev_iops) and the DROP COUNT + beam brightness track its
++// utilization (doomperf_storage_dev_util). So a fast-but-thin gauge is a busy but
++// unsaturated device, and a slow-but-dense one is bottlenecked. Gauges past the live
++// device count rest dark and dry. The disk sims synthesize a full, staggered, mixed
++// set; live uses the per-device values the browser pushes.
++//
++// Drop world centres are hardcoded here in MAP UNITS and MUST track the gauge row in
++// storage-wing.mjs. Gauges are indexed by CENTRE-OUT RANK (slot 0 = the centre gauge,
++// in front of the terminal; further slots fan outward), so the busiest device always
++// takes the middle. The rank-ordered world X is {974,1150,798,1326,622} (see iopsRank
++// there); v-band centre 1327 -> world y -1327 (toWorld negates u,v for the south wing).
++// Fragile to a map move -- commented at both ends (the RING_PITCH/SPIRE_RSTEP discipline).
++// DOOMPERF_RAIN_Y_U (-1327) and DOOMPERF_RAIN_FLOOR_U (200) live in
++// doom_emscripten_compat.h so r_main.c's label projection shares them.
 +#define DOOMPERF_DISK_DEV_TAG_BASE	630
-+#define DOOMPERF_DISK_DEV_LOW		(148)	// idle/inactive column floor (map units)
-+#define DOOMPERF_DISK_DEV_HIGH		(232)	// busy column floor (a clear riser bar)
++#define DOOMPERF_RAIN_SLOTS		DOOMPERF_STORAGE_DEV_SLOTS	// 5, one per gauge
++#define DOOMPERF_RAIN_PER_SLOT		8		// drops per gauge (dense == saturated)
++#define DOOMPERF_RAIN_TOP_U		320		// spawn height (just under the 328 ceiling)
++#define DOOMPERF_RAIN_WALK_U		168		// walkway floor (IOPS_FLOOR)
++#define DOOMPERF_RAIN_BAY_U		(DOOMPERF_RAIN_WALK_U - 16)	// 152: empty-gauge socket, a shallow recess below the walk
++#define DOOMPERF_RAIN_SPAN_U		(DOOMPERF_RAIN_TOP_U - DOOMPERF_RAIN_FLOOR_U)	// 120
++#define DOOMPERF_RAIN_HIDE		(-8000*FRACUNIT)	// park invisible drops out of sight
++#define DOOMPERF_RAIN_MINSPD		1		// fall speed (map units/tic) at idle
++#define DOOMPERF_RAIN_MAXSPD		11		// fall speed when the device is screaming
 +
-+void DoomPerf_UpdateDiskDevices (void)
++// World X of each gauge (busiest-first). Non-static + shared via compat.h so
++// r_main.c's label projection reads the same centres. MUST track IOPS_TUBE_CENTRES.
++const int		doomperf_rain_x_u[DOOMPERF_RAIN_SLOTS] = { 974, 1150, 798, 1326, 622 };
++static mobj_t*		doomperf_rain[DOOMPERF_RAIN_SLOTS][DOOMPERF_RAIN_PER_SLOT];
++static int		doomperf_rain_z[DOOMPERF_RAIN_SLOTS][DOOMPERF_RAIN_PER_SLOT];	// map-unit fall height
++
++// Set (or clear, tex==0) the faint HALO midtexture on every wall of one gauge tube.
++// The halo is a two-sided mid on all four perimeter lines (both facing sidedefs), so a
++// hidden gauge (past the live device count) clears it and shows nothing but floor.
++static void DoomPerf_SetTubeHalo (sector_t* sec, int tex)
++{
++    int		j;
++    line_t*	ln;
++
++    for (j = 0; j < sec->linecount; j++)
++    {
++	ln = sec->lines[j];
++	if (ln->sidenum[0] != -1)
++	    sides[ln->sidenum[0]].midtexture = tex;
++	if (ln->sidenum[1] != -1)
++	    sides[ln->sidenum[1]].midtexture = tex;
++    }
++}
++
++static void DoomPerf_SeedDiskRain (void)
++{
++    int		s;
++    int		k;
++    mobj_t*	mo;
++
++    for (s = 0; s < DOOMPERF_RAIN_SLOTS; s++)
++    {
++	for (k = 0; k < DOOMPERF_RAIN_PER_SLOT; k++)
++	{
++	    mo = P_SpawnMobj (doomperf_rain_x_u[s] * FRACUNIT,
++			      DOOMPERF_RAIN_Y_U * FRACUNIT,
++			      DOOMPERF_RAIN_HIDE, MT_DP_DISKRAIN);
++	    mo->momx = mo->momy = mo->momz = 0;
++	    P_SetMobjState (mo, S_DP_DISKRAIN);
++	    doomperf_rain[s][k] = mo;
++	    // Stagger start heights so a full column reads as continuous rain.
++	    doomperf_rain_z[s][k] = DOOMPERF_RAIN_FLOOR_U
++		+ (DOOMPERF_RAIN_SPAN_U * k) / DOOMPERF_RAIN_PER_SLOT;
++	}
++    }
++}
++
++void DoomPerf_UpdateDiskRain (void)
 +{
 +    int		count;
-+    int		slot;
++    int		s;
++    int		k;
 +    int		iops;
-+    int		floor_units;
++    int		util;
++    int		speed;
++    int		live;
++    int		jx;
++    int		jy;
 +    int		i;
++    int		slot;
++    int		iops_of[DOOMPERF_RAIN_SLOTS];
++    int		util_of[DOOMPERF_RAIN_SLOTS];
++    mobj_t*	mo;
++
++    // A level (re)load frees every mobj and resets leveltime; drop the stale
++    // pointers so we don't touch freed memory, then respawn the pool.
++    if (leveltime == 0)
++	for (s = 0; s < DOOMPERF_RAIN_SLOTS; s++)
++	    for (k = 0; k < DOOMPERF_RAIN_PER_SLOT; k++)
++		doomperf_rain[s][k] = NULL;
++    if (!doomperf_rain[0][0])
++	DoomPerf_SeedDiskRain ();
 +
 +    if (doomperf_sim_mode == 3 || doomperf_sim_mode == 4)
-+	count = DOOMPERF_STORAGE_DEV_SLOTS;
++	count = DOOMPERF_RAIN_SLOTS;
 +    else
 +	count = doomperf_storage_dev_count;
 +    if (count < 0)
 +	count = 0;
-+    if (count > DOOMPERF_STORAGE_DEV_SLOTS)
-+	count = DOOMPERF_STORAGE_DEV_SLOTS;
++    if (count > DOOMPERF_RAIN_SLOTS)
++	count = DOOMPERF_RAIN_SLOTS;
 +
-+    for (i = 0; i < numsectors; i++)
++    // Resolve each active gauge's ops/s (speed) and %util (density + brightness) once
++    // -- sims synthesize a mixed spread that shows off the two variables; live reads
++    // the browser feed. Inactive gauges stay at zero.
++    for (s = 0; s < DOOMPERF_RAIN_SLOTS; s++)
 +    {
-+	slot = sectors[i].tag - DOOMPERF_DISK_DEV_TAG_BASE;
-+	if (slot < 0 || slot >= DOOMPERF_STORAGE_DEV_SLOTS)
-+	    continue;
-+
-+	if (slot >= count)
++	if (s >= count)
 +	{
-+	    // Inactive column: rest deep and dim.
-+	    sectors[i].floorheight = DOOMPERF_DISK_DEV_LOW * FRACUNIT;
-+	    sectors[i].lightlevel = 150;
++	    iops_of[s] = 0;
++	    util_of[s] = 0;
 +	    continue;
 +	}
-+
 +	if (doomperf_sim_mode == 3)
-+	    iops = 220 + slot * 120 + (leveltime * (slot + 2)) % 90;
++	{
++	    // Moderate + MIXED: slot 0 fast-but-thin ... slot 4 slow-but-dense.
++	    iops = 700 - s * 140 + (leveltime * (s + 2)) % 40;
++	    util = 200 + s * 180;
++	}
 +	else if (doomperf_sim_mode == 4)
-+	    iops = 520 + slot * 90 + (leveltime * (slot + 3)) % 150;
++	{
++	    // Saturated: every gauge fast AND dense (a hammered array).
++	    iops = 900 - s * 60 + (leveltime * (s + 3)) % 50;
++	    util = 900 - s * 70;
++	}
 +	else
-+	    iops = doomperf_storage_dev_iops[slot];
-+	if (iops < 0)
-+	    iops = 0;
-+	if (iops > 1000)
-+	    iops = 1000;
++	{
++	    iops = doomperf_storage_dev_iops[s];
++	    util = doomperf_storage_dev_util[s];
++	}
++	if (iops < 0) iops = 0;
++	if (iops > 1000) iops = 1000;
++	if (util < 0) util = 0;
++	if (util > 1000) util = 1000;
++	iops_of[s] = iops;
++	util_of[s] = util;
++    }
 +
-+	floor_units = DOOMPERF_DISK_DEV_LOW
-+	    + ((DOOMPERF_DISK_DEV_HIGH - DOOMPERF_DISK_DEV_LOW) * iops) / 1000;
-+	sectors[i].floorheight = floor_units * FRACUNIT;
-+	sectors[i].lightlevel = (short)(172 + (iops * 52) / 1000);
++    // Show only as many gauges as there are live devices (sims force all five). An
++    // ACTIVE gauge (tube sector tag 630+slot) stands as a raised, %util-lit pedestal
++    // with its halo cage. An INACTIVE one (past the live device count) sinks into a
++    // shallow DOCKING SOCKET -- the same pad flat, dropped 16 below the walk and dimmed,
++    // its halo off -- so it reads as an empty mount a gauge would slot down into rather
++    // than blank floor. The tube's own riser wall auto-fills the socket rim (a floor
++    // step exists either way). Flat/texture numbers are resolved once.
++    {
++	static int	halo_tex = -2;
++	static int	ped_flat = 0;
++
++	if (halo_tex == -2)
++	{
++	    halo_tex = R_CheckTextureNumForName ("DPDHALO");
++	    ped_flat = R_FlatNumForName ("CEIL5_1");	// the mount pad, lit + raised when active
++	}
++
++	for (i = 0; i < numsectors; i++)
++	{
++	    slot = sectors[i].tag - DOOMPERF_DISK_DEV_TAG_BASE;
++	    if (slot < 0 || slot >= DOOMPERF_RAIN_SLOTS)
++		continue;
++
++	    if (slot < count)
++	    {
++		// Active: raised %util-lit pedestal (kept off the 130-134 platter
++		// sentinels) wearing its halo.
++		sectors[i].floorheight = DOOMPERF_RAIN_FLOOR_U * FRACUNIT;
++		sectors[i].floorpic = ped_flat;
++		sectors[i].lightlevel = (short)(160 + (util_of[slot] * 80) / 1000);
++		if (halo_tex >= 0)
++		    DoomPerf_SetTubeHalo (&sectors[i], halo_tex);
++	    }
++	    else
++	    {
++		// Inactive: a shallow, dim, empty docking socket, halo off. Light 116
++		// stays clear of every wing's display sentinels.
++		sectors[i].floorheight = DOOMPERF_RAIN_BAY_U * FRACUNIT;
++		sectors[i].floorpic = ped_flat;
++		sectors[i].lightlevel = 116;
++		if (halo_tex >= 0)
++		    DoomPerf_SetTubeHalo (&sectors[i], 0);
++	    }
++	}
++    }
++
++    // Stream the drops. Every drop keeps cycling (its logical height always advances)
++    // so density can change without a phase jump; only the first `live` drops per
++    // gauge are shown, the rest park out of sight.
++    for (s = 0; s < DOOMPERF_RAIN_SLOTS; s++)
++    {
++	speed = DOOMPERF_RAIN_MINSPD
++	    + ((DOOMPERF_RAIN_MAXSPD - DOOMPERF_RAIN_MINSPD) * iops_of[s]) / 1000;
++	live = 1 + ((DOOMPERF_RAIN_PER_SLOT - 1) * util_of[s]) / 1000;
++
++	for (k = 0; k < DOOMPERF_RAIN_PER_SLOT; k++)
++	{
++	    mo = doomperf_rain[s][k];
++	    if (!mo)
++		continue;
++
++	    doomperf_rain_z[s][k] -= speed;
++	    if (doomperf_rain_z[s][k] < DOOMPERF_RAIN_FLOOR_U)
++		doomperf_rain_z[s][k] += DOOMPERF_RAIN_SPAN_U;
++
++	    P_UnsetThingPosition (mo);
++	    if (s < count && k < live)
++	    {
++		// A small deterministic jitter spreads the drops across the ~48u
++		// footprint so the column isn't a single vertical line.
++		jx = ((k * 13 + s * 7) % 33) - 16;
++		jy = ((k * 17 + s * 11) % 33) - 16;
++		mo->x = (doomperf_rain_x_u[s] + jx) * FRACUNIT;
++		mo->y = (DOOMPERF_RAIN_Y_U + jy) * FRACUNIT;
++		mo->z = doomperf_rain_z[s][k] * FRACUNIT;
++	    }
++	    else
++	    {
++		mo->x = doomperf_rain_x_u[s] * FRACUNIT;
++		mo->y = DOOMPERF_RAIN_Y_U * FRACUNIT;
++		mo->z = DOOMPERF_RAIN_HIDE;
++	    }
++	    P_SetThingPosition (mo);
++	    // Freeze the clamp so P_ZMovement never snaps a hand-placed drop (it
++	    // ignores MF_NOGRAVITY) -- see [[hand-positioned-mobj-floorz]].
++	    mo->floorz = mo->z;
++	    mo->ceilingz = mo->z;
++	}
 +    }
 +}
 +
@@ -3398,7 +3571,7 @@
  //
  // THINKERS
  // All thinkers should be allocated by Z_Malloc
-@@ -130,11 +3486,11 @@
+@@ -130,11 +3659,11 @@
  void P_Ticker (void)
  {
      int		i;
@@ -3412,7 +3585,7 @@
      // pause if in menu and at least one tic has been run
      if ( !netgame
  	 && menuactive
-@@ -143,16 +3499,34 @@
+@@ -143,16 +3672,34 @@
      {
  	return;
      }
@@ -3424,7 +3597,7 @@
 +    DoomPerf_UpdatePlatter ();
 +    DoomPerf_UpdateDiskDashboard ();
 +    DoomPerf_UpdateDiskCircuit ();
-+    DoomPerf_UpdateDiskDevices ();
++    DoomPerf_UpdateDiskRain ();
 +    DoomPerf_UpdateDiskPlates ();
 +    DoomPerf_UpdateMemoryWing ();
 +    DoomPerf_UpdateMemoryFalls ();

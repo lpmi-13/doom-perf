@@ -13,7 +13,7 @@
 
 --- a/info.h
 +++ b/info.h
-@@ -1140,6 +1140,158 @@
+@@ -1140,6 +1140,164 @@
      S_TECH2LAMP2,
      S_TECH2LAMP3,
      S_TECH2LAMP4,
@@ -169,10 +169,16 @@
 +    S_DP_IOTASK_NBLOOM2,
 +    S_DP_PLATE_DEV,
 +    S_DP_PLATE_SCHED,
++    // Doom Perf per-device RAIN GAUGE drop (storage wing). A small icy droplet the
++    // driver (DoomPerf_UpdateDiskRain) hand-streams down each device's light-tube
++    // gauge -- fall speed tracks the device's ops/s, drop count its %util. Static
++    // fullbright billboard (tics -1); rides the free teleport-fog frame TFOG F (the
++    // COMPLETION orb spends only A-E, and the lab has no teleporters).
++    S_DP_DISKRAIN,
      NUMSTATES
  } statenum_t;
  
-@@ -1298,6 +1450,18 @@
+@@ -1298,6 +1456,19 @@
      MT_MISC84,
      MT_MISC85,
      MT_MISC86,
@@ -188,6 +194,7 @@
 +    MT_DP_IOREQ,
 +    MT_DP_IOCOMP,
 +    MT_DP_DISKPLATE,
++    MT_DP_DISKRAIN,
      NUMMOBJTYPES
  
  } mobjtype_t;

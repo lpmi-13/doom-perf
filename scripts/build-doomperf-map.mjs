@@ -319,7 +319,14 @@ const sideTextures = (sector, other, overrideTexture, edge) => {
     // `fieldTexture`, their shared two-sided edge wears that texture in the MID slot
     // (its transparent columns show the space beyond). Used for the fault range's
     // RAM-gate forcefield; the NOCLIP bolts pass through it.
-    mid: sector.fieldTexture && other.fieldTexture ? sector.fieldTexture : "-",
+    // `haloTexture` is the ONE-sided variant: a single sector opting in wears a faint
+    // masked glow on EVERY two-sided edge it owns (both facing sidedefs, so it reads
+    // from either side). Used to outline the disk rain gauges' notional tube volume.
+    // Because it never fires unless one neighbour opts in, it can't curtain an open
+    // walkway seam between two plain sectors.
+    mid: sector.fieldTexture && other.fieldTexture
+      ? sector.fieldTexture
+      : (sector.haloTexture ?? other.haloTexture ?? "-"),
   };
 };
 

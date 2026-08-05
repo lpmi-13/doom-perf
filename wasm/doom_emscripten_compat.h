@@ -61,14 +61,28 @@ extern int doomperf_storage_usage;
 // queue-derived proxy.
 extern int doomperf_storage_iops;
 
-// Doom Perf: the per-device IOPS "counter bank" — the busiest block devices from
-// diskstats stand as a row of standpipe columns whose floors rise with each
-// device's completed-operations rate (permille of a per-device full scale), column
-// 0 being the busiest. doomperf_storage_dev_count is how many columns carry a live
-// device. Set from the browser telemetry stream; read by DoomPerf_UpdateDiskDevices.
-#define DOOMPERF_STORAGE_DEV_SLOTS 4
+// Doom Perf: the per-device "rain gauges" — the busiest block devices from
+// diskstats stand as a row of light-tube gauges, each with a column of rain whose
+// FALL SPEED tracks that device's completed-operations rate (dev_iops) and whose
+// DENSITY + beam brightness track its utilization (dev_util); both are permille of
+// a per-device full scale, column 0 being the busiest. doomperf_storage_dev_count is
+// how many gauges carry a live device. Set from the browser telemetry stream; read
+// by DoomPerf_UpdateDiskRain.
+#define DOOMPERF_STORAGE_DEV_SLOTS 5
 extern int doomperf_storage_dev_count;
 extern int doomperf_storage_dev_iops[DOOMPERF_STORAGE_DEV_SLOTS];
+extern int doomperf_storage_dev_util[DOOMPERF_STORAGE_DEV_SLOTS];
+// Per-device NAME (busiest-first, uppercased + truncated by the browser) for the
+// in-world floating labels over each gauge. Written char-by-char (index, charcode)
+// via DoomPerf_SetStorageDeviceName; read by DoomPerf_DrawDeviceLabels (r_main.c).
+#define DOOMPERF_DEV_NAME_MAX 15
+extern char doomperf_storage_dev_name[DOOMPERF_STORAGE_DEV_SLOTS][DOOMPERF_DEV_NAME_MAX + 1];
+// Rain-gauge world geometry shared by p_tick.c (drop streaming, tube show/hide) and
+// r_main.c (label projection), so the two stay in sync. The per-slot world X of each
+// gauge is defined (non-static) in p_tick.c; Y and the pedestal floor are constants.
+#define DOOMPERF_RAIN_Y_U     (-1327)
+#define DOOMPERF_RAIN_FLOOR_U 200
+extern const int doomperf_rain_x_u[DOOMPERF_STORAGE_DEV_SLOTS];
 
 // Two-tier DISK IO QUEUE fills (permille) for the face-7 rack: the device tier
 // (in-flight, tag 650) and the scheduler backlog (tag 651). Set from the browser

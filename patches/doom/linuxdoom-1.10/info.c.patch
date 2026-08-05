@@ -40,7 +40,7 @@
      {SPR_SMBT,32768,4,{NULL},S_BTORCHSHRT2,0,0},	// S_BTORCHSHRT
      {SPR_SMBT,32769,4,{NULL},S_BTORCHSHRT3,0,0},	// S_BTORCHSHRT2
      {SPR_SMBT,32770,4,{NULL},S_BTORCHSHRT4,0,0},	// S_BTORCHSHRT3
-@@ -1099,7 +1110,143 @@
+@@ -1099,7 +1110,147 @@
      {SPR_TLP2,32768,4,{NULL},S_TECH2LAMP2,0,0},	// S_TECH2LAMP
      {SPR_TLP2,32769,4,{NULL},S_TECH2LAMP3,0,0},	// S_TECH2LAMP2
      {SPR_TLP2,32770,4,{NULL},S_TECH2LAMP4,0,0},	// S_TECH2LAMP3
@@ -181,11 +181,15 @@
 +    // DoomPerf_UpdateDiskPlates). CEYE frame A = amber device plate, B = red
 +    // scheduler plate; both fullbright + static (tics -1). Art overrides CEYE.
 +    {SPR_CEYE,32768,-1,{NULL},S_NULL,0,0},	// S_DP_PLATE_DEV
-+    {SPR_CEYE,32769,-1,{NULL},S_NULL,0,0}	// S_DP_PLATE_SCHED
++    {SPR_CEYE,32769,-1,{NULL},S_NULL,0,0},	// S_DP_PLATE_SCHED
++    // Per-device rain-gauge drop: static fullbright icy droplet, driver hand-moved
++    // (DoomPerf_UpdateDiskRain). TFOG frame F is a free IWAD frame (COMPLETION uses
++    // only A-E), art overrides TFOGF0.
++    {SPR_TFOG,32773,-1,{NULL},S_NULL,0,0}	// S_DP_DISKRAIN (frame F = 5, fullbright)
  };
  
  
-@@ -4665,6 +4812,328 @@
+@@ -4665,6 +4816,356 @@
  	sfx_None,		// activesound
  	MF_NOBLOCKMAP,		// flags
  	S_NULL		// raisestate
@@ -509,6 +513,34 @@
 +	sfx_None,		// activesound
 +	// Non-blocking + no clipping: plates are hand-stacked in the queue shafts and
 +	// must never shove or trip the player walking the nave between them.
++	MF_NOGRAVITY|MF_NOBLOCKMAP|MF_NOCLIP,		// flags
++	S_NULL		// raisestate
++    },
++
++    {		// MT_DP_DISKRAIN -- a rain drop in a per-device IOPS light-tube gauge
++	-1,		// doomednum (runtime-spawned only)
++	S_DP_DISKRAIN,	// spawnstate (static icy droplet; driver hand-streams it)
++	1000,		// spawnhealth
++	S_NULL,		// seestate
++	sfx_None,		// seesound
++	8,		// reactiontime
++	sfx_None,		// attacksound
++	S_NULL,		// painstate
++	0,		// painchance
++	sfx_None,		// painsound
++	S_NULL,		// meleestate
++	S_NULL,		// missilestate
++	S_NULL,		// deathstate
++	S_NULL,		// xdeathstate
++	sfx_None,		// deathsound
++	0,		// speed
++	4*FRACUNIT,		// radius (a tiny drop)
++	16*FRACUNIT,		// height
++	100,		// mass
++	0,		// damage
++	sfx_None,		// activesound
++	// Non-blocking + no clipping: drops are hand-streamed down the gauges and must
++	// never collide with the player standing under (or in) a tube.
 +	MF_NOGRAVITY|MF_NOBLOCKMAP|MF_NOCLIP,		// flags
 +	S_NULL		// raisestate
      }

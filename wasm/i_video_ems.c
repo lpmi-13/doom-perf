@@ -33,8 +33,10 @@ int doomperf_storage_queue = 0;
 int doomperf_storage_iops_spike = 0;
 int doomperf_storage_usage = 0;                              // df / used fraction (permille)
 int doomperf_storage_iops = 0;                               // aggregate ops/s (permille of full scale)
-int doomperf_storage_dev_count = 0;                          // active devices in the IOPS counter bank
-int doomperf_storage_dev_iops[DOOMPERF_STORAGE_DEV_SLOTS];   // per-device ops/s (permille of full scale)
+int doomperf_storage_dev_count = 0;                          // active devices in the per-device rain-gauge row
+int doomperf_storage_dev_iops[DOOMPERF_STORAGE_DEV_SLOTS];   // per-device ops/s (permille): rain FALL SPEED
+int doomperf_storage_dev_util[DOOMPERF_STORAGE_DEV_SLOTS];   // per-device %util (permille): rain DENSITY + brightness
+char doomperf_storage_dev_name[DOOMPERF_STORAGE_DEV_SLOTS][DOOMPERF_DEV_NAME_MAX + 1]; // per-device name for the floating labels
 int doomperf_storage_device_queue = 0;                       // face-7 device rack fill: in-flight tags (permille)
 int doomperf_storage_sched_backlog = 0;                      // face-7 scheduler magazine fill: backlog (permille)
 int doomperf_memory_util = 0;
@@ -237,15 +239,39 @@ void DoomPerf_SetStorageDeviceCount(int count)
     doomperf_storage_dev_count = count;
 }
 
-// Completed-operations rate (permille of a per-device full scale) for counter-bank
-// column `index`, column 0 being the busiest device. Read by DoomPerf_UpdateDiskDevices,
-// which raises that column's floor with its I/O activity.
+// Completed-operations rate (permille of a per-device full scale) for rain-gauge
+// slot `index`, slot 0 being the busiest device. Read by DoomPerf_UpdateDiskRain,
+// which drives that gauge's rain FALL SPEED from its I/O rate.
 EMSCRIPTEN_KEEPALIVE
 void DoomPerf_SetStorageDeviceIops(int index, int permille)
 {
     if (index < 0 || index >= DOOMPERF_STORAGE_DEV_SLOTS)
         return;
     doomperf_storage_dev_iops[index] = DoomPerf_ClampPermille(permille);
+}
+
+// Utilization (permille) for rain-gauge slot `index`. Read by DoomPerf_UpdateDiskRain,
+// which drives that gauge's rain DENSITY (how many drops fall) and beam brightness
+// from how saturated the device is.
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_SetStorageDeviceUtil(int index, int permille)
+{
+    if (index < 0 || index >= DOOMPERF_STORAGE_DEV_SLOTS)
+        return;
+    doomperf_storage_dev_util[index] = DoomPerf_ClampPermille(permille);
+}
+
+// One character of rain-gauge slot `slot`'s device name (charAt `pos`, ASCII `code`;
+// the browser uppercases + truncates and writes a 0 terminator). Read by
+// DoomPerf_DrawDeviceLabels, which floats the name over that gauge.
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_SetStorageDeviceName(int slot, int pos, int code)
+{
+    if (slot < 0 || slot >= DOOMPERF_STORAGE_DEV_SLOTS)
+        return;
+    if (pos < 0 || pos > DOOMPERF_DEV_NAME_MAX)
+        return;
+    doomperf_storage_dev_name[slot][pos] = (char)code;
 }
 
 // The two-tier DISK IO QUEUE fills for the face-7 rack, each a permille the browser

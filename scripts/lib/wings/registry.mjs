@@ -101,9 +101,13 @@ export const reserved = {
     // CEYE A/B (evil-eye decoration, doomednum 41, never spawned in the lab) are
     // overridden as the disk IO QUEUE plate billboards: A = amber device plate,
     // B = red scheduler plate (MT_DP_DISKPLATE, hand-stacked by p_tick.c).
+    // TFOG F = the per-device rain-gauge DROP (MT_DP_DISKRAIN, hand-streamed by
+    // DoomPerf_UpdateDiskRain). Doom's teleport fog is a 10-frame sprite (A-J); the
+    // COMPLETION orb above only spends A-E, so frame F is a free IWAD frame (and the
+    // lab still has no teleporters, so nothing else can spawn it).
     spriteReplacements: [
       "IFOGA0", "IFOGB0", "IFOGC0", "IFOGD0", "IFOGE0",
-      "TFOGA0", "TFOGB0", "TFOGC0", "TFOGD0", "TFOGE0",
+      "TFOGA0", "TFOGB0", "TFOGC0", "TFOGD0", "TFOGE0", "TFOGF0",
       "CEYEA0", "CEYEB0",
     ],
   },

@@ -535,14 +535,14 @@ const formatStorageIops = (telemetry: TelemetrySnapshot): string => {
   lines.push("$ iostat -x 1 2   (per device)");
   lines.push(`${padStart("Device", 10)}  ${padStart("", 22)} ${padStart("iops", 7)}  util`);
   const scale = Math.max(1, ...devices.map((d) => rate(d.iops)));
-  const rows = devices.slice(0, 4);
+  const rows = devices.slice(0, 5); // top-5, matching the five rain gauges
   rows.forEach((d) => {
     lines.push(
       `${padStart(d.name, 10)}  ${bar(rate(d.iops) / scale)} ${padStart(String(Math.round(rate(d.iops))), 7)}  ${(clamp(d.utilization) * 100).toFixed(0)}%`
     );
   });
   // Pin the block height so the summary below doesn't jump as devices come and go.
-  for (let i = rows.length; i < 4; i += 1) lines.push("");
+  for (let i = rows.length; i < 5; i += 1) lines.push("");
   lines.push("");
   lines.push(`aggregate IOPS  ${Math.round(rate(s.iops))} ops/s   (reads + writes, all devices)`);
   return lines.join("\n");

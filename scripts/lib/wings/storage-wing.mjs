@@ -31,10 +31,13 @@
 //     hall      instrument -- a circular SUNBURST display on the back wall that fills
 //               with `df /` usage (line tag 665, R_DoomPerfDiskDonutPixel); the df
 //               read-point overlay is aimed at it.
-//   IOPS BANK   off step face 6 (upper-left, squared chamber): a row of four
-//     hall      per-device standpipe columns whose floors rise with each device's
-//               ops/s (sector tags 630..633, DoomPerf_UpdateDiskDevices) plus an
-//               iostat -x read-point terminal on the back wall.
+//   RAIN GAUGE  off step face 6 (upper-left, squared chamber): a row of FIVE
+//     hall      free-standing per-device light-tube gauges (sector tags 630..634),
+//               one per busiest block device. Each is a raised glowing pedestal
+//               under a bright downlight with a column of RAIN falling through it --
+//               fall SPEED = the device's ops/s, density + beam brightness = its
+//               %util (DoomPerf_UpdateDiskRain streams MT_DP_DISKRAIN drops). An
+//               iostat -x read-point terminal rides the back wall.
 //
 // Why TEN sides and not six: RISE (24) is Doom's maximum auto-climb, so steps
 // cannot be made taller -- tower height comes ONLY from more of them, which makes
@@ -439,23 +442,59 @@ const cistDisc = {
   v2: CIST_DISC_CV + CIST_DISC_SIZE / 2, // 1117
 };
 
-// ===== IOPS BANK hall (off face 6, upper-left): a throat squares up to a chamber
-// holding a row of four per-device standpipe columns (engine tags 630..633) whose
-// floors rise with each device's ops/s, plus an iostat -x read-point terminal on
-// the back (+v) wall. Mirror of the cistern hall on the -u side. =====
+// ===== per-device RAIN GAUGE hall (off face 6, upper-left): a throat squares up to
+// a chamber holding a row of FIVE free-standing light-tube gauges (engine sector
+// tags 630..634), one per busiest block device, plus an iostat -x read-point
+// terminal on the back (+v) wall. Mirror of the cistern hall on the -u side. =====
 const IOPS_FACE = 6;
-const IOPS_FLOOR = stepFloor(IOPS_FACE); // 168
+const IOPS_FLOOR = stepFloor(IOPS_FACE); // 168: walkway floor
 const IOPS_CEIL = IOPS_FLOOR + 160; // 328
 const iopsFace = faceSpanV(IOPS_FACE); // v 1197..1501, mid 1349
 const IOPS_INNER_U = stepRing[IOPS_FACE + 1][0] - 40; // -558: inner (near) wall of the -u chamber
-const iopsChamber = { u1: IOPS_INNER_U - 320, v1: iopsFace.mid - 132, u2: IOPS_INNER_U, v2: iopsFace.mid + 132 };
-const IOPS_COL_COUNT = 4;
-const IOPS_COL_V1 = iopsChamber.v1 + 68; // 1285
-const IOPS_COL_V2 = IOPS_COL_V1 + 96; // 1381
-const IOPS_COL_LEFT = iopsChamber.u1 + 32; // -846: first column's left edge (32u side walk)
-const IOPS_COL_WIDTH = 60; // 4x60 = 240 columns; 32/48 side walks fill the 320 span
-const IOPS_TERM_V = iopsChamber.v2; // 1481
-const IOPS_TERM_CX = Math.round((iopsChamber.u1 + iopsChamber.u2) / 2); // -718
+// Five gauges in a row. Each gauge footprint is 48x68 (scaled +20% from 40x56, same
+// proportions). BETWEEN neighbours sits a very wide 128u walkway (doubled from 64 so
+// each rain column stands well clear), with a narrower 40u margin at the two ends. The
+// chamber width follows from those, and it is deepened 48 (back/terminal wall pushed
+// out by IOPS_BACK_EXTRA); the front (v1) stays on the face. NOTE: the wide gaps make
+// this a broad room -- 832 deep on the entry (down-the-row) axis.
+const IOPS_TUBE_COUNT = 5;
+const IOPS_TUBE_HALF = 24; // gauge half-width (u); 48 wide (+20%)
+const IOPS_TUBE_DEPTH = 68; // gauge footprint depth (v); +20% from 56, same proportions
+const IOPS_TUBE_GAP = 128; // walkway BETWEEN gauges (doubled from 64)
+const IOPS_TUBE_MARGIN = 40; // walkway at the two ends
+const IOPS_BACK_EXTRA = 48;
+const IOPS_CHAMBER_W =
+  2 * IOPS_TUBE_MARGIN + (IOPS_TUBE_COUNT - 1) * (2 * IOPS_TUBE_HALF + IOPS_TUBE_GAP) + 2 * IOPS_TUBE_HALF; // 832
+const iopsChamber = { u1: IOPS_INNER_U - IOPS_CHAMBER_W, v1: iopsFace.mid - 132, u2: IOPS_INNER_U, v2: iopsFace.mid + 132 + IOPS_BACK_EXTRA };
+// Built left-to-right, centres come out at u = -1326,-1150,-974,-798,-622 -> world x
+// 1326,1150,974,798,622 (toWorld negates u), v-band centre held at 1327 -> world y -1327.
+// The engine indexes gauges by CENTRE-OUT RANK, not this build order (see iopsRank), so
+// DoomPerf_UpdateDiskRain's doomperf_rain_x_u[] lists them rank-ordered:
+// {974,1150,798,1326,622}. Those world centres MUST track these (RING_PITCH discipline).
+const IOPS_TUBE_V1 = iopsChamber.v1 + 76; // 1293: front of the gauge band (band centred on v=1327)
+const IOPS_TUBE_V2 = IOPS_TUBE_V1 + IOPS_TUBE_DEPTH; // 1361: back of the gauge band
+// Pedestal top = engine rain floor. A 32-unit step is above Doom's 24 auto-climb, so
+// the gauges are un-climbable pillars, and the 200->328 span is exactly the 128-tall
+// halo texture height.
+const IOPS_TUBE_PED = IOPS_FLOOR + 32; // 200
+const IOPS_TUBE_CENTRES = Array.from(
+  { length: IOPS_TUBE_COUNT },
+  (_, i) => iopsChamber.u1 + IOPS_TUBE_MARGIN + IOPS_TUBE_HALF + i * (2 * IOPS_TUBE_HALF + IOPS_TUBE_GAP)
+);
+const IOPS_TERM_V = iopsChamber.v2; // 1529: back wall carries the iostat -x screen
+const IOPS_TERM_CX = Math.round((iopsChamber.u1 + iopsChamber.u2) / 2); // -974
+// Gauges light up from the MIDDLE outward: the busiest device (engine rain slot 0)
+// takes the CENTRE gauge, directly in front of the terminal, and further devices fan
+// to alternating sides, so a one-disk box shows a single centred pillar rather than a
+// lone tube off in the corner. The engine only ever activates rain slots 0..count-1,
+// so we make the slot index (== sector tag offset) a CENTRE-OUT RANK of the physical
+// gauge positions instead of the left-to-right build order. `iopsRank[i]` is the rank
+// (0 = centre) of the i-th built gauge; the engine's doomperf_rain_x_u[] lists the
+// gauge world-X in this same rank order and MUST stay in sync.
+const iopsRank = IOPS_TUBE_CENTRES
+  .map((u, i) => ({ i, d: Math.abs(u - IOPS_TERM_CX), s: Math.sign(u - IOPS_TERM_CX) }))
+  .sort((a, b) => a.d - b.d || a.s - b.s) // nearest the centre first; ties -> a stable side order
+  .reduce((rank, e, k) => ((rank[e.i] = k), rank), []);
 const iopsTerm = { u1: IOPS_TERM_CX - terminalHalfWidthLocal, v1: IOPS_TERM_V - 16, u2: IOPS_TERM_CX + terminalHalfWidthLocal, v2: IOPS_TERM_V };
 
 const build = (ctx) => {
@@ -796,10 +835,13 @@ const build = (ctx) => {
     lineTag: ids.lineTags[0] + 5, // 665
   });
 
-  // ===== IOPS BANK hall (off face 6, stepRing[6..7]): the per-device IOPS
-  // instrument. A throat squares up to a chamber holding a row of four device
-  // standpipe columns (engine tags 630..633) whose floors rise with each device's
-  // ops/s, plus an iostat -x read-point terminal on the back (+v) wall. =====
+  // ===== per-device RAIN GAUGE hall (off face 6, stepRing[6..7]): the per-device
+  // I/O instrument. A throat squares up to a chamber holding a row of five
+  // free-standing light-tube gauges (engine sector tags 630..634), one per busiest
+  // block device. Each gauge is a raised glowing pedestal under a bright downlight;
+  // a column of rain falls through it (fall SPEED = device ops/s, density + beam
+  // brightness = device %util; DoomPerf_UpdateDiskRain streams the drops). An
+  // iostat -x read-point terminal rides the back (+v) wall. =====
   const iopsWalk = { ...hallStyle, kind: "iops-walk", floorFlat: "FLOOR0_3", light: 184 };
   // No throat placard (see cist-throat): edge 1 is the two-sided seam shared with
   // the adjacent QUEUE throat. The hall is identified by its iostat -x terminal.
@@ -810,24 +852,36 @@ const build = (ctx) => {
     ceiling: IOPS_CEIL,
   });
   const iopsRim = { ...iopsWalk, floor: IOPS_FLOOR, ceiling: IOPS_CEIL };
-  areaRect(direction, "iops-front", { u1: iopsChamber.u1, v1: iopsChamber.v1, u2: iopsChamber.u2, v2: IOPS_COL_V1 }, iopsRim);
-  areaRect(direction, "iops-left-walk", { u1: iopsChamber.u1, v1: IOPS_COL_V1, u2: IOPS_COL_LEFT, v2: IOPS_COL_V2 }, iopsRim);
-  for (let c = 0; c < IOPS_COL_COUNT; c += 1) {
-    const u1 = IOPS_COL_LEFT + c * IOPS_COL_WIDTH;
-    areaRect(direction, `iops-col-${c}`, { u1, v1: IOPS_COL_V1, u2: u1 + IOPS_COL_WIDTH, v2: IOPS_COL_V2 }, {
+  // Front walkway: the player enters here and looks across the gauge row.
+  areaRect(direction, "iops-front", { u1: iopsChamber.u1, v1: iopsChamber.v1, u2: iopsChamber.u2, v2: IOPS_TUBE_V1 }, iopsRim);
+  // The gauge band: five raised light-tube gauges with a walkway gap before, between
+  // and after each. Each tube is a raised pedestal (floor +32 = un-climbable pillar)
+  // under a bright downlight-panel ceiling; its riser wears a tech-tube base and its
+  // four walls wear a faint masked HALO (haloTexture) that outlines the notional tube
+  // volume so each device's rain column reads separately. Sector tag 630+i lets
+  // DoomPerf_UpdateDiskRain brighten/dim both the beam and its halo with the device's
+  // %util (an inactive gauge, past the live device count, rests as a dim outline).
+  let cursor = iopsChamber.u1;
+  for (let i = 0; i < IOPS_TUBE_COUNT; i += 1) {
+    const left = IOPS_TUBE_CENTRES[i] - IOPS_TUBE_HALF;
+    const right = IOPS_TUBE_CENTRES[i] + IOPS_TUBE_HALF;
+    areaRect(direction, `iops-gap-${i}`, { u1: cursor, v1: IOPS_TUBE_V1, u2: left, v2: IOPS_TUBE_V2 }, iopsRim);
+    areaRect(direction, `iops-tube-${i}`, { u1: left, v1: IOPS_TUBE_V1, u2: right, v2: IOPS_TUBE_V2 }, {
       ...iopsWalk,
-      kind: "iops-column",
-      // DOOMPERF_DISK_DEV_LOW/HIGH in p_tick.c are absolute map heights and must
-      // track IOPS_FLOOR (LOW = IOPS_FLOOR - 20, HIGH = LOW + 84).
-      floor: IOPS_FLOOR - 20, // engine drives 148 (idle slot) .. 232 (busy bar); tags 630..633
+      kind: "iops-tube",
+      floor: IOPS_TUBE_PED, // 200: raised pillar (rain lands here)
       ceiling: IOPS_CEIL,
-      floorFlat: "FLOOR1_7", // a metric-floor FLAT; METAL1 is a wall texture, not a flat
-      light: 168,
-      tag: ids.sectorTags[0] + 30 + c, // 630..633
+      floorFlat: "CEIL5_1", // glowing pedestal pad (distinct from the FLOOR0_3 walkway)
+      ceilingFlat: "CEIL5_1", // bright downlight panel above -- lightlevel makes it the "beam"
+      riserWall: "TEKWALL1", // lit tech-tube pedestal base
+      haloTexture: haloTex.texture, // faint masked cage on all 4 walls (200..328 == 128 tall)
+      light: 248, // bright default; engine drives 144 (idle/inactive) .. 240 (saturated), tags 630..634
+      tag: ids.sectorTags[0] + 30 + iopsRank[i], // 630..634 in CENTRE-OUT rank (630 = centre gauge)
     });
+    cursor = right;
   }
-  areaRect(direction, "iops-right-walk", { u1: IOPS_COL_LEFT + IOPS_COL_COUNT * IOPS_COL_WIDTH, v1: IOPS_COL_V1, u2: iopsChamber.u2, v2: IOPS_COL_V2 }, iopsRim);
-  areaRect(direction, "iops-back", { u1: iopsChamber.u1, v1: IOPS_COL_V2, u2: iopsChamber.u2, v2: iopsTerm.v1 }, iopsRim);
+  areaRect(direction, "iops-gap-last", { u1: cursor, v1: IOPS_TUBE_V1, u2: iopsChamber.u2, v2: IOPS_TUBE_V2 }, iopsRim);
+  areaRect(direction, "iops-back", { u1: iopsChamber.u1, v1: IOPS_TUBE_V2, u2: iopsChamber.u2, v2: iopsTerm.v1 }, iopsRim);
   // iostat -x terminal on the back wall, flanked by wall so the screen seats.
   areaRect(direction, "iops-term-l", { u1: iopsChamber.u1, v1: iopsTerm.v1, u2: iopsTerm.u1, v2: iopsTerm.v2 }, iopsRim);
   areaRect(direction, "iops-term-r", { u1: iopsTerm.u2, v1: iopsTerm.v1, u2: iopsChamber.u2, v2: iopsTerm.v2 }, iopsRim);
@@ -843,9 +897,42 @@ const build = (ctx) => {
   });
 };
 
+// The rain-gauge HALO: a VERY FAINT masked outline hung on all four walls of each
+// device tube (via haloTexture) so the notional tube volume is just barely suggested
+// and each device's rain column reads separately. Almost entirely transparent -- a
+// single dim, DASHED blue rib per 16u tile plus a whisper of a dim cap line at the
+// crown and base; no bright rings, beads or white glints (an earlier version read too
+// loud). Its glow is the tube sector's lightlevel, which DoomPerf_UpdateDiskRain
+// drives from %util, so it stays subtle. 128 tall == the 200..328 pedestal->ceiling
+// opening (fills once, no vertical wrap); 16 wide (power-of-two) tiles cleanly.
+const haloTex = { texture: tex("HALO"), patch: tex("PHAL") };
+const haloTexSize = { width: 16, height: 128 };
+const buildHaloPatch = () => {
+  const { width: W, height: H } = haloTexSize;
+  const T = 247; // transparent key -> almost entirely see-through
+  const px = new Uint8Array(W * H).fill(T);
+  const set = (x, y, c) => { if (x >= 0 && x < W && y >= 0 && y < H) px[y * W + x] = c; };
+  const RIB = 197; // dim blue
+  // one dim DASHED rib per 16u tile (every 3rd row) -> a faint suggestion of an edge
+  for (let y = 0; y < H; y += 3) set(0, y, RIB);
+  // a whisper of a cap line at the crown and base (dashed, dim)
+  for (let x = 0; x < W; x += 2) {
+    set(x, 0, RIB);
+    set(x, H - 1, RIB);
+  }
+  return buildPatch(px, W, H, { transparent: T });
+};
+
 // Texture patches this wing contributes: the iostat screen, disk wall signs,
 // await gauge, throughput tubes, rack, and live-dashboard fallback art.
 const textures = [
+  {
+    texture: haloTex.texture,
+    patch: haloTex.patch,
+    width: haloTexSize.width,
+    height: haloTexSize.height,
+    build: buildHaloPatch,
+  },
   // The three read-point screens (iostat / df / iostat -x), each a CPU-wing-style
   // simulated terminal so they match the rest of the game's terminals.
   ...[screen, usageScreen, iopsScreen, queueScreen].map((s) => ({
@@ -1006,6 +1093,33 @@ const buildPlateSprite = (ramp) => {
   return buildPatch(px, W, H, { leftOffset: Math.round(W / 2), topOffset: H, transparent: T });
 };
 
+// Per-device rain-gauge DROP (override the free IWAD frame TFOG F -- the COMPLETION
+// orb above spends only TFOG A-E, and the lab has no teleporters). A small icy
+// teardrop: a bright white-cored blue head tapering to a thin tail, streamed down
+// each gauge by DoomPerf_UpdateDiskRain. Cyan/blue reads as water; the network
+// wing's cyan RX orb is in a different wing and never co-visible.
+const rainDropRamp = [4, 192, 195, 198]; // white core -> bright blue -> mid-blue rim
+const rainDropSize = { width: 7, height: 16 };
+const buildRainDropPatch = () => {
+  const { width: W, height: H } = rainDropSize;
+  const T = 247; // transparent key
+  const px = new Uint8Array(W * H).fill(T);
+  const cx = (W - 1) / 2;
+  const last = rainDropRamp.length - 1;
+  for (let y = 0; y < H; y += 1) {
+    const t = y / (H - 1); // 0 at the tail (top) .. 1 at the head (bottom)
+    const halfW = 0.6 + (W / 2 - 1) * Math.pow(t, 1.4); // narrow tail -> round head
+    for (let x = 0; x < W; x += 1) {
+      const dx = (x - cx) / halfW;
+      if (Math.abs(dx) > 1) continue; // outside the teardrop
+      // brightest on the axis, fading to the rim; the head reads brighter than the tail
+      const shade = Math.min(1, Math.abs(dx) + (1 - t) * 0.45);
+      px[y * W + x] = rainDropRamp[Math.round(shade * last)];
+    }
+  }
+  return buildPatch(px, W, H, { leftOffset: Math.round(W / 2), topOffset: H, transparent: T });
+};
+
 const sprites = [
   { name: "IFOGA0", build: () => buildShadedOrbPatch(amberRamp) }, //                               request static orb
   { name: "IFOGB0", build: () => buildFxPatch({ size: 22, ramp: amberRamp, outerFrac: 0.78 }) }, //  settle
@@ -1019,6 +1133,7 @@ const sprites = [
   { name: "TFOGE0", build: () => buildFxPatch({ size: 38, ramp: silverRamp, innerFrac: 0.72 }) },
   { name: "CEYEA0", build: () => buildPlateSprite(plateAmberRamp) }, // device rack plate (amber)
   { name: "CEYEB0", build: () => buildPlateSprite(plateRedRamp) }, //  scheduler magazine plate (red)
+  { name: "TFOGF0", build: buildRainDropPatch }, //                    per-device rain-gauge drop (icy)
 ];
 
 export const storageWing = {

@@ -258,10 +258,15 @@ type DoomPerfEngine = {
   // Aggregate completed-operations rate (reads+writes/s) as permille of a full
   // scale, driving the metrics-dashboard IOPS graph with the real signal.
   _DoomPerf_SetStorageIops?: (permille: number) => void;
-  // Per-device IOPS counter bank: how many columns carry a live device, and each
-  // busiest-first device's ops/s as permille of a per-device full scale.
+  // Per-device rain gauges: how many tube gauges carry a live device, and each
+  // busiest-first device's ops/s (drives rain FALL SPEED) and utilization (drives
+  // rain DENSITY + beam brightness), both as permille of a per-device full scale.
   _DoomPerf_SetStorageDeviceCount?: (count: number) => void;
   _DoomPerf_SetStorageDeviceIops?: (index: number, permille: number) => void;
+  _DoomPerf_SetStorageDeviceUtil?: (index: number, permille: number) => void;
+  // One character of a device's name (slot, position, ASCII code) for the floating
+  // in-world gauge labels; the browser uppercases/truncates and writes a 0 terminator.
+  _DoomPerf_SetStorageDeviceName?: (slot: number, pos: number, code: number) => void;
   _DoomPerf_SetMemoryUtil?: (permille: number) => void;
   _DoomPerf_SetMemorySaturation?: (permille: number) => void;
   _DoomPerf_SetMemoryErrors?: (permille: number) => void;
@@ -317,6 +322,9 @@ const clampRatio = (value: number) => Math.max(0, Math.min(1, value));
 // a fast NVMe pins the meters; the disk sims give a fixed preview regardless.
 const STORAGE_IOPS_FULLSCALE = 10000;
 const STORAGE_DEVICE_IOPS_FULLSCALE = 5000;
+// Max device-name length for the floating in-world gauge labels (matches the
+// engine's DOOMPERF_DEV_NAME_MAX buffer). Longer names are truncated.
+const STORAGE_DEVICE_NAME_MAX = 15;
 
 // Rolling high-water marks for the two-tier queue rack. A deep-queue device (NVMe:
 // cap 1023+) never approaches tag exhaustion, so its rack fill can't scale to the
@@ -416,14 +424,26 @@ const pushTelemetryToEngine = (
     Math.round(clampRatio((telemetry.storage.iops ?? 0) / STORAGE_IOPS_FULLSCALE) * 1000)
   );
   const diskDevices = telemetry.storage.devices ?? [];
-  const diskDeviceSlots = 4;
+  const diskDeviceSlots = 5;
   engine?._DoomPerf_SetStorageDeviceCount?.(Math.min(diskDevices.length, diskDeviceSlots));
   for (let slot = 0; slot < diskDeviceSlots; slot += 1) {
     const device = diskDevices[slot];
+    // ops/s -> rain fall speed; %util -> rain density + beam brightness.
     engine?._DoomPerf_SetStorageDeviceIops?.(
       slot,
       device ? Math.round(clampRatio(device.iops / STORAGE_DEVICE_IOPS_FULLSCALE) * 1000) : 0
     );
+    engine?._DoomPerf_SetStorageDeviceUtil?.(
+      slot,
+      device ? Math.round(clampRatio(device.utilization) * 1000) : 0
+    );
+    // Device name for the floating in-world label: uppercase (the HUD font is
+    // uppercase-only) + truncate to the engine's buffer, written char-by-char with a
+    // trailing 0 terminator. Empty for an idle slot (no label drawn).
+    const label = (device?.name ?? "").toUpperCase().slice(0, STORAGE_DEVICE_NAME_MAX);
+    for (let pos = 0; pos <= STORAGE_DEVICE_NAME_MAX; pos += 1) {
+      engine?._DoomPerf_SetStorageDeviceName?.(slot, pos, pos < label.length ? label.charCodeAt(pos) : 0);
+    }
   }
   engine?._DoomPerf_SetMemoryUtil?.(Math.round(clampRatio(telemetry.memory.utilization) * 1000));
   engine?._DoomPerf_SetMemorySaturation?.(Math.round(clampRatio(telemetry.memory.saturation) * 1000));
@@ -796,11 +816,11 @@ const scenarioTelemetry = (
     : diskSaturated
       ? clampRatio(0.93 + 0.008 * Math.abs(Math.sin(now / 2100)))
       : clampRatio(0.61 + 0.012 * Math.abs(Math.sin(now / 2100)));
-  // Four block devices, busiest first, in the same ops/s range the engine's bank
-  // columns rise to. Mode 4 (shallow) runs hotter than mode 3 but is seek-capped;
+  // Five block devices, busiest first, in the same ops/s range the engine's rain
+  // gauges read. Mode 4 (shallow) runs hotter than mode 3 but is seek-capped;
   // mode 5 (deep) is a fast NVMe SCREAMING near its ceiling, so it pins the bank.
   // The terminal's aggregate is their sum so rows and total stay self-consistent.
-  const diskSimDevices = ["nvme0n1", "sda", "sdb", "dm-0"].map((name, slot) => ({
+  const diskSimDevices = ["nvme0n1", "sda", "sdb", "dm-0", "sdc"].map((name, slot) => ({
     name,
     iops: Math.max(
       0,
@@ -854,10 +874,10 @@ const scenarioTelemetry = (
     usedRatio: diskSimUsedRatio,
   };
   // Quiet baseline disk for every non-disk scenario: ~45% full, light I/O, low
-  // await, a calm 4-device bank. Also SimStorageTelemetry-guarded, so it can never
+  // await, a calm 5-device bank. Also SimStorageTelemetry-guarded, so it can never
   // silently drop a field a storage terminal reads.
   const baseDiskUsedRatio = 0.45;
-  const baseDiskDevices = ["nvme0n1", "sda", "sdb", "dm-0"].map((name, slot) => ({
+  const baseDiskDevices = ["nvme0n1", "sda", "sdb", "dm-0", "sdc"].map((name, slot) => ({
     name,
     iops: Math.max(0, 240 - slot * 55 + 40 * Math.abs(Math.sin(now / 1600 + slot))),
     utilization: clampRatio(0.06 - slot * 0.012 + 0.02 * Math.abs(Math.sin(now / 1500 + slot))),

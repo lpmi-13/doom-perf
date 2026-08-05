@@ -107,10 +107,10 @@ export const mapManifest = {
       "sign": "storage-iops",
       "segments": [
         {
-          "ax": 846,
-          "ay": -1481,
-          "bx": 590,
-          "by": -1481
+          "ax": 1102,
+          "ay": -1529,
+          "bx": 846,
+          "by": -1529
         }
       ]
     },

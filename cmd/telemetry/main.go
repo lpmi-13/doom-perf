@@ -1097,8 +1097,8 @@ func readKeyValues(path string) (map[string]uint64, error) {
 }
 
 // maxDiskDevices caps the per-device breakdown to the busiest few, matching the
-// engine's fixed IOPS counter-bank column count (DOOMPERF_STORAGE_DEV_SLOTS).
-const maxDiskDevices = 4
+// engine's fixed per-device rain-gauge slot count (DOOMPERF_STORAGE_DEV_SLOTS).
+const maxDiskDevices = 5
 
 func sampleStorage(previous map[string]diskCounter, elapsed float64) (storageTelemetry, map[string]diskCounter, error) {
 	disks, err := readDiskCounters()
