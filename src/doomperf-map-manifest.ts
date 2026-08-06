@@ -126,6 +126,17 @@ export const mapManifest = {
       ]
     },
     {
+      "sign": "storage-await",
+      "segments": [
+        {
+          "ax": -1296,
+          "ay": -1221,
+          "bx": -1296,
+          "by": -1477
+        }
+      ]
+    },
+    {
       "sign": "network",
       "segments": [
         {

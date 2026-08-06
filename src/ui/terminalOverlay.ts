@@ -580,6 +580,40 @@ const formatStorageQueue = (telemetry: TelemetrySnapshot): string => {
   return lines.join("\n");
 };
 
+// STORAGE wing — the latency causeway read-point: `iostat -x` narrowed to the await
+// columns for the worst-await device, split read vs write (the two lanes you walk).
+// await = queue wait + service time, the felt latency the causeway drags you at; the
+// pair is coherent (both from the one worst device — see the collector). 250 ms full
+// scale matches the causeway's stroke period.
+const formatStorageAwait = (telemetry: TelemetrySnapshot): string => {
+  const s = telemetry.storage;
+  const rAwait = rate(s.readAwaitMillis);
+  const wAwait = rate(s.writeAwaitMillis);
+  const total = rate(s.awaitMillis);
+  const columns: [string, number][] = [
+    ["Device", 10], ["r_await", 10], ["w_await", 10], ["await", 9], ["%util", 8],
+  ];
+  const cells = [
+    "worst",
+    rAwait.toFixed(2),
+    wAwait.toFixed(2),
+    total.toFixed(2),
+    (clamp(s.utilization) * 100).toFixed(1),
+  ];
+  const lines: string[] = [];
+  lines.push("$ iostat -x 1   ·   await (worst device)");
+  lines.push(columns.map(([label, width]) => padStart(label, width)).join(""));
+  lines.push(columns.map(([, width], i) => padStart(cells[i], width)).join(""));
+  lines.push("");
+  lines.push(`read await   ${bar(clamp(rAwait / 250))} ${rAwait.toFixed(2)} ms   (READ lane)`);
+  lines.push(`write await  ${bar(clamp(wAwait / 250))} ${wAwait.toFixed(2)} ms   (WRITE lane)`);
+  lines.push("");
+  lines.push("await = queue wait + service time — the latency each I/O waits.");
+  lines.push("The lane you walk drags at its await; the piston beats one");
+  lines.push("stroke per completion (faster piston = lower latency).");
+  return lines.join("\n");
+};
+
 // NETWORK wing — per-interface throughput (`sar -n DEV`) with the noisiest NIC
 // marked as primary, the input to the wing's packet-grove lanes. USE utilization
 // is throughput vs link speed; saturation is drops.
@@ -714,6 +748,7 @@ const terminals: Record<TerminalSign, { title: string; render: (telemetry: Telem
   "storage-usage": { title: "STORAGE — df / capacity", render: formatStorageUsage },
   "storage-iops": { title: "STORAGE — per-device IOPS", render: formatStorageIops },
   "storage-queue": { title: "STORAGE — IO queue (device vs scheduler)", render: formatStorageQueue },
+  "storage-await": { title: "STORAGE — latency causeway (r/w await)", render: formatStorageAwait },
   network: { title: "NETWORK — per-interface throughput", render: formatNetwork },
   "network-sockets": { title: "NETWORK — TCP socket state census", render: formatNetworkSockets },
   "network-queues": { title: "NETWORK — SendQ / RecvQ backlog", render: formatNetworkQueues },

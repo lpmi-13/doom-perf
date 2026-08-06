@@ -70,12 +70,10 @@ import { reserved, wingName } from "./registry.mjs";
 import {
   terminalTextureSize,
   wallSignSize,
-  diskGaugeSize,
   serverRackTextureSize,
   storageDisplayTextureSize,
   buildTerminalPatch,
   buildWallSignPatch,
-  buildDiskGaugePatch,
   buildServerRackPatch,
   buildStorageDisplayPatch,
   makeInscription,
@@ -110,6 +108,19 @@ const screen = { texture: tex("TERM"), patch: tex("PTRM"), lines: ["DISK IO", "S
 const usageScreen = { texture: tex("UTRM"), patch: tex("PUTM"), lines: ["DISK USAGE", "DF ROOT"] };
 const iopsScreen = { texture: tex("ITRM"), patch: tex("PITM"), lines: ["DEVICE IOPS", "IOSTAT X"] };
 const queueScreen = { texture: tex("QTRM"), patch: tex("PQTM"), lines: ["DISK QUEUE", "DEV / SCHED"] };
+// Latency-causeway read-point: `iostat -x` narrowed to the await columns.
+const awaitScreen = { texture: tex("ATRM"), patch: tex("PATM"), lines: ["DISK LATENCY", "R / W AWAIT"] };
+// Latency-causeway PISTON base: the lane-facing lower face of each solid metal
+// cylinder. The piston wall shader (R_DoomPerfPistonPixel, line tags 666/667) paints
+// a silver round cross-section + scrolling ridge lines over it, so this base is a
+// plain fill -- only its 128 height matters (maps the 128-tall column face 1:1).
+const pistonBase = { texture: tex("PIST"), patch: tex("PPIST") };
+const pistonBaseSize = { width: 64, height: 128 };
+const buildPistonBasePatch = () => {
+  const px = new Uint8Array(pistonBaseSize.width * pistonBaseSize.height);
+  px.fill(84); // silver fallback; the shader overrides every pixel
+  return buildPatch(px, pistonBaseSize.width, pistonBaseSize.height);
+};
 // A ONE-tall placard for the OUTER wall behind each IO-queue shaft, naming its tier
 // and tinted to its plate colour (amber = device rack, red = scheduler magazine) so
 // the two stacks are unambiguous. It reads "DEVICE / QUEUE" and "SCHEDULER / QUEUE"
@@ -148,11 +159,13 @@ const buildQueueLabelPatch = (lines, color, scale) => {
 };
 const deviceLabel = { texture: tex("QLDEV"), patch: tex("PQLDV"), lines: ["DEVICE", "QUEUE"], color: 231, scale: 3 };
 const schedLabel = { texture: tex("QLSCH"), patch: tex("PQLSC"), lines: ["SCHEDULER", "QUEUE"], color: 176, scale: 2 };
+// Latency-causeway lane placards (two stacked words each, gold like the wing).
+const readAwaitLabel = { texture: tex("LRAWT"), patch: tex("PLRAW"), lines: ["READ", "AWAIT"], color: 231, scale: 3 };
+const writeAwaitLabel = { texture: tex("LWAWT"), patch: tex("PLWAW"), lines: ["WRITE", "AWAIT"], color: 231, scale: 3 };
 const signs = {
   read: { texture: tex("READ"), patch: tex("PRD"), text: "READ" },
   write: { texture: tex("WRITE"), patch: tex("PWR"), text: "WRITE" },
   rate: { texture: tex("RATE"), patch: tex("PRAT"), text: "IO RATE" },
-  await: { texture: tex("AWAIT"), patch: tex("PAWT"), text: "AWAIT" },
 };
 // Disk-usage SUNBURST base wall (the cistern's +u side-wall display). A dark round
 // screen with a glowing electric-blue bezel; the engine shader (line tag 665,
@@ -165,7 +178,6 @@ const signs = {
 const discTex = { texture: tex("DISC"), patch: tex("PDSC") };
 const DISC_FACE = 160; // the display face is 160x160 (fills the 160-tall side wall)
 const discTexSize = { width: 256, height: 256 };
-const gauge = { texture: tex("GAUG"), patch: tex("PGAU") };
 const tubeRead = { texture: tex("RTUB"), patch: tex("PRTU") };
 const tubeWrite = { texture: tex("WTUB"), patch: tex("PWTU") };
 const rack = { texture: tex("RACK"), patch: tex("PRCK") };
@@ -497,6 +509,85 @@ const iopsRank = IOPS_TUBE_CENTRES
   .reduce((rank, e, k) => ((rank[e.i] = k), rank), []);
 const iopsTerm = { u1: IOPS_TERM_CX - terminalHalfWidthLocal, v1: IOPS_TERM_V - 16, u2: IOPS_TERM_CX + terminalHalfWidthLocal, v2: IOPS_TERM_V };
 
+// ===== LATENCY CAUSEWAY (off face 2, +u): the await instrument. Two lanes whose
+// crossing speed is dragged by that lane's iostat await (see the engine's
+// DoomPerf_UpdateCauseway / p_user.c). All of it sits OUTSIDE the step ring
+// (u>518), sticking out +u into open space, so it runs long without meeting another
+// hall; the cistern (u<=888, v<=1177) is the only near neighbour. Shared with
+// terminals() so the read-point screen lines up with the geometry. =====
+const CW_FLOOR = stepFloor(2); // 72
+const CW_CEIL = CW_FLOOR + wallSignSize.height; // 200: 128-tall lane walls map the labels once
+const CW_ALCOVE_CEIL = CW_FLOOR + 160; // 232: taller so the terminal recess (floor+16+128) seats under it
+const cwFace = faceSpanV(2); // { mid: 1349, lo: 1197, hi: 1501 }
+const CW_MOUTH_U = stepRing[2][0] + 50; // 568: squared throat wall (shares the cistern's +u seam at v=1197)
+const CW_LABEL_U = CW_MOUTH_U + wallSignSize.width; // 824: end of the 256-wide labelled lane-front wall
+const CW_LANE_BACK_U = 1120; // lanes end here; the shared terminal alcove begins
+const CW_BACK_U = 1296; // alcove dead-end (+u) wall carrying the await screen
+const CW_TERM_U = CW_BACK_U - 16; // 1280: terminal recess (16 deep) seam
+const CW_DIV_HALF = 12; // divider half-thickness (24-wide solid void between the lanes)
+const CW_READ_V1 = cwFace.lo; // 1197: read lane -v (outer) wall (== stepRing[2][1])
+const CW_READ_V2 = cwFace.mid - CW_DIV_HALF; // 1337: read lane | divider seam
+const CW_WRITE_V1 = cwFace.mid + CW_DIV_HALF; // 1361: divider | write lane seam
+const CW_WRITE_V2 = cwFace.hi; // 1501: write lane +v (outer) wall (== stepRing[3][1])
+const CW_TERM_V1 = cwFace.mid - terminalHalfWidthLocal; // 1221: screen left edge
+const CW_TERM_V2 = cwFace.mid + terminalHalfWidthLocal; // 1477: screen right edge
+// PISTONS: a solid metal OCTAGONAL cylinder stands FREE in each lane (walkway around
+// it), toward the outer wall; its 8 faces wear the piston wall shader (silver steel +
+// scrolling ridge lines, R_DoomPerfPistonPixel, line tags 666/667) whose scroll tracks
+// the stroke tempo. A chamfered-square octagon on integer lattice points -- a REGULAR
+// octagon has irrational vertices that can't mesh cleanly ([[map-builder-exact-collinearity]]).
+const CW_OCT_CX = 960; // octagon centre u; station spans u 896..1024, clear of the cistern (u<=888)
+const CW_OCT_H = 30; // octagon half flat-to-flat (bbox 60 wide/deep)
+const CW_OCT_C = 12; // corner chamfer (~0.414*h for a near-regular octagon)
+const CW_STATION_U1 = 896;
+const CW_STATION_U2 = 1024;
+const CW_OCT_BOX_U1 = CW_OCT_CX - CW_OCT_H; // 930: octagon bbox u
+const CW_OCT_BOX_U2 = CW_OCT_CX + CW_OCT_H; // 990
+// The station BULGES its outer wall out 60u for more room around the octagon (only
+// here -- the mouth/label region can't widen without hitting the cistern chamber that
+// sits below it, u<=888). vlo/vhi feed octStation; the octagon sits toward the bulged
+// outer wall with a ~100u walkway to the divider side.
+const CW_READ_STATION_VLO = CW_READ_V1 - 60; // 1137: bulged outer wall (read, toward -v)
+const CW_WRITE_STATION_VHI = CW_WRITE_V2 + 60; // 1561: bulged outer wall (write, toward +v)
+const CW_READ_OCT_CV = CW_READ_STATION_VLO + 40 + CW_OCT_H; // 1207: 40u back-gap, ~100u walkway
+const CW_WRITE_OCT_CV = CW_WRITE_STATION_VHI - 40 - CW_OCT_H; // 1491 (mirror)
+
+// Return pts wound CLOCKWISE (negative shoelace = interior on the right, the winding
+// addPoly requires); flips a counter-clockwise loop so callers needn't track order.
+const cwLoop = (pts) => {
+  let a = 0;
+  for (let i = 0; i < pts.length; i += 1) {
+    const j = (i + 1) % pts.length;
+    a += pts[i][0] * pts[j][1] - pts[j][0] * pts[i][1];
+  }
+  return a > 0 ? pts.slice().reverse() : pts.slice();
+};
+
+// A chamfered-square octagon (flats on the four cardinals) centred at (CW_OCT_CX, cv).
+const octagonVerts = (cv) => {
+  const x = CW_OCT_CX;
+  const h = CW_OCT_H;
+  const c = CW_OCT_C;
+  return [
+    [x - h + c, cv - h], [x + h - c, cv - h], [x + h, cv - h + c], [x + h, cv + h - c],
+    [x + h - c, cv + h], [x - h + c, cv + h], [x - h, cv + h - c], [x - h, cv - h + c],
+  ];
+};
+
+// The four right-triangles that fill the octagon bbox corners the chamfers cut away
+// (lane floor, so the chamfered corners read as angled rather than filled back square).
+const octCornerTris = (cv) => {
+  const h = CW_OCT_H;
+  const c = CW_OCT_C;
+  const [lo, hi] = [CW_OCT_BOX_U1, CW_OCT_BOX_U2];
+  return [
+    [[lo, cv - h], [lo + c, cv - h], [lo, cv - h + c]],       // lower-left
+    [[hi - c, cv - h], [hi, cv - h], [hi, cv - h + c]],       // lower-right
+    [[lo, cv + h], [lo + c, cv + h], [lo, cv + h - c]],       // upper-left
+    [[hi, cv + h], [hi - c, cv + h], [hi, cv + h - c]],       // upper-right
+  ];
+};
+
 const build = (ctx) => {
   const { areaRect, areaPoly, addAreaThing, direction, base, accent } = ctx;
 
@@ -504,6 +595,7 @@ const build = (ctx) => {
 
   const backWall = localSideToWorld(direction, "top"); // far/deep wall (local +v)
   const leftWall = localSideToWorld(direction, "left"); // queue chamber back wall (local -u)
+  const rightWall = localSideToWorld(direction, "right"); // causeway dead-end wall (local +u)
 
   // Shared styles. The spiral climb's shell walls wear TEKWALL1 — the NETWORK wall
   // texture that now flanks the disk door in the atrium (see sideResource) — so the
@@ -622,56 +714,94 @@ const build = (ctx) => {
   panel("tp-back-read", { u1: -72, v1: TP_BACK, u2: 0, v2: TP_BACK + 16 }, tubeRead.texture, "top");
   panel("tp-back-write", { u1: 0, v1: TP_BACK, u2: 72, v2: TP_BACK + 16 }, tubeWrite.texture, "top");
 
-  // ===== AWAIT hall (off face 2, the +u face just above the cistern): an angled
-  // throat squares up to an axis-aligned gauge chamber so the gauge recesses land
-  // on integer coords (recesses on an angled wall round off-line and self-
-  // overlap). The AWAIT placard rides the throat's far-v wall (labelEdge 1); each
-  // gauge is a dead-end recess whose one-sided MID walls carry wall:gauge +
-  // lineTag 660/661/662 (NO labelSide, or lineTagFor zeroes the tag). =====
-  const AWAIT_FACE = 2;
-  const F_AWAIT = stepFloor(AWAIT_FACE); // 72
-  // Anchored just outside step face 2 (stepRing[2..3]) so it follows the ring as
-  // the tower scales. Its throat shares the +u inner wall (u=568) with the
-  // cistern's, meeting exactly at the stepRing[2] vertex.
-  const awaitFace = faceSpanV(AWAIT_FACE); // v 1197..1501, mid 1349
-  const awaitChamber = { u1: stepRing[AWAIT_FACE][0] + 50, v1: awaitFace.mid - 120, u2: stepRing[AWAIT_FACE][0] + 170, v2: awaitFace.mid + 120 };
-  const awaitThroat = [
-    stepRing[AWAIT_FACE],
-    stepRing[AWAIT_FACE + 1],
-    [awaitChamber.u1, stepRing[AWAIT_FACE + 1][1]],
-    [awaitChamber.u1, stepRing[AWAIT_FACE][1]],
-  ];
-  areaPoly(direction, "await-throat", awaitThroat, {
+  // ===== LATENCY CAUSEWAY (off face 2, +u): the await instrument. The player IS the
+  // I/O request -- two lanes (READ AWAIT / WRITE AWAIT) whose crossing speed is
+  // dragged by that lane's iostat await (p_user.c P_MovePlayer x
+  // DoomPerf_CausewayMoveScale, lane sector tags 652/653). A solid silver metal
+  // OCTAGON column stands FREE in each lane (walkway around it), floor-to-ceiling (no
+  // gaps); all 8 faces wear the piston wall shader (line tags 666/667 ->
+  // R_DoomPerfPistonPixel) whose ridge lines scroll at the stroke tempo (faster =
+  // lower latency) -- salient from the entrance. The angled throat squares to an axis-aligned
+  // pair of lanes running deep in +u, split by a solid VOID divider (no sector -- the
+  // gap between the two lane rects is solid), that merge into a shared alcove dead-
+  // ending on the iostat await read-point (control panel below). The old bar-gauge
+  // chamber (tags 660/661/662) is retired. See [[doomperf-engine-global-externs]]. =====
+  const cwLane = { ...hallStyle, kind: "metric-hall", floor: CW_FLOOR, ceiling: CW_CEIL, light: 188 };
+  const readTag = ids.sectorTags[0] + 52; // 652
+  const writeTag = ids.sectorTags[0] + 53; // 653
+  // Solid metal OCTAGON column: floor==ceiling (like the spindle drum) so every one of
+  // its 8 lane-facing lower faces is the FULL lane height (72..200) -- no gaps above or
+  // below. Each face wears the piston shader (line tag -> R_DoomPerfPistonPixel on
+  // surface 2): silver steel with ridge lines scrolling at the stroke tempo. The
+  // octagon geometry gives the round silhouette; the player circles it on the walkway.
+  const cwPiston = {
     ...hallStyle,
-    kind: "metric-hall",
-    floor: F_AWAIT,
-    // Ceiling sits exactly one sign-height (128) above the floor so the AWAIT
-    // placard fills the far wall with no vertical tiling; a taller wall repeats the
-    // 128-tall sign and shows an empty black partial tile below it.
-    ceiling: F_AWAIT + wallSignSize.height,
-    light: 188,
-    labelEdge: 1, // the far-v throat wall carries the AWAIT placard
-    labelTexture: signs.await.texture,
+    kind: "cube-plinth",
+    floor: CW_CEIL,
+    ceiling: CW_CEIL,
+    wall: pistonBase.texture,
+    riserWall: pistonBase.texture,
+    light: 208,
+  };
+  // One octagonal station: the solid octagon (lineTag -> shader) standing free in the
+  // lane at (CW_OCT_CX, cv), tiled around by lane floor -- lower/upper strips (full
+  // width), left/right strips (bbox height) and the 4 corner triangles the chamfers
+  // cut. vlo/vhi are the lane's v-extent; whichever strip is wide is the walkway.
+  const octStation = (name, laneTag, lineTag, cv, vlo, vhi) => {
+    const h = CW_OCT_H;
+    const laneFloor = { ...cwLane, tag: laneTag };
+    areaRect(direction, `${name}-lo`, { u1: CW_STATION_U1, v1: vlo, u2: CW_STATION_U2, v2: cv - h }, laneFloor);
+    areaRect(direction, `${name}-hi`, { u1: CW_STATION_U1, v1: cv + h, u2: CW_STATION_U2, v2: vhi }, laneFloor);
+    areaRect(direction, `${name}-l`, { u1: CW_STATION_U1, v1: cv - h, u2: CW_OCT_BOX_U1, v2: cv + h }, laneFloor);
+    areaRect(direction, `${name}-r`, { u1: CW_OCT_BOX_U2, v1: cv - h, u2: CW_STATION_U2, v2: cv + h }, laneFloor);
+    octCornerTris(cv).forEach((tri, k) => areaPoly(direction, `${name}-c${k}`, cwLoop(tri), laneFloor));
+    areaPoly(direction, `${name}-oct`, cwLoop(octagonVerts(cv)), { ...cwPiston, lineTag });
+  };
+
+  // Throat: the angled face squared to u=CW_MOUTH_U across the full face span. Its +u
+  // edge meshes against the two lane mouths; the divider void caps the middle.
+  areaPoly(direction, "cw-throat", [
+    stepRing[2],
+    stepRing[3],
+    [CW_MOUTH_U, stepRing[3][1]],
+    [CW_MOUTH_U, stepRing[2][1]],
+  ], { ...cwLane });
+
+  // READ lane (tag 652): labelled front (256-wide outer wall = one placard), a
+  // connector, the octagon station, then the aft run into the alcove.
+  areaRect(direction, "cw-read-front", { u1: CW_MOUTH_U, v1: CW_READ_V1, u2: CW_LABEL_U, v2: CW_READ_V2 }, {
+    ...cwLane, tag: readTag, labelEdge: 0, labelTexture: readAwaitLabel.texture, labelWidth: queueLabelSize.width,
   });
-  areaRect(direction, "await-hall", { u1: awaitChamber.u1, v1: awaitChamber.v1, u2: awaitChamber.u2, v2: awaitChamber.v2 }, {
-    ...hallStyle,
-    kind: "metric-hall",
-    floor: F_AWAIT,
-    ceiling: F_AWAIT + 160,
-    light: 188,
+  areaRect(direction, "cw-read-gap", { u1: CW_LABEL_U, v1: CW_READ_V1, u2: CW_STATION_U1, v2: CW_READ_V2 }, { ...cwLane, tag: readTag });
+  octStation("cw-read", readTag, ids.lineTags[0] + 6, CW_READ_OCT_CV, CW_READ_STATION_VLO, CW_READ_V2); // 666
+  areaRect(direction, "cw-read-aft", { u1: CW_STATION_U2, v1: CW_READ_V1, u2: CW_LANE_BACK_U, v2: CW_READ_V2 }, { ...cwLane, tag: readTag });
+
+  // WRITE lane (tag 653): mirror across the divider; octagon toward the +v outer wall.
+  areaRect(direction, "cw-write-front", { u1: CW_MOUTH_U, v1: CW_WRITE_V1, u2: CW_LABEL_U, v2: CW_WRITE_V2 }, {
+    ...cwLane, tag: writeTag, labelEdge: 2, labelTexture: writeAwaitLabel.texture, labelWidth: queueLabelSize.width,
   });
-  for (let k = 0; k < 3; k += 1) {
-    const v0 = awaitChamber.v1 + 10 + k * 80;
-    areaRect(direction, `await-gauge-${k}`, { u1: awaitChamber.u2, v1: v0, u2: awaitChamber.u2 + 40, v2: v0 + 64 }, {
-      ...hallStyle,
-      kind: "delay-gauge",
-      floor: F_AWAIT,
-      ceiling: F_AWAIT + 128,
-      wall: gauge.texture,
-      light: 188,
-      lineTag: ids.lineTags[0] + k, // 660/661/662
-    });
-  }
+  areaRect(direction, "cw-write-gap", { u1: CW_LABEL_U, v1: CW_WRITE_V1, u2: CW_STATION_U1, v2: CW_WRITE_V2 }, { ...cwLane, tag: writeTag });
+  octStation("cw-write", writeTag, ids.lineTags[0] + 7, CW_WRITE_OCT_CV, CW_WRITE_V1, CW_WRITE_STATION_VHI); // 667
+  areaRect(direction, "cw-write-aft", { u1: CW_STATION_U2, v1: CW_WRITE_V1, u2: CW_LANE_BACK_U, v2: CW_WRITE_V2 }, { ...cwLane, tag: writeTag });
+
+  // Shared ALCOVE at the far end: both lanes open into it (the divider void caps at
+  // u=CW_LANE_BACK_U) and it dead-ends on the iostat await terminal. Ceiling raised so
+  // the terminal recess (floor+16+128) seats under it.
+  const cwAlcove = { ...cwLane, ceiling: CW_ALCOVE_CEIL, light: 184 };
+  areaRect(direction, "cw-alcove", { u1: CW_LANE_BACK_U, v1: CW_READ_V1, u2: CW_TERM_U, v2: CW_WRITE_V2 }, cwAlcove);
+  // Terminal recess on the +u dead-end wall: two flanks + the await screen.
+  areaRect(direction, "cw-term-l", { u1: CW_TERM_U, v1: CW_READ_V1, u2: CW_BACK_U, v2: CW_TERM_V1 }, cwAlcove);
+  areaRect(direction, "cw-terminal", { u1: CW_TERM_U, v1: CW_TERM_V1, u2: CW_BACK_U, v2: CW_TERM_V2 }, {
+    ...cwLane,
+    kind: "terminal",
+    floor: CW_FLOOR + 16,
+    ceiling: CW_FLOOR + 16 + terminalTextureSize.height,
+    light: 200,
+    labelSide: rightWall, // +u dead-end wall = the iostat await screen
+    labelTexture: awaitScreen.texture,
+    controlPanel: true,
+  });
+  areaRect(direction, "cw-term-r", { u1: CW_TERM_U, v1: CW_TERM_V2, u2: CW_BACK_U, v2: CW_WRITE_V2 }, cwAlcove);
 
   // ===== QUEUE hall (off face 7, lower-left): the DISK IO QUEUE instrument. An
   // angled throat squares up to a chamber, entered along -u, laid out front-to-back:
@@ -935,7 +1065,7 @@ const textures = [
   },
   // The three read-point screens (iostat / df / iostat -x), each a CPU-wing-style
   // simulated terminal so they match the rest of the game's terminals.
-  ...[screen, usageScreen, iopsScreen, queueScreen].map((s) => ({
+  ...[screen, usageScreen, iopsScreen, queueScreen, awaitScreen].map((s) => ({
     texture: s.texture,
     patch: s.patch,
     width: terminalTextureSize.width,
@@ -949,21 +1079,14 @@ const textures = [
     height: wallSignSize.height,
     build: () => buildWallSignPatch(sign.text),
   })),
-  // The two IO-queue tier placards (DEVICE QUEUE / SCHEDULER QUEUE).
-  ...[deviceLabel, schedLabel].map((s) => ({
+  // The IO-queue tier placards + the two latency-causeway lane placards.
+  ...[deviceLabel, schedLabel, readAwaitLabel, writeAwaitLabel].map((s) => ({
     texture: s.texture,
     patch: s.patch,
     width: queueLabelSize.width,
     height: queueLabelSize.height,
     build: () => buildQueueLabelPatch(s.lines, s.color, s.scale),
   })),
-  {
-    texture: gauge.texture,
-    patch: gauge.patch,
-    width: diskGaugeSize.width,
-    height: diskGaugeSize.height,
-    build: buildDiskGaugePatch,
-  },
   {
     texture: spindleTex.texture,
     patch: spindleTex.patch,
@@ -1006,6 +1129,13 @@ const textures = [
     height: discTexSize.height,
     build: buildDiscPatch,
   },
+  {
+    texture: pistonBase.texture,
+    patch: pistonBase.patch,
+    width: pistonBaseSize.width,
+    height: pistonBaseSize.height,
+    build: buildPistonBasePatch,
+  },
 ];
 
 // Floor-name inscription flat ("IO VAULT").
@@ -1036,6 +1166,10 @@ const terminals = ({ terminalHalfWidth }) => [
   // IO QUEUE read-point: the screen rides the queue chamber's back (-u) wall, so it
   // runs terminalHalfWidth either side of the chamber's v-centre (not of u).
   { sign: "storage-queue", segments: [segment([QUEUE_SCREEN_U, QUEUE_SCREEN_CV - terminalHalfWidth], [QUEUE_SCREEN_U, QUEUE_SCREEN_CV + terminalHalfWidth])] },
+  // Latency-causeway iostat await read-point: the screen rides the alcove's +u
+  // dead-end wall, centred on the face mid (v), so it runs terminalHalfWidth either
+  // side of cwFace.mid.
+  { sign: "storage-await", segments: [segment([CW_BACK_U, cwFace.mid - terminalHalfWidth], [CW_BACK_U, cwFace.mid + terminalHalfWidth])] },
 ];
 
 const easterEggs = () => {

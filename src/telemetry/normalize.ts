@@ -237,6 +237,8 @@ const readStorage = (payload: Record<string, unknown>): StorageTelemetry => {
     deviceQueueCap: numberValue(source.deviceQueueCap),
     schedBacklog: numberValue(source.schedBacklog),
     awaitMillis: numberValue(source.awaitMillis),
+    readAwaitMillis: numberValue(source.readAwaitMillis),
+    writeAwaitMillis: numberValue(source.writeAwaitMillis),
     readBytesPerSecond: numberValue(source.readBytesPerSecond),
     writeBytesPerSecond: numberValue(source.writeBytesPerSecond),
     iops: numberValue(source.iops),

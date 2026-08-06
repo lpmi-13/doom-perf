@@ -153,6 +153,13 @@ type storageTelemetry struct {
 	DeviceQueueCap float64 `json:"deviceQueueCap"`
 	SchedBacklog   float64 `json:"schedBacklog"`
 	AwaitMillis    float64 `json:"awaitMillis"`
+	// ReadAwaitMillis / WriteAwaitMillis are r_await / w_await (average ms per read
+	// and per write) for the WORST-await device -- the same device AwaitMillis is
+	// taken from, so the pair is coherent. They drive the storage wing's two-lane
+	// latency causeway (read lane / write lane); the busiest-latency device owns the
+	// reading, and both lanes come from it so a read-vs-write comparison is honest.
+	ReadAwaitMillis  float64 `json:"readAwaitMillis"`
+	WriteAwaitMillis float64 `json:"writeAwaitMillis"`
 	ReadBytesPerSecond  float64 `json:"readBytesPerSecond"`
 	WriteBytesPerSecond float64 `json:"writeBytesPerSecond"`
 	// IOPS is the aggregate completed-operations rate (reads+writes/s) across all
@@ -1132,6 +1139,18 @@ func reduceStorage(disks []diskCounter, previous map[string]diskCounter, elapsed
 		if ios > 0 {
 			await = float64((disk.readMillis-old.readMillis)+(disk.writeMillis-old.writeMillis)) / float64(ios)
 		}
+		// Split await into r_await / w_await so the causeway's read and write lanes
+		// each read their own latency (iostat -x reports these separately). Guard the
+		// per-direction divisors independently -- a device can service reads but no
+		// writes in an interval (or vice versa).
+		rAwait := 0.0
+		if reads > 0 {
+			rAwait = float64(disk.readMillis-old.readMillis) / float64(reads)
+		}
+		wAwait := 0.0
+		if writes > 0 {
+			wAwait = float64(disk.writeMillis-old.writeMillis) / float64(writes)
+		}
 		util := clamp(float64(ioMillis) / (elapsed * 1000))
 		queueDepth := float64(weightedIO) / (elapsed * 1000)
 		iops := float64(ios) / elapsed
@@ -1154,7 +1173,14 @@ func reduceStorage(disks []diskCounter, previous map[string]diskCounter, elapsed
 		if result.DeviceQueueCap == 0 && disk.queueCap > 0 {
 			result.DeviceQueueCap = float64(disk.queueCap)
 		}
-		result.AwaitMillis = maxFloat(result.AwaitMillis, await)
+		// Take await from the worst device and capture THAT device's r_await/w_await
+		// as a coherent pair (an independent max of each could pull the two lanes from
+		// different devices, making a read-vs-write read meaningless).
+		if await > result.AwaitMillis {
+			result.AwaitMillis = await
+			result.ReadAwaitMillis = rAwait
+			result.WriteAwaitMillis = wAwait
+		}
 		result.ReadBytesPerSecond += float64(disk.readSectors-old.readSectors) * 512 / elapsed
 		result.WriteBytesPerSecond += float64(disk.writeSectors-old.writeSectors) * 512 / elapsed
 		result.IOPS += iops

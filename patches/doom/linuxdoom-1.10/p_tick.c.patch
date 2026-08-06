@@ -20,6 +20,9 @@
 #   (+)   disk-queue-couriers (plate mobjs physically ferried scheduler-top -> device-top,
 #         so the two-tier IO queue is seen to drain to the hardware)
 #
+#   (+)   latency-causeway (storage wing): DoomPerf_UpdateCauseway slews r/w await,
+#         beats a per-lane piston (moving ceiling, tags 654/655) and publishes the
+#         player-drag scale read by p_user.c P_MovePlayer (lane tags 652/653)
 # Order-independent: this is the only Doom Perf patch that touches p_tick.c.
 # Regenerate by diffing a clean tree against the staged build tree;
 # see scripts/build-doom-wasm.sh.
@@ -3571,7 +3574,202 @@
  //
  // THINKERS
  // All thinkers should be allocated by Z_Malloc
-@@ -130,11 +3659,11 @@
+@@ -123,6 +3652,194 @@
+ 
+ 
+ 
++// -----------------------------------------------------------------------------
++// Doom Perf: the LATENCY CAUSEWAY (storage wing, off step face 2). Two parallel
++// lanes -- READ AWAIT and WRITE AWAIT -- where the player IS the I/O request: the
++// crossing speed in each lane is dragged by that lane's iostat await, so a slow
++// disk is FELT as a slog and a fast one as a brisk walk. A mechanical PISTON over
++// each lane beats out the service tempo (one strike per completion) and the player
++// advances in step with it: fast strikes (low await) blur into a smooth glide,
++// slow strikes (high await) into a lurch that waits between shoves.
++//
++// The reading is the worst-await device's r_await / w_await (a coherent pair from
++// one device -- see the collector). Both TARGETS arrive via the browser feed
++// (doomperf_storage_read_await / write_await, permille of a 250ms full scale); we
++// SLEW smoothed copies toward them so a worst-device switch eases the player's
++// speed in rather than snapping it. Because the period is derived from the smoothed
++// value and the phase accumulator is never reset, a switch also changes tempo only
++// between strokes -- no stroke is ever aborted mid-shove.
++//
++// Lane sectors carry tags 652 (read) / 653 (write); piston ceilings 654 / 655.
++// P_MovePlayer (p_user.c) scales its move by DoomPerf_CausewayMoveScale.
++// -----------------------------------------------------------------------------
++#define DOOMPERF_CAUSEWAY_READ_TAG	652	// read-await lane floor sector
++#define DOOMPERF_CAUSEWAY_WRITE_TAG	653	// write-await lane floor sector
++// (Pistons are solid cylinders identified by LINE tags 666/667 for the wall shader,
++// not sector tags -- see R_DoomPerfPistonPixel in r_draw.c.)
++
++// Feel constants -- tune these for the drag curve:
++#define DOOMPERF_CAUSEWAY_MAX_PERIOD	9		// tics/stroke at full-scale await (250ms)
++#define DOOMPERF_CAUSEWAY_WINDOW		(FRACUNIT*6/5)	// 1.2 tics of "moving" per stroke
++#define DOOMPERF_CAUSEWAY_FLOOR		(FRACUNIT/10)	// thrust scale while WAITING (never a hard lock)
++#define DOOMPERF_CAUSEWAY_AWAIT_MIN	8		// clamp await (permille) so the period is bounded
++#define DOOMPERF_CAUSEWAY_SLEW		40		// max await-permille change/tic (~0.7s full-range ease)
++
++// Piston ridge lines RECIPROCATE (rise then fall) instead of scrolling one way -- a
++// one-way scroll reads as a spinning-rotor blur (no discernible direction), while an
++// up-then-DOWN pump is clearly discrete. The pump PERIOD scales with await over a WIDE
++// range (fast at low latency, slow/ponderous at high) -- decoupled from the drag's
++// stroke clock, which is capped at ~9 tics and so is too narrow to show speed. A
++// fixed-point accumulator crosses FRACUNIT once per up-down; scroll is a TRIANGLE of it.
++#define DOOMPERF_PISTON_AMPL		16		// pump amplitude (texels); < the shader's 32 pitch (no aliasing)
++#define DOOMPERF_PUMP_MIN_TICS		8		// tics per up-down at ~zero await (fast end)
++#define DOOMPERF_PUMP_MAX_TICS		96		// tics per up-down at full await (slow, ponderous end) -- WIDE range for a stark fast/slow contrast
++
++static int	doomperf_causeway_await[2] = { 0, 0 };			// smoothed await, [0]=read [1]=write (permille)
++static fixed_t	doomperf_causeway_phase[2] = { 0, 0 };			// stroke phase [0, FRACUNIT)
++static fixed_t	doomperf_causeway_scale[2] = { FRACUNIT, FRACUNIT };	// forward-thrust gate this tic
++static fixed_t	doomperf_causeway_pump[2] = { 0, 0 };			// fixed-point pump position (wraps at FRACUNIT = one up-down)
++int		doomperf_causeway_scroll[2] = { 0, 0 };			// TRIANGLE of the pump (0..AMPL..0); read by the shader
++
++// Ease cur toward target by at most step (used for the await slew-limit).
++static int DoomPerf_CausewaySlew (int cur, int target, int step)
++{
++    if (target > cur)
++    {
++	cur += step;
++	if (cur > target)
++	    cur = target;
++    }
++    else if (target < cur)
++    {
++	cur -= step;
++	if (cur < target)
++	    cur = target;
++    }
++    return cur;
++}
++
++void DoomPerf_UpdateCauseway (void)
++{
++    int		lane;
++    int		target;
++    int		await;
++    fixed_t	period;		// tics per stroke (fixed)
++    fixed_t	step;		// phase advanced per tic (fraction of a FRACUNIT period)
++    fixed_t	window;		// phase width of the "moving" part of a stroke
++
++    // A level (re)load resets leveltime; restart the causeway from rest rather than
++    // mid-stroke.
++    if (leveltime == 0)
++    {
++	for (lane = 0; lane < 2; lane++)
++	{
++	    doomperf_causeway_await[lane]  = 0;
++	    doomperf_causeway_phase[lane]  = 0;
++	    doomperf_causeway_scale[lane]  = FRACUNIT;
++	    doomperf_causeway_pump[lane] = 0;
++	    doomperf_causeway_scroll[lane] = 0;
++	}
++    }
++
++    for (lane = 0; lane < 2; lane++)
++    {
++	target = lane ? doomperf_storage_write_await : doomperf_storage_read_await;
++	if (target < 0)
++	    target = 0;
++	if (target > 1000)
++	    target = 1000;
++	doomperf_causeway_await[lane] =
++	    DoomPerf_CausewaySlew (doomperf_causeway_await[lane], target, DOOMPERF_CAUSEWAY_SLEW);
++
++	await = doomperf_causeway_await[lane];
++	if (await < DOOMPERF_CAUSEWAY_AWAIT_MIN)
++	    await = DOOMPERF_CAUSEWAY_AWAIT_MIN;
++
++	// Stroke period scales linearly with await: full-scale (1000) => MAX_PERIOD
++	// tics between completions; a fast disk => sub-tic period => continuous motion.
++	period = (DOOMPERF_CAUSEWAY_MAX_PERIOD * await * FRACUNIT) / 1000;
++	if (period < 1)
++	    period = 1;
++	step = FixedDiv (FRACUNIT, period);		// fraction of a stroke advanced per tic
++
++	// Advance the phase; a wrap past FRACUNIT is one completion (one strike).
++	doomperf_causeway_phase[lane] += step;
++	while (doomperf_causeway_phase[lane] >= FRACUNIT)
++	    doomperf_causeway_phase[lane] -= FRACUNIT;
++
++	// "Moving" window: a fixed WINDOW of tics per stroke, as a fraction of the
++	// period. When the period is shorter than the window (low await) the whole
++	// stroke is a window => full-speed continuous motion.
++	window = FixedDiv (DOOMPERF_CAUSEWAY_WINDOW, period);
++	if (step >= FRACUNIT || window >= FRACUNIT)
++	    doomperf_causeway_scale[lane] = FRACUNIT;			// continuous (fast disk)
++	else if (doomperf_causeway_phase[lane] < window)
++	    doomperf_causeway_scale[lane] = FRACUNIT;			// serviced: advance this stroke
++	else
++	    doomperf_causeway_scale[lane] = DOOMPERF_CAUSEWAY_FLOOR;	// waiting: crawl
++
++	// Advance the piston pump: its PERIOD scales with await -- MIN_TICS per up-down at
++	// zero await (fast) up to MAX_TICS at full await (slow, ponderous). The fixed-point
++	// accumulator crosses FRACUNIT once per up-down; the exposed scroll is a TRIANGLE of
++	// it (0 -> AMPL -> 0) so the ridge lines rise then FALL -- a discrete pump whose
++	// SPEED reads the latency (faster = lower await), not a one-way scroll.
++	{
++	    int		ptics = DOOMPERF_PUMP_MIN_TICS
++		+ ((DOOMPERF_PUMP_MAX_TICS - DOOMPERF_PUMP_MIN_TICS) * doomperf_causeway_await[lane]) / 1000;
++	    fixed_t	tri;
++
++	    doomperf_causeway_pump[lane] += FRACUNIT / ptics;
++	    while (doomperf_causeway_pump[lane] >= FRACUNIT)
++		doomperf_causeway_pump[lane] -= FRACUNIT;
++	    tri = (doomperf_causeway_pump[lane] < FRACUNIT / 2)
++		? doomperf_causeway_pump[lane] * 2
++		: (FRACUNIT - doomperf_causeway_pump[lane]) * 2;		// 0 -> FRACUNIT -> 0
++	    doomperf_causeway_scroll[lane] = (DOOMPERF_PISTON_AMPL * tri) >> FRACBITS;	// 0 .. AMPL
++	}
++    }
++
++    // Red damage-flash vignette signals for i_video_ems.c I_FinishUpdate:
++    //   doomperf_causeway_redness = the player-lane await SEVERITY (0..1000) -> sets the
++    //       vignette's REACH (thin edge when moderate, deep toward centre when high) and
++    //       COLOUR (light red -> dark red).
++    //   doomperf_causeway_pulse   = the piston's own pump triangle (0..1000) -> STROBES
++    //       the vignette in step with the piston (slow when the piston is slow, etc).
++    // Both zero outside the lanes. Runs before P_PlayerThink, so it reads last tic's
++    // player sector (a negligible one-tic lag).
++    {
++	int	ptag;
++	int	plane;
++
++	doomperf_causeway_redness = 0;
++	doomperf_causeway_pulse = 0;
++	if (playeringame[0] && players[0].mo && players[0].mo->subsector)
++	{
++	    ptag = players[0].mo->subsector->sector->tag;
++	    plane = (ptag == DOOMPERF_CAUSEWAY_READ_TAG) ? 0
++		  : (ptag == DOOMPERF_CAUSEWAY_WRITE_TAG) ? 1 : -1;
++	    if (plane >= 0)
++	    {
++		doomperf_causeway_redness = doomperf_causeway_await[plane];
++		doomperf_causeway_pulse = (doomperf_causeway_scroll[plane] * 1000) / DOOMPERF_PISTON_AMPL;
++	    }
++	}
++    }
++}
++
++// Forward-thrust scale (fixed 0..FRACUNIT) for the player's current sector tag:
++// FRACUNIT everywhere except the two causeway lanes, so P_MovePlayer drags the
++// player only there, at that lane's smoothed await.
++int DoomPerf_CausewayMoveScale (int sectortag)
++{
++    if (sectortag == DOOMPERF_CAUSEWAY_READ_TAG)
++	return doomperf_causeway_scale[0];
++    if (sectortag == DOOMPERF_CAUSEWAY_WRITE_TAG)
++	return doomperf_causeway_scale[1];
++    return FRACUNIT;
++}
++
++
++
+ //
+ // P_Ticker
+ //
+@@ -130,11 +3847,11 @@
  void P_Ticker (void)
  {
      int		i;
@@ -3585,7 +3783,7 @@
      // pause if in menu and at least one tic has been run
      if ( !netgame
  	 && menuactive
-@@ -143,16 +3672,34 @@
+@@ -143,16 +3860,36 @@
      {
  	return;
      }
@@ -3610,6 +3808,8 @@
 +    DoomPerf_FaultVolley ();
 +    DoomPerf_UpdateRunQueueParticles ();
 +    DoomPerf_UpdateNetworkPackets ();
++    // Before P_PlayerThink so this tic's lane scale drags THIS tic's P_MovePlayer.
++    DoomPerf_UpdateCauseway ();
 +
      for (i=0 ; i<MAXPLAYERS ; i++)
  	if (playeringame[i])

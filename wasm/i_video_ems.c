@@ -28,6 +28,10 @@ int doomperf_cpu_blocked_count = 0;
 int doomperf_cpu_load_pressure = 0;
 int doomperf_load[3] = {0, 0, 0};
 int doomperf_storage_await = 0;
+int doomperf_storage_read_await = 0;   // r_await target (permille of 250ms); slewed in p_tick.c
+int doomperf_storage_write_await = 0;  // w_await target (permille of 250ms); slewed in p_tick.c
+int doomperf_causeway_redness = 0;     // permille await severity -> red-vignette reach + colour (set in p_tick.c)
+int doomperf_causeway_pulse = 0;       // permille piston pump triangle -> red-vignette strobe (set in p_tick.c)
 int doomperf_storage_util = 0;
 int doomperf_storage_queue = 0;
 int doomperf_storage_iops_spike = 0;
@@ -175,6 +179,22 @@ EMSCRIPTEN_KEEPALIVE
 void DoomPerf_SetStorageAwait(int permille)
 {
     doomperf_storage_await = DoomPerf_ClampPermille(permille);
+}
+
+// r_await / w_await (worst-await device) on the same 250ms full scale, driving the
+// latency causeway's read/write lanes. These set only the TARGET; p_tick.c's
+// DoomPerf_UpdateCauseway slews smoothed copies toward them so a worst-device
+// switch eases the player's speed in rather than snapping it.
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_SetStorageReadAwait(int permille)
+{
+    doomperf_storage_read_await = DoomPerf_ClampPermille(permille);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_SetStorageWriteAwait(int permille)
+{
+    doomperf_storage_write_await = DoomPerf_ClampPermille(permille);
 }
 
 // Disk busy fraction (iostat %util) in permille. Drives the media-pit platter's
@@ -1089,6 +1109,78 @@ void I_FinishUpdate(void)
     for (i = 0; i < SCREENWIDTH * SCREENHEIGHT; i++)
     {
         rgba_framebuffer[i] = palette_rgba[screens[0][i]];
+    }
+
+    // Doom Perf: red damage-flash vignette while the latency causeway drags the player.
+    // Two signals from p_tick.c: SEVERITY (doomperf_causeway_redness = the player-lane
+    // await) sets how far the red reaches in and how dark it is; PULSE
+    // (doomperf_causeway_pulse = the piston's pump triangle) STROBES it in step with the
+    // piston. So a slow high-latency lane = a slow, deep, DARK strobe reaching toward the
+    // centre; a moderately-elevated lane = a faster, thin, LIGHTER strobe hugging the
+    // edges. Severity is eased so entering/leaving a lane fades. Nothing below the
+    // saturated threshold. The blend runs only on the edge band (quick reject per pixel).
+    {
+        static int      vsev = 0;               // eased await severity (0..1000)
+        int             tgt = doomperf_causeway_redness;
+        const int       thresh = 350;           // await permille below which no red shows
+        int             sev;
+
+        if (tgt > vsev)
+            vsev += (tgt - vsev + 3) / 4;
+        else if (tgt < vsev)
+            vsev -= (vsev - tgt + 3) / 4;
+
+        sev = vsev > thresh ? ((vsev - thresh) * 1000) / (1000 - thresh) : 0;
+        if (sev > 1000)
+            sev = 1000;
+
+        if (sev > 0)
+        {
+            int     sq = (sev * sev) / 1000;                        // quadratic: reach stays thin until high
+            int     margin = 8 + (82 * sq) / 1000;                 // 8 (thin edge) .. 90 (deep toward centre)
+            int     throb = 150 + (850 * doomperf_causeway_pulse) / 1000; // strobe 15%..100% at the piston tempo
+            int     peak = ((400 + (600 * sev) / 1000) * throb) / 1000;   // fainter/lighter when moderate, strong when high
+            int     rT = 255 - (115 * sev) / 1000;                 // 255 light red .. 140 dark red
+            int     gbT = 100 - (100 * sev) / 1000;                // 100 pinkish .. 0 pure (dark)
+            int     x;
+            int     y;
+
+            for (y = 0; y < SCREENHEIGHT; y++)
+            {
+                int     ry = SCREENHEIGHT - 1 - y;
+                int     dy = y < ry ? y : ry;
+
+                for (x = 0; x < SCREENWIDTH; x++)
+                {
+                    int         rx = SCREENWIDTH - 1 - x;
+                    int         dx = x < rx ? x : rx;
+                    int         d = dx < dy ? dx : dy;
+                    int         a;
+                    uint32_t    px;
+                    int         r;
+                    int         g;
+                    int         b;
+
+                    if (d >= margin)
+                        continue;
+                    a = ((margin - d) * peak) / margin;   // edge falloff x peak (0..1000)
+                    a = (a * 230) / 1000;                  // to 0..~230 blend units (never fully flat)
+                    if (a <= 0)
+                        continue;
+                    if (a > 256)
+                        a = 256;
+                    px = rgba_framebuffer[y * SCREENWIDTH + x];
+                    r = (px >> 16) & 0xff;
+                    g = (px >> 8) & 0xff;
+                    b = px & 0xff;
+                    r = r + ((rT - r) * a) / 256;         // blend toward the target red
+                    g = g + ((gbT - g) * a) / 256;
+                    b = b + ((gbT - b) * a) / 256;
+                    rgba_framebuffer[y * SCREENWIDTH + x] =
+                        0xff000000u | ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+                }
+            }
+        }
     }
 
     SDL_UpdateTexture(texture, 0, rgba_framebuffer, SCREENWIDTH * sizeof(uint32_t));

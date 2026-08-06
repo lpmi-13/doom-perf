@@ -19,7 +19,7 @@
 
 --- a/r_draw.c
 +++ b/r_draw.c
-@@ -95,6 +95,21 @@
+@@ -95,6 +95,22 @@
  // just for profiling 
  int			dccount;
  
@@ -37,11 +37,12 @@
 +static byte R_DoomPerfDiskPlatterPixel (fixed_t xfrac, fixed_t yfrac, byte background);
 +static byte R_DoomPerfDiskSpindlePixel (int ty);
 +static byte R_DoomPerfDiskDonutPixel (int tx, int ty, byte background);
++static byte R_DoomPerfPistonPixel (int tx, int ty, int lane);
 +
  //
  // A column is a vertical slice/span from a wall texture that,
  //  given the DOOM style restrictions on the view orientation,
-@@ -137,9 +152,36 @@
+@@ -137,9 +153,45 @@
      // This is as fast as it gets.
      do 
      {
@@ -57,6 +58,15 @@
 +				    doomperf_cpu_column_texture_x,
 +				    (frac>>FRACBITS)&255,
 +				    dc_source[(frac>>FRACBITS)&255])];
++	else if (doomperf_cpu_column_display == 33 || doomperf_cpu_column_display == 34)
++	    // Latency-causeway PISTON octagon: silver steel + ridge lines scrolling at the
++	    // lane's stroke tempo. Drawn via dc_colormap so Doom's per-wall fake contrast
++	    // shades the 8 facets differently -- the octagon reads as a 3D metal cylinder.
++	    // 33 = read lane, 34 = write lane.
++	    *dest = dc_colormap[R_DoomPerfPistonPixel(
++				    doomperf_cpu_column_texture_x & 127,
++				    (frac>>FRACBITS)&127,
++				    doomperf_cpu_column_display - 33)];
 +	else if (doomperf_cpu_column_display == 31)
 +	    // Spindle base texture is 256 tall (DPDSPIN), so the util fill + streaks
 +	    // span the FULL drum height in one piece rather than tiling at 128.
@@ -81,7 +91,7 @@
  	
  	dest += SCREENWIDTH; 
  	frac += fracstep;
-@@ -514,6 +556,848 @@
+@@ -514,6 +566,872 @@
  // just for profiling
  int			dscount;
  
@@ -766,6 +776,30 @@
 +    return DOOMPERF_DISK_EMPTY;				// dark above the fill
 +}
 +
++// ===== Storage latency-causeway PISTON octagon (each lane's solid metal cylinder).
++// The octagon GEOMETRY gives the round silhouette; this shader paints each facet
++// SILVER STEEL with bright/dark RIDGE LINES marching vertically at the lane's stroke
++// tempo (doomperf_causeway_scroll) so the column reads as pumping up and down. Drawn
++// via dc_colormap (see the dispatch) so Doom's per-wall fake contrast shades the 8
++// facets differently -- the flat steel then reads as a lit 3D cylinder. tx is unused
++// (the facets are flat; roundness is geometric). lane 0 = read, 1 = write.
++static byte R_DoomPerfPistonPixel (int tx, int ty, int lane)
++{
++    int		band;
++
++    (void)tx;
++    // Ridge lines every 32 texels (4 clear bands over the 128 face), reciprocating with
++    // the pump (doomperf_causeway_scroll rises then falls) so they visibly pump up and
++    // DOWN. DARK grooves (palette grey 55) against silver steel (grey 199) -- strong
++    // dark circumference lines. dc_colormap then shades each facet (fake contrast) 3D.
++    band = (ty + doomperf_causeway_scroll[lane]) & 31;
++    if (band < 4)
++	return 108;				// dark groove core -- the DARK circumference line
++    if (band < 6)
++	return 100;				// groove shoulder (softens the edge)
++    return 86;					// silver steel facet (fake contrast shades each face)
++}
++
 +// ===== Storage disk-usage SUNBURST (storage wing, cistern back wall). The `df /`
 +// usage gauge rendered as a circular sunburst (line tag 665, DPDISC base, surface
 +// 2): the used fraction of the disk fills the wheel clockwise from the top as a
@@ -930,7 +964,7 @@
  
  //
  // Draws the actual span.
-@@ -553,7 +1437,21 @@
+@@ -553,7 +1471,21 @@
  
  	// Lookup pixel from flat texture tile,
  	//  re-index using light/colormap.
@@ -953,7 +987,7 @@
  
  	// Next step in u,v.
  	xfrac += ds_xstep; 
-@@ -676,8 +1574,20 @@
+@@ -676,8 +1608,20 @@
  	spot = ((yfrac>>(16-6))&(63*64)) + ((xfrac>>16)&63);
  	// Lowres/blocky mode does it twice,
  	//  while scale is adjusted appropriately.

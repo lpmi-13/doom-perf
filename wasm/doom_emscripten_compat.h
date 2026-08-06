@@ -35,6 +35,27 @@ extern int doomperf_load[3];
 // storage (disk) wing.
 extern int doomperf_storage_await;
 
+// r_await / w_await (worst-await device) as permille of the same 250ms full scale,
+// set from the browser telemetry stream. These are the TARGET values; p_tick.c's
+// DoomPerf_UpdateCauseway slews smoothed copies toward them each tic (so a worst-
+// device switch eases in) and derives the read/write latency causeway's player-drag
+// and piston tempo. DoomPerf_CausewayMoveScale returns a fixed-point (0..FRACUNIT)
+// forward-thrust scale for a lane sector tag (FRACUNIT for any non-causeway tag),
+// read by P_MovePlayer (p_user.c) to drag the player at that lane's await.
+extern int doomperf_storage_read_await;
+extern int doomperf_storage_write_await;
+int DoomPerf_CausewayMoveScale(int sectortag);
+// Red damage-flash vignette signals while the causeway drags the player, set by
+// DoomPerf_UpdateCauseway (p_tick.c), read by I_FinishUpdate (i_video_ems.c):
+// redness = player-lane await severity (0..1000) -> vignette reach + colour;
+// pulse   = the piston pump triangle (0..1000) -> strobes the vignette at the piston tempo.
+extern int doomperf_causeway_redness;
+extern int doomperf_causeway_pulse;
+// Per-lane vertical scroll offset (texels) for the piston cylinders' ridge lines;
+// advanced at the stroke tempo in DoomPerf_UpdateCauseway (p_tick.c), read by the
+// piston wall shader R_DoomPerfPistonPixel (r_draw.c). [0]=read lane, [1]=write.
+extern int doomperf_causeway_scroll[2];
+
 // Disk busy fraction (iostat %util) in permille, set from the browser telemetry
 // stream and read by the media-pit platter's pulsing rings.
 extern int doomperf_storage_util;

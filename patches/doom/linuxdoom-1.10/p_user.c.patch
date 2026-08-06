@@ -1,0 +1,49 @@
+# Doom Perf engine patch: p_user.c
+#
+# Cumulative Doom Perf changes to p_user.c.
+#   (+)   latency-causeway (storage wing): P_MovePlayer scales forward/side thrust
+#         by DoomPerf_CausewayMoveScale so the player is dragged at the storage
+#         wing's read/write await lanes; turning (angleturn) is left instant.
+#
+# Order-independent: this is the only Doom Perf patch that touches p_user.c.
+# Regenerate by diffing a clean tree against the staged build tree;
+# see scripts/build-doom-wasm.sh.
+
+--- a/p_user.c
++++ b/p_user.c
+@@ -148,20 +148,29 @@
+ void P_MovePlayer (player_t* player)
+ {
+     ticcmd_t*		cmd;
+-	
++    fixed_t		movescale;	// Doom Perf: latency-causeway drag (FRACUNIT elsewhere)
++
+     cmd = &player->cmd;
+-	
++
+     player->mo->angle += (cmd->angleturn<<16);
+ 
+     // Do not let the player control movement
+     //  if not onground.
+     onground = (player->mo->z <= player->mo->floorz);
+-	
++
++    // Doom Perf: in the storage wing's latency causeway the player IS the I/O
++    // request -- forward/side thrust is dragged by the lane's iostat await, metered
++    // out one service-stroke at a time (see DoomPerf_UpdateCauseway in p_tick.c).
++    // Turning (angleturn, above) is deliberately left untouched: looking around
++    // stays instant, only *going somewhere* is serviced. FRACUNIT (no drag) for
++    // every sector outside the two causeway lanes.
++    movescale = DoomPerf_CausewayMoveScale (player->mo->subsector->sector->tag);
++
+     if (cmd->forwardmove && onground)
+-	P_Thrust (player, player->mo->angle, cmd->forwardmove*2048);
+-    
++	P_Thrust (player, player->mo->angle, FixedMul(cmd->forwardmove*2048, movescale));
++
+     if (cmd->sidemove && onground)
+-	P_Thrust (player, player->mo->angle-ANG90, cmd->sidemove*2048);
++	P_Thrust (player, player->mo->angle-ANG90, FixedMul(cmd->sidemove*2048, movescale));
+ 
+     if ( (cmd->forwardmove || cmd->sidemove) 
+ 	 && player->mo->state == &states[S_PLAY] )

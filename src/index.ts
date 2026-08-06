@@ -239,6 +239,11 @@ type DoomPerfEngine = {
   // media-pit latency gauges in the disk wing; and disk busy fraction (%util) in
   // permille, driving the platter's pulsing rings.
   _DoomPerf_SetStorageAwait?: (permille: number) => void;
+  // r_await / w_await (worst-await device) as permille of the same 250ms full scale,
+  // driving the latency causeway's read/write lanes: the player's crossing speed in
+  // each lane is dragged by its await, with a piston beating out the service tempo.
+  _DoomPerf_SetStorageReadAwait?: (permille: number) => void;
+  _DoomPerf_SetStorageWriteAwait?: (permille: number) => void;
   _DoomPerf_SetStorageUtil?: (permille: number) => void;
   // Disk request-queue depth (iostat aqu-sz) as permille of a 24-request full
   // channel, driving the media-pit queue channel's flowing request blocks.
@@ -409,6 +414,12 @@ const pushTelemetryToEngine = (
   // a 250ms full bar — the same scale the iostat terminal's await bar uses. In a
   // disk sim the engine synthesizes its own await, so this live value is ignored.
   engine?._DoomPerf_SetStorageAwait?.(Math.round(clampRatio((telemetry.storage.awaitMillis ?? 0) / 250) * 1000));
+  // Latency-causeway lanes. Same 250ms full scale as the aggregate await; the engine
+  // slew-limits these so a worst-device switch eases in rather than snapping the
+  // player's speed. In disk sims (3/4/5) telemetry.storage IS the sim storage, so the
+  // causeway reacts without a real workload; other sims carry the calm baseline.
+  engine?._DoomPerf_SetStorageReadAwait?.(Math.round(clampRatio((telemetry.storage.readAwaitMillis ?? 0) / 250) * 1000));
+  engine?._DoomPerf_SetStorageWriteAwait?.(Math.round(clampRatio((telemetry.storage.writeAwaitMillis ?? 0) / 250) * 1000));
   engine?._DoomPerf_SetStorageUtil?.(Math.round(clampRatio(telemetry.storage.utilization) * 1000));
   engine?._DoomPerf_SetStorageQueue?.(Math.round(clampRatio((telemetry.storage.queueDepth ?? 0) / 24) * 1000));
   // Two-tier IO queue rack (face-7): device rack + scheduler magazine fills. Sims
@@ -862,6 +873,11 @@ const scenarioTelemetry = (
     // await (ms): mode 4 climbs toward a quarter-second (queue wait); mode 5 is
     // elevated but far lower (fast media, just maxed); mode 3 stays single digit.
     awaitMillis: diskDeep ? 48 + 26 * Math.abs(Math.sin(now / 1300)) : diskSaturated ? 165 + 55 * Math.abs(Math.sin(now / 1300)) : 6.5 + 3 * Math.abs(Math.sin(now / 1100)),
+    // Read/write await bracket the combined await and shimmer on their own phases so
+    // the causeway's two lanes visibly diverge; writes run slower than reads (the
+    // common asymmetry — read-ahead helps reads, write-back stalls under pressure).
+    readAwaitMillis: diskDeep ? 36 + 20 * Math.abs(Math.sin(now / 1250)) : diskSaturated ? 120 + 45 * Math.abs(Math.sin(now / 1250)) : 5 + 2.5 * Math.abs(Math.sin(now / 1050)),
+    writeAwaitMillis: diskDeep ? 62 + 30 * Math.abs(Math.sin(now / 1350)) : diskSaturated ? 210 + 60 * Math.abs(Math.sin(now / 1350)) : 8 + 3.5 * Math.abs(Math.sin(now / 1150)),
     // Throughput: shallow-saturated media serves SLOWLY (seek-bound); the deep device
     // is bandwidth-bound, moving data near its ceiling; mode 3 is merely busy.
     readBytesPerSecond: (diskDeep ? 1250 : diskSaturated ? 96 : 168) * mib * wobble,
@@ -891,6 +907,8 @@ const scenarioTelemetry = (
     deviceQueue: 0.15 + 0.15 * Math.abs(Math.sin(now / 1500)),
     schedBacklog: 0.05 + 0.05 * Math.abs(Math.sin(now / 1500)),
     awaitMillis: 1.6 + 1.2 * Math.abs(Math.sin(now / 1300)),
+    readAwaitMillis: 1.2 + 0.9 * Math.abs(Math.sin(now / 1250)),
+    writeAwaitMillis: 2.0 + 1.4 * Math.abs(Math.sin(now / 1350)),
     readBytesPerSecond: (7 + 5 * Math.abs(Math.sin(now / 1100))) * mib,
     writeBytesPerSecond: (5 + 4 * Math.abs(Math.sin(now / 1250))) * mib,
     iops: baseDiskDevices.reduce((sum, d) => sum + d.iops, 0),

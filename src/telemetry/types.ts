@@ -110,6 +110,11 @@ export interface StorageTelemetry extends ResourceTelemetry {
   deviceQueueCap?: number;
   schedBacklog?: number;
   awaitMillis?: number;
+  // r_await / w_await (avg ms per read / per write) for the worst-await device —
+  // the same device awaitMillis is taken from, so the pair is coherent. These
+  // drive the storage wing's two-lane latency causeway (read lane / write lane).
+  readAwaitMillis?: number;
+  writeAwaitMillis?: number;
   readBytesPerSecond?: number;
   writeBytesPerSecond?: number;
   // Aggregate completed-operations rate (reads+writes/s) and the per-device
@@ -217,7 +222,8 @@ export type SimMemoryTelemetry = MemoryTelemetry &
 export type SimStorageTelemetry = StorageTelemetry &
   Required<Pick<StorageTelemetry,
     | "queueDepth" | "deviceQueue" | "deviceQueueCap" | "schedBacklog"
-    | "awaitMillis" | "readBytesPerSecond" | "writeBytesPerSecond"
+    | "awaitMillis" | "readAwaitMillis" | "writeAwaitMillis"
+    | "readBytesPerSecond" | "writeBytesPerSecond"
     | "iops" | "devices"
     | "usedBytes" | "totalBytes" | "availBytes" | "usedRatio">>;
 
@@ -265,6 +271,7 @@ export type TerminalSign =
   | "storage-usage"
   | "storage-iops"
   | "storage-queue"
+  | "storage-await"
   | "network"
   | "network-sockets"
   | "network-queues";

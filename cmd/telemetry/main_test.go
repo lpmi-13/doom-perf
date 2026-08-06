@@ -282,6 +282,36 @@ func TestReduceStorageSplitsDeviceAndSchedulerQueue(t *testing.T) {
 	}
 }
 
+// r_await / w_await must be taken as a coherent pair from the worst-await device,
+// not an independent per-direction max (which could pull the two lanes from
+// different devices and make a read-vs-write comparison meaningless).
+func TestReduceStorageAwaitPairsWithWorstDevice(t *testing.T) {
+	previous := map[string]diskCounter{
+		"sda":   {name: "sda"},
+		"nvme0": {name: "nvme0"},
+	}
+	// sda:   await = (300+100)/(10+10)   = 20.0 ms  (r_await 30, w_await 10)
+	// nvme0: await = (100+5000)/(100+100) = 25.5 ms  (r_await 1,  w_await 50)  <- WORST
+	// nvme0 is the worst-await device, so both lanes must read nvme0's pair
+	// (r_await 1, w_await 50). An independent per-direction max would instead
+	// report r_await 30 (from sda) -- the incoherence this pairing avoids.
+	disks := []diskCounter{
+		{name: "sda", reads: 10, readMillis: 300, writes: 10, writeMillis: 100},
+		{name: "nvme0", reads: 100, readMillis: 100, writes: 100, writeMillis: 5000},
+	}
+	result, _ := reduceStorage(disks, previous, 1.0)
+
+	if result.AwaitMillis != 25.5 {
+		t.Fatalf("AwaitMillis = %v, want 25.5 (worst device nvme0)", result.AwaitMillis)
+	}
+	if result.ReadAwaitMillis != 1 {
+		t.Fatalf("ReadAwaitMillis = %v, want 1 (nvme0's r_await, not sda's 30)", result.ReadAwaitMillis)
+	}
+	if result.WriteAwaitMillis != 50 {
+		t.Fatalf("WriteAwaitMillis = %v, want 50 (nvme0's w_await)", result.WriteAwaitMillis)
+	}
+}
+
 // When no device exposes an in-flight gauge, the device tier reads zero but the
 // rim (cap) still falls back to the first device that publishes queue_depth, so
 // the alcove can draw the empty basin at its true height.
