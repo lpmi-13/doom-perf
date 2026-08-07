@@ -323,6 +323,16 @@ const readNetwork = (payload: Record<string, unknown>): NetworkTelemetry => {
     recvQueueBytes: numberValue(source.recvQueueBytes),
     backloggedSockets: numberValue(source.backloggedSockets),
     topSockets: readTopSockets(source.topSockets),
+    rxFifoPerSecond: numberValue(source.rxFifoPerSecond),
+    txFifoPerSecond: numberValue(source.txFifoPerSecond),
+    softnetDropsPerSecond: numberValue(source.softnetDropsPerSecond),
+    softnetSqueezePerSecond: numberValue(source.softnetSqueezePerSecond),
+    linkCapacityBps: numberValue(source.linkCapacityBps),
+    // Nullable gated enrichments: numberValue returns undefined when the collector
+    // omits them, which the canal reads as "unknown" (fallback), not zero.
+    ringDepthRx: numberValue(source.ringDepthRx),
+    ringDepthTx: numberValue(source.ringDepthTx),
+    qdiscBacklogBytes: numberValue(source.qdiscBacklogBytes),
   };
 };
 

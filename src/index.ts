@@ -200,6 +200,13 @@ const applySwapOverride = (telemetry: TelemetrySnapshot): TelemetrySnapshot =>
       }
     : telemetry;
 
+// ?ring=off / ?qdisc=off force the network canal's ring-lock and kernel-TX-lock
+// fallbacks (ring brim omitted -> overruns only; kernel TX uses the tx-drop proxy
+// estimate) without needing a host that actually lacks ethtool/tc. Like ?swap=off
+// these reach the ENGINE feed, since they change which lock inputs are "known".
+const ringDisabled = new URLSearchParams(window.location.search).get("ring") === "off";
+const qdiscDisabled = new URLSearchParams(window.location.search).get("qdisc") === "off";
+
 const wadParam = new URLSearchParams(window.location.search).get("wad")?.toLowerCase();
 const wadMap: Record<string, string> = {
   freedoom1: "/wads/freedoom1.wad",
@@ -296,6 +303,16 @@ type DoomPerfEngine = {
   // density of the two packet-orb streams in the network wing's grove.
   _DoomPerf_SetNetworkRx?: (permille: number) => void;
   _DoomPerf_SetNetworkTx?: (permille: number) => void;
+  // Three-lock canal (NETWORK_CANAL_PLAN.md). Per lock (0/1/2 = socket/kernel/ring)
+  // and lane (0/1 = rx/tx): the pool fill (queue occupancy) and its overspill/drop
+  // rate. Plus the global softnet squeeze, the socket backlog + SYN-RECV counts, and
+  // a per-lane gate on whether the ring depth is known (0 -> the "unknown rim" state).
+  _DoomPerf_SetNetLockFill?: (level: number, lane: number, permille: number) => void;
+  _DoomPerf_SetNetLockDrops?: (level: number, lane: number, permille: number) => void;
+  _DoomPerf_SetNetSoftnetSqueeze?: (permille: number) => void;
+  _DoomPerf_SetNetBacklogged?: (count: number) => void;
+  _DoomPerf_SetNetSynRecv?: (count: number) => void;
+  _DoomPerf_SetNetRingDepthKnown?: (lane: number, known: number) => void;
   _DoomPerf_GetSimMode?: () => number;
   _DoomPerf_GetEffectiveCpuCoreCount?: () => number;
   _DoomPerf_GetEffectiveCpuCore?: (id: number) => number;
@@ -525,19 +542,59 @@ const pushTelemetryToEngine = (
     }
     lastOomKills = oomKills;
   }
-  // Network RX/TX throughput as a fraction of a 1 Gbit reference link, pushed as
-  // permille. The engine maps it through a sqrt gradient to the packet-orb density
-  // in the grove's two lanes — a representative abstraction, not one orb per
-  // packet. The grove shows AGGREGATE throughput across all interfaces (the same
-  // rx/tx totals that feed utilization), not any single NIC. The network sims
-  // (modes 7/8) synthesize their own throughput.
-  const networkFullScaleBytes = 125_000_000; // 1 Gbit/s
-  engine?._DoomPerf_SetNetworkRx?.(
-    Math.round(clampRatio((telemetry.network.rxBytesPerSecond ?? 0) / networkFullScaleBytes) * 1000)
-  );
-  engine?._DoomPerf_SetNetworkTx?.(
-    Math.round(clampRatio((telemetry.network.txBytesPerSecond ?? 0) / networkFullScaleBytes) * 1000)
-  );
+  // ===== Network THREE-LOCK CANAL feed (NETWORK_CANAL_PLAN.md). Two things flow: the
+  // packet-orb LANE DENSITY (RX/TX throughput), and the per-lock/lane POOL FILLS +
+  // overspill DROPS the canal animates as a packet descends socket -> kernel -> ring.
+  const net = telemetry.network;
+  const netPm = (ratio: number) => Math.round(clampRatio(ratio) * 1000);
+  // Lane density scales to % of the REAL link rate (full-duplex, so each lane may use
+  // the whole capacity), so a maxed slow NIC visibly saturates — falling back to a
+  // 1 Gbit reference when the collector reports no link speed. The engine maps this
+  // through a sqrt gradient to orb density (representative, not one orb per packet).
+  const linkRefBytes = net.linkCapacityBps && net.linkCapacityBps > 0 ? net.linkCapacityBps / 8 : 125_000_000;
+  engine?._DoomPerf_SetNetworkRx?.(netPm((net.rxBytesPerSecond ?? 0) / linkRefBytes));
+  engine?._DoomPerf_SetNetworkTx?.(netPm((net.txBytesPerSecond ?? 0) / linkRefBytes));
+
+  // Reference scales, chosen so a stressed host reads near a pool's brim.
+  const SOCKET_Q_FULL = 512 * 1024; // recvq/sendq backlog bytes -> full socket pool
+  const SOFTNET_FULL = 200; //         softnet squeeze/s -> full kernel-RX pool
+  const KERN_TX_FULL = 100; //         tx-drop proxy /s -> full kernel-TX pool (est.)
+  const RING_FIFO_FULL = 100; //       fifo overruns/s -> ring pool pressure proxy
+  const DROP_FULL = 100; //            per-lane drop rate/s -> full overspill
+
+  // Socket lock (0): recvq -> RX pool, sendq -> TX pool; a backlogged-accept pile
+  // lifts both toward the brim (the socket-lock saturation signal).
+  const backlogLift = clampRatio((net.backloggedSockets ?? 0) / 200) * 0.6;
+  engine?._DoomPerf_SetNetLockFill?.(0, 0, netPm(Math.max((net.recvQueueBytes ?? 0) / SOCKET_Q_FULL, backlogLift)));
+  engine?._DoomPerf_SetNetLockFill?.(0, 1, netPm(Math.max((net.sendQueueBytes ?? 0) / SOCKET_Q_FULL, backlogLift)));
+  engine?._DoomPerf_SetNetLockDrops?.(0, 0, 0); // no cheap per-socket drop counter
+  engine?._DoomPerf_SetNetLockDrops?.(0, 1, 0);
+
+  // Kernel lock (1): RX = softnet backlog (squeeze), always present; TX = qdisc
+  // backlog when known, else a labelled tx-drop proxy. ?qdisc=off forces the proxy.
+  const qdiscKnown = net.qdiscBacklogBytes !== undefined && !qdiscDisabled;
+  engine?._DoomPerf_SetNetLockFill?.(1, 0, netPm((net.softnetSqueezePerSecond ?? 0) / SOFTNET_FULL));
+  engine?._DoomPerf_SetNetLockFill?.(1, 1, netPm(
+    qdiscKnown ? (net.qdiscBacklogBytes ?? 0) / SOCKET_Q_FULL : (net.dropsPerSecond ?? 0) / KERN_TX_FULL
+  ));
+  engine?._DoomPerf_SetNetLockDrops?.(1, 0, netPm((net.softnetDropsPerSecond ?? 0) / DROP_FULL));
+  engine?._DoomPerf_SetNetLockDrops?.(1, 1, netPm((net.dropsPerSecond ?? 0) / DROP_FULL));
+
+  // Ring lock (2): overruns (fifo) are always present; the pool fill is a pressure
+  // proxy off the overrun rate (no instantaneous ring occupancy lives in /proc). Ring
+  // depth (ethtool) gates only the BRIM line; ?ring=off forces the "unknown rim".
+  engine?._DoomPerf_SetNetRingDepthKnown?.(0, net.ringDepthRx !== undefined && !ringDisabled ? 1 : 0);
+  engine?._DoomPerf_SetNetRingDepthKnown?.(1, net.ringDepthTx !== undefined && !ringDisabled ? 1 : 0);
+  engine?._DoomPerf_SetNetLockFill?.(2, 0, netPm((net.rxFifoPerSecond ?? 0) / RING_FIFO_FULL));
+  engine?._DoomPerf_SetNetLockFill?.(2, 1, netPm((net.txFifoPerSecond ?? 0) / RING_FIFO_FULL));
+  engine?._DoomPerf_SetNetLockDrops?.(2, 0, netPm((net.rxFifoPerSecond ?? 0) / DROP_FULL));
+  engine?._DoomPerf_SetNetLockDrops?.(2, 1, netPm((net.txFifoPerSecond ?? 0) / DROP_FULL));
+
+  // Global + socket-alcove signals: the aggregate softnet squeeze, the socket accept
+  // backlog, and the SYN-RECV half-open count (the alcove's backlog column).
+  engine?._DoomPerf_SetNetSoftnetSqueeze?.(netPm((net.softnetSqueezePerSecond ?? 0) / SOFTNET_FULL));
+  engine?._DoomPerf_SetNetBacklogged?.(Math.max(0, Math.round(net.backloggedSockets ?? 0)));
+  engine?._DoomPerf_SetNetSynRecv?.(Math.max(0, Math.round(net.tcp?.synRecv ?? 0)));
 };
 
 // A scenario is a SELF-CONTAINED simulation: every resource is synthesized here,
@@ -920,9 +977,9 @@ const scenarioTelemetry = (
   };
   const simStorage: SimStorageTelemetry = diskMode ? storageSim : storageBase;
 
-  // Network: the network scenario drives the link to high utilization (mode 7 —
+  // Network: the network scenario drives the link to high utilization (mode 9 —
   // throughput pinned near line rate, but drops stay near zero) or full saturation
-  // (mode 8 — the link is maxed and packets start dropping while throughput
+  // (mode 10 — the link is maxed and packets start dropping while throughput
   // plateaus under contention); every other scenario shows `networkBase`, a quiet
   // simulated link (same across all non-network scenarios), never the host's real
   // stats. The fields map straight onto the /proc/net/dev terminal's columns
@@ -1003,6 +1060,18 @@ const scenarioTelemetry = (
           : [
               { local: "10.0.0.5:443", remote: "203.0.113.9:52344", state: "ESTAB", recvQueueBytes: 0, sendQueueBytes: 24 * 1024 },
             ],
+        // Canal lock signals: kernel softnet backlog + drops and ring fifo overruns
+        // blow out under saturation. A ring depth + qdisc backlog are supplied so the
+        // demo shows the ring BRIM and the kernel-TX qdisc pool rather than the
+        // tx-drop fallback; a 1 GbE link so the lanes scale to link rate.
+        softnetSqueezePerSecond: networkSaturated ? 150 + 70 * netWave : 6,
+        softnetDropsPerSecond: networkSaturated ? 80 + 50 * netWave : 0,
+        rxFifoPerSecond: networkSaturated ? 65 + 45 * netWave : 0,
+        txFifoPerSecond: networkSaturated ? 40 + 25 * netWave : 0,
+        ringDepthRx: 1024,
+        ringDepthTx: 1024,
+        qdiscBacklogBytes: networkSaturated ? (1.3 + 0.5 * netWave) * mib : 4 * 1024,
+        linkCapacityBps: 1_000_000_000,
   };
   // Calm baseline link for every non-network scenario: a lightly-used eth0 (~11%
   // of a 1 GbE link) with eth1 idle, a small healthy TCP census, empty queues. The
@@ -1041,6 +1110,13 @@ const scenarioTelemetry = (
     topSockets: [
       { local: "10.0.0.5:443", remote: "203.0.113.9:52344", state: "ESTAB", recvQueueBytes: 0, sendQueueBytes: 8 * 1024 },
     ],
+    // Quiet canal: no backlog, no overruns; the ring depth/qdisc are left unknown so
+    // the non-network sims exercise the honest fallbacks too.
+    softnetSqueezePerSecond: 0,
+    softnetDropsPerSecond: 0,
+    rxFifoPerSecond: 0,
+    txFifoPerSecond: 0,
+    linkCapacityBps: 1_000_000_000,
   };
   const simNetwork: SimNetworkTelemetry = networkMode ? networkSim : networkBase;
 

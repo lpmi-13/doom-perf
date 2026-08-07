@@ -57,6 +57,16 @@ int doomperf_oom_event = 0;
 int doomperf_oom_victim = 0;
 int doomperf_net_rx = 0;
 int doomperf_net_tx = 0;
+// Three-lock canal (NETWORK_CANAL_PLAN.md). Per lock (0/1/2 = socket/kernel/ring)
+// and lane (0/1 = rx/tx): the pool fill (queue occupancy, permille) and its overspill
+// drop rate. Plus the global softnet squeeze, the socket accept-backlog + SYN-RECV
+// counts, and whether the NIC ring depth is known per lane (gates the ring brim).
+int doomperf_net_lock_fill[3][2];
+int doomperf_net_lock_drops[3][2];
+int doomperf_net_softnet_squeeze = 0;
+int doomperf_net_backlogged = 0;
+int doomperf_net_synrecv = 0;
+int doomperf_net_ring_known[2] = {0, 0};
 int doomperf_sim_mode = 0;
 
 // Doom Perf: title wordmark "oo" live-load pulse (see doom_emscripten_compat.h).
@@ -424,6 +434,51 @@ void DoomPerf_SetNetworkTx(int permille)
     doomperf_net_tx = DoomPerf_ClampPermille(permille);
 }
 
+// Three-lock canal setters. The lock fills/drops are pushed for BOTH live and sim
+// (src/index.ts feeds them from the effective snapshot), so p_tick.c reads them
+// directly — no engine-side sim synthesis, unlike the orb density below.
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_SetNetLockFill(int level, int lane, int permille)
+{
+    if (level < 0 || level >= 3 || lane < 0 || lane >= 2)
+        return;
+    doomperf_net_lock_fill[level][lane] = DoomPerf_ClampPermille(permille);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_SetNetLockDrops(int level, int lane, int permille)
+{
+    if (level < 0 || level >= 3 || lane < 0 || lane >= 2)
+        return;
+    doomperf_net_lock_drops[level][lane] = DoomPerf_ClampPermille(permille);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_SetNetSoftnetSqueeze(int permille)
+{
+    doomperf_net_softnet_squeeze = DoomPerf_ClampPermille(permille);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_SetNetBacklogged(int count)
+{
+    doomperf_net_backlogged = (count < 0) ? 0 : count;
+}
+
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_SetNetSynRecv(int count)
+{
+    doomperf_net_synrecv = (count < 0) ? 0 : count;
+}
+
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_SetNetRingDepthKnown(int lane, int known)
+{
+    if (lane < 0 || lane >= 2)
+        return;
+    doomperf_net_ring_known[lane] = known ? 1 : 0;
+}
+
 static int DoomPerf_EffectiveCoreCountValue(void)
 {
     if (doomperf_sim_mode != 0)
@@ -650,9 +705,9 @@ static int DoomPerf_EffectiveNetworkValue(int live, int channel)
     {
     case 0: // live telemetry
         return live;
-    case 7: // SIM: HIGH NETWORK UTILIZATION (bursty mid-high)
+    case 9: // SIM: HIGH NETWORK UTILIZATION (bursty mid-high)
         return DoomPerf_NetSimThroughput(channel, 0);
-    case 8: // SIM: HIGH NETWORK SATURATION (bursty, biased higher)
+    case 10: // SIM: HIGH NETWORK SATURATION (bursty, biased higher)
         return DoomPerf_NetSimThroughput(channel, 200);
     default: // other wings' sims: a calm ambient stream
         return 110 + ((leveltime + channel * 90) % 40);

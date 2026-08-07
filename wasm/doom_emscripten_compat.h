@@ -180,12 +180,26 @@ extern int doomperf_net_tx;
 int DoomPerf_EffectiveNetworkRx(void);
 int DoomPerf_EffectiveNetworkTx(void);
 
-// Doom Perf data-source mode, chosen on the level-select menu:
-//   0 = live browser telemetry; 1/2 = simulated high CPU utilization/saturation
-//   (CPU room renderer); 3/4 = simulated high disk utilization/saturation
-//   (iostat terminal + media-pit latency gauges); 5/6 = simulated high memory
-//   utilization/saturation (free/vmstat/PSI terminal scenarios); 7/8 = simulated
-//   high network utilization/saturation (packet-grove density + net dev terminal).
+// Three-lock canal (NETWORK_CANAL_PLAN.md), read by DoomPerf_UpdateNetworkPackets in
+// p_tick.c. Per lock (0/1/2 = socket/kernel/ring) and lane (0/1 = rx/tx): the pool
+// fill (queue occupancy, permille -> pool floor height) and the overspill drop rate
+// (permille -> drain glow + overspill orbs). Plus the global softnet squeeze, the
+// socket accept-backlog + SYN-RECV counts, and whether the NIC ring depth is known
+// per lane (0 -> the ring pool draws the "unknown rim" state). All defined + set in
+// i_video_ems.c; pushed for both live and sim from src/index.ts.
+extern int doomperf_net_lock_fill[3][2];
+extern int doomperf_net_lock_drops[3][2];
+extern int doomperf_net_softnet_squeeze;
+extern int doomperf_net_backlogged;
+extern int doomperf_net_synrecv;
+extern int doomperf_net_ring_known[2];
+
+// Doom Perf data-source mode, chosen on the level-select menu (mode_e in m_menu.c):
+//   0 = live browser telemetry; 1/2 = high CPU utilization/saturation (CPU room);
+//   3/4/5 = high disk utilization / saturation-shallow-queue / saturation-deep-queue
+//   (iostat terminal + disk wing); 6/7/8 = high memory utilization / saturation-swap /
+//   saturation-no-swap (free/vmstat/PSI terminal + memory wing); 9/10 = high network
+//   utilization/saturation (three-lock canal fills + orb density + net dev terminal).
 extern int doomperf_sim_mode;
 
 // Doom Perf: human-readable scenario title for the active doomperf_sim_mode,

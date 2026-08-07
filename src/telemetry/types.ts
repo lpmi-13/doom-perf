@@ -182,6 +182,20 @@ export interface NetworkTelemetry extends ResourceTelemetry {
   recvQueueBytes?: number;
   backloggedSockets?: number;
   topSockets?: SocketTelemetry[];
+  // Three-lock canal signals (NETWORK_CANAL_PLAN.md). Ring-lock overruns (per-second
+  // /proc/net/dev fifo rates) and kernel-lock RX backlog (per-second softnet drops +
+  // time_squeeze) are always present. Ring depth (ethtool) and qdisc backlog (tc) are
+  // gated enrichments: `undefined` = unknown, which draws the honest fallback (ring
+  // brim omitted; kernel-TX uses a tx-drop proxy). ?ring=off / ?qdisc=off force it.
+  rxFifoPerSecond?: number;
+  txFifoPerSecond?: number;
+  softnetDropsPerSecond?: number;
+  softnetSqueezePerSecond?: number;
+  // Aggregate link capacity (bits/s); lets the lanes scale to % of the real link rate.
+  linkCapacityBps?: number;
+  ringDepthRx?: number;
+  ringDepthTx?: number;
+  qdiscBacklogBytes?: number;
 }
 
 // --- Simulation completeness guards -----------------------------------------
@@ -233,7 +247,12 @@ export type SimNetworkTelemetry = NetworkTelemetry &
   Required<Pick<NetworkTelemetry,
     | "rxBytesPerSecond" | "txBytesPerSecond"
     | "primaryInterface" | "interfaces" | "tcp"
-    | "recvQueueBytes" | "sendQueueBytes" | "backloggedSockets" | "topSockets">>;
+    | "recvQueueBytes" | "sendQueueBytes" | "backloggedSockets" | "topSockets"
+    // Canal lock inputs the engine feeds from the effective snapshot: requiring them
+    // here forces BOTH network sim branches to synthesize the full set, so the locks
+    // animate in demo (the way the disk IOPS/df terminals regressed when unpinned).
+    | "rxFifoPerSecond" | "txFifoPerSecond"
+    | "softnetDropsPerSecond" | "softnetSqueezePerSecond">>;
 
 export interface TelemetrySnapshot {
   status: TelemetryStatus;

@@ -193,13 +193,33 @@ type networkTelemetry struct {
 	// first) that feeds the `sar -n DEV`-style interface terminal.
 	PrimaryInterface string                  `json:"primaryInterface,omitempty"`
 	Interfaces       []netInterfaceTelemetry `json:"interfaces,omitempty"`
-	// TCP socket census + send/recv-queue backlog from /proc/net/tcp{,6}: the
-	// socket-state patch panel and the SendQ/RecvQ standpipe instruments.
+	// TCP socket census + send/recv-queue backlog from /proc/net/tcp{,6}: the socket
+	// lock's pools (recvq -> RX, sendq -> TX), the socket-lock saturation
+	// (backloggedSockets), and the SYN-RECV backlog column.
 	TCP               tcpStateTelemetry `json:"tcp"`
 	SendQueueBytes    uint64            `json:"sendQueueBytes"`
 	RecvQueueBytes    uint64            `json:"recvQueueBytes"`
 	BackloggedSockets int               `json:"backloggedSockets"`
 	TopSockets        []socketTelemetry `json:"topSockets,omitempty"`
+	// Three-lock canal signals (NETWORK_CANAL_PLAN.md). Ring lock overruns: the
+	// /proc/net/dev fifo columns as per-second rates. Kernel lock RX: softnet backlog
+	// from /proc/net/softnet_stat (per-CPU dropped + time_squeeze summed). All four
+	// are always-present + cheap; a missing softnet file seals its two to zero.
+	RxFifoPerSecond         float64 `json:"rxFifoPerSecond"`
+	TxFifoPerSecond         float64 `json:"txFifoPerSecond"`
+	SoftnetDropsPerSecond   float64 `json:"softnetDropsPerSecond"`
+	SoftnetSqueezePerSecond float64 `json:"softnetSqueezePerSecond"`
+	// Aggregate link capacity (bits/s, summed NIC speeds). Lets the packet lanes
+	// scale density to % of the REAL link rate rather than a fixed 1 Gbit reference,
+	// so a maxed slow NIC visibly saturates. 0 when no speed is exposed.
+	LinkCapacityBps float64 `json:"linkCapacityBps"`
+	// Gated enrichments (nil until the ethtool/tc probes land — the ring lock then
+	// draws no brim, and the kernel TX lock falls back to a tx-drop proxy). Nullable
+	// so the UI can tell "unknown" from "zero" and show the honest fallback; a
+	// ?ring=off / ?qdisc=off toggle forces the fallback for testing.
+	RingDepthRx       *uint64 `json:"ringDepthRx,omitempty"`
+	RingDepthTx       *uint64 `json:"ringDepthTx,omitempty"`
+	QdiscBacklogBytes *uint64 `json:"qdiscBacklogBytes,omitempty"`
 }
 
 type netInterfaceTelemetry struct {
@@ -289,9 +309,11 @@ type netCounter struct {
 	rxBytes  uint64
 	rxErrors uint64
 	rxDrops  uint64
+	rxFifo   uint64 // /proc/net/dev rx fifo col: NIC ring-buffer receive overruns
 	txBytes  uint64
 	txErrors uint64
 	txDrops  uint64
+	txFifo   uint64 // /proc/net/dev tx fifo col: NIC ring-buffer transmit overruns
 	speedBps float64
 }
 
@@ -301,7 +323,11 @@ type sampler struct {
 	cpuCores  map[int]cpuCounter
 	disk      map[string]diskCounter
 	net       map[string]netCounter
-	swapPages uint64
+	// /proc/net/softnet_stat cumulative totals (summed across CPUs): dropped packets
+	// and time_squeeze events, the kernel-lock RX backlog signal.
+	softnetDropped  uint64
+	softnetSqueezed uint64
+	swapPages       uint64
 	swapIn    uint64
 	swapOut   uint64
 	minFaults uint64
@@ -642,6 +668,12 @@ func (s *sampler) sample(now time.Time) (telemetry, error) {
 	network.RecvQueueBytes = tcp.recvQueue
 	network.BackloggedSockets = tcp.backlogged
 	network.TopSockets = tcp.top
+	// Kernel-lock RX backlog: softnet drops + squeeze as per-second rates. Ring depth
+	// (ethtool) and qdisc backlog (tc) are not probed yet, so their nullable fields
+	// stay nil and the ring/kernel-TX locks show their honest fallbacks downstream.
+	softnetDropped, softnetSqueezed := readSoftnet()
+	network.SoftnetDropsPerSecond = counterRate(softnetDropped, s.softnetDropped, elapsed)
+	network.SoftnetSqueezePerSecond = counterRate(softnetSqueezed, s.softnetSqueezed, elapsed)
 
 	s.lastAt = now
 	s.cpu = cpu
@@ -662,6 +694,8 @@ func (s *sampler) sample(now time.Time) (telemetry, error) {
 	s.intr = intr
 	s.disk = disks
 	s.net = nets
+	s.softnetDropped = softnetDropped
+	s.softnetSqueezed = softnetSqueezed
 
 	worst := maxFloat(
 		resourceSeverity(cpuUtil, cpuSaturation, 0),
@@ -1343,6 +1377,8 @@ func reduceNetwork(nets []netCounter, previous map[string]netCounter, elapsed fl
 		result.TXBytesPerSecond += tx
 		result.DropsPerSecond += counterRate(net.rxDrops+net.txDrops, old.rxDrops+old.txDrops, elapsed)
 		result.ErrorsPerSecond += counterRate(net.rxErrors+net.txErrors, old.rxErrors+old.txErrors, elapsed)
+		result.RxFifoPerSecond += counterRate(net.rxFifo, old.rxFifo, elapsed)
+		result.TxFifoPerSecond += counterRate(net.txFifo, old.txFifo, elapsed)
 		result.Interfaces = append(result.Interfaces, netInterfaceTelemetry{
 			Name:             net.name,
 			RXBytesPerSecond: rx,
@@ -1368,6 +1404,7 @@ func reduceNetwork(nets []netCounter, previous map[string]netCounter, elapsed fl
 		}
 	}
 	result.Interfaces = kept
+	result.LinkCapacityBps = capacity
 	if capacity > 0 {
 		result.Utilization = clamp((result.RXBytesPerSecond + result.TXBytesPerSecond) * 8 / capacity)
 	}
@@ -1416,13 +1453,42 @@ func readNetCounters() ([]netCounter, error) {
 			rxBytes:  values[0],
 			rxErrors: values[2],
 			rxDrops:  values[3],
+			rxFifo:   values[4],
 			txBytes:  values[8],
 			txErrors: values[10],
 			txDrops:  values[11],
+			txFifo:   values[12],
 			speedBps: interfaceSpeed(name),
 		})
 	}
 	return nets, scanner.Err()
+}
+
+// readSoftnet sums /proc/net/softnet_stat across CPUs. Each row is one CPU's
+// counters in hex; column [1] is packets dropped (backlog queue overflow) and column
+// [2] is time_squeeze (the softirq exhausted its budget with work still pending) —
+// together the kernel-side receive backlog pressure. A missing file (rare, e.g. a
+// stripped container) yields zeros so the feature simply seals dry.
+func readSoftnet() (dropped, squeezed uint64) {
+	file, err := os.Open("/proc/net/softnet_stat")
+	if err != nil {
+		return 0, 0
+	}
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) < 3 {
+			continue
+		}
+		if d, err := strconv.ParseUint(fields[1], 16, 64); err == nil {
+			dropped += d
+		}
+		if s, err := strconv.ParseUint(fields[2], 16, 64); err == nil {
+			squeezed += s
+		}
+	}
+	return dropped, squeezed
 }
 
 func interfaceSpeed(name string) float64 {

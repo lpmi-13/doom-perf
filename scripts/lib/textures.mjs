@@ -260,6 +260,23 @@ export const buildWallSignPatch = (text) => {
   return buildPatch(pixels, width, height);
 };
 
+// Two-line wall placard (same 256x128 framed panel): each line is centred and drawn
+// large (scale 4), so a two-word label like "KERNEL" / "BUFFER" stays readable where a
+// single 13-char line would auto-shrink to a squint. `color` themes the text.
+export const buildWallSign2Patch = (line1, line2, color = signTextColor) => {
+  const { width, height } = wallSignSize;
+  const pixels = new Uint8Array(width * height);
+  pixels.fill(96);
+  drawRect(pixels, width, height, 40, 10, width - 40, height - 10, 0);
+  const scale = 4;
+  const lineH = 7 * scale;
+  const gap = 10;
+  const top = Math.floor((height - (lineH * 2 + gap)) / 2);
+  drawCenteredText(pixels, width, height, line1, top, scale, color, 48, width - 48);
+  drawCenteredText(pixels, width, height, line2, top + lineH + gap, scale, color, 48, width - 48);
+  return buildPatch(pixels, width, height);
+};
+
 export const buildTerminalPatch = ({ lines }) => {
   const { width, height } = terminalTextureSize;
   const screenTop = 8;

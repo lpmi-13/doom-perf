@@ -112,10 +112,19 @@ export const reserved = {
     ],
   },
   network: {
+    // Three-lock canal (NETWORK_CANAL_PLAN.md). Per-lock/lane pools drive their own
+    // floor+light from live fills; the sub-allocations within 700-759 are:
+    //   700-705 lock pools  (700+level*2+lane; level 0/1/2 = socket/kernel/ring,
+    //           lane 0/1 = rx/tx) -- floor rises with queue fill
+    //   710-712 lock gates  (710+level) -- congestion light brightens with saturation
+    //   720-725 side drains (720+level*2+lane) -- overspill basin per pool
+    //   730     SYN-RECV backlog column (socket-lock alcove)
+    // Lights 124-128 stay reserved (gate glow is driven by TAG, not light-sentinel
+    // match, so no exact-value sentinel is spent). Line tags 760-799 currently unused.
     sectorTags: [700, 759],
     lineTags: [760, 799],
-    lights: [124, 128], // reserved sentinels (unused until live lane display)
-    namePrefix: "DPN", // DPNET (label) + DPN... for lanes/choke/drop/error art
+    lights: [124, 128], // reserved sentinels (unused: gate glow driven by tag)
+    namePrefix: "DPN", // DPNET (label) + DPN... for lock pools/gates/drains/signs
     // Packet-orb sprites streaming the two grove lanes (engine network-packets
     // patch). Unlike textures/flats, sprite LUMPS must reuse existing IWAD sprite
     // NAMES + frame letters (the DPN prefix can't apply) — see
