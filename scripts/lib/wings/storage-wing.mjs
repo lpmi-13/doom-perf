@@ -162,6 +162,14 @@ const schedLabel = { texture: tex("QLSCH"), patch: tex("PQLSC"), lines: ["SCHEDU
 // Latency-causeway lane placards (two stacked words each, gold like the wing).
 const readAwaitLabel = { texture: tex("LRAWT"), patch: tex("PLRAW"), lines: ["READ", "AWAIT"], color: 231, scale: 3 };
 const writeAwaitLabel = { texture: tex("LWAWT"), patch: tex("PLWAW"), lines: ["WRITE", "AWAIT"], color: 231, scale: 3 };
+// Placards naming the two instrument halls that otherwise carry only a display +
+// read-point (the queue/latency halls already name themselves on their walls): the
+// disk-usage CISTERN ("DISK / USAGE") and the per-device RAIN-GAUGE bank ("IOPS /
+// BY DEVICE"). Same two-stacked-word placard, gold like the rest of the wing. Each
+// rides a dedicated 256-wide, 128-tall label bay (cist-label / iops-label) so the
+// 256 placard maps once, centred.
+const usageLabel = { texture: tex("USG"), patch: tex("PUSG"), lines: ["DISK", "USAGE"], color: 231, scale: 3 };
+const iopsLabel = { texture: tex("IOPD"), patch: tex("PIOPD"), lines: ["IOPS", "BY DEVICE"], color: 231, scale: 2 };
 const signs = {
   read: { texture: tex("READ"), patch: tex("PRD"), text: "READ" },
   write: { texture: tex("WRITE"), patch: tex("PWR"), text: "WRITE" },
@@ -594,6 +602,7 @@ const build = (ctx) => {
   addWingEntrance(ctx);
 
   const backWall = localSideToWorld(direction, "top"); // far/deep wall (local +v)
+  const frontWall = localSideToWorld(direction, "bottom"); // near wall (local -v) = cistern df screen
   const leftWall = localSideToWorld(direction, "left"); // queue chamber back wall (local -u)
   const rightWall = localSideToWorld(direction, "right"); // causeway dead-end wall (local +u)
 
@@ -927,23 +936,44 @@ const build = (ctx) => {
     ceiling: CIST_CEIL,
   });
   const cistRim = { ...cistWalk, floor: CIST_FLOOR, ceiling: CIST_CEIL };
-  // Open chamber floor: from the throat up to the back-wall terminal strip, and out
-  // to the +u display inset (cistDisc.u1). The +u strip beside it is tiled below.
-  areaRect(direction, "cist-floor", { u1: cistChamber.u1, v1: cistChamber.v1, u2: cistDisc.u1, v2: cistTerm.v1 }, cistRim);
-  // Back (+v) wall: a walkable flank, the df read-point TERMINAL recess (centred, its
-  // screen on the far wall), then a flank -- the sunburst is NOT here, it's on +u.
-  areaRect(direction, "cist-term-l", { u1: cistChamber.u1, v1: cistTerm.v1, u2: cistTerm.u1, v2: cistTerm.v2 }, cistRim);
-  areaRect(direction, "cist-terminal", cistTerm, {
+  // Terminal and placard are SWAPPED off the raw layout: the DISK USAGE placard rides
+  // the +v BACK wall -- the one the player sees head-on approaching up the spiral --
+  // and the df read-point TERMINAL moves to the -v FRONT wall (walked up to after
+  // entering). Front strip (v cistChamber.v1..+16): terminal recess centred, flanked.
+  const CIST_FRONT_V2 = cistChamber.v1 + 16; //                    929: front terminal strip depth
+  areaRect(direction, "cist-term-l", { u1: cistChamber.u1, v1: cistChamber.v1, u2: cistTerm.u1, v2: CIST_FRONT_V2 }, cistRim);
+  areaRect(direction, "cist-terminal", { u1: cistTerm.u1, v1: cistChamber.v1, u2: cistTerm.u2, v2: CIST_FRONT_V2 }, {
     ...cistWalk,
     kind: "terminal",
     floor: CIST_FLOOR + 16,
     ceiling: CIST_FLOOR + 16 + terminalTextureSize.height,
     light: 200,
-    labelSide: backWall, // far wall (local +v) = the df screen
+    labelSide: frontWall, // near wall (local -v) = the df screen
     labelTexture: usageScreen.texture,
     controlPanel: true,
   });
-  areaRect(direction, "cist-term-r", { u1: cistTerm.u2, v1: cistTerm.v1, u2: cistChamber.u2, v2: cistTerm.v2 }, cistRim);
+  areaRect(direction, "cist-term-r", { u1: cistTerm.u2, v1: cistChamber.v1, u2: cistDisc.u1, v2: CIST_FRONT_V2 }, cistRim);
+  // Open chamber floor: from the front terminal strip back to the +v label strip, and
+  // out to the +u display inset (cistDisc.u1). The +u strip beside it is tiled below.
+  areaRect(direction, "cist-floor", { u1: cistChamber.u1, v1: CIST_FRONT_V2, u2: cistDisc.u1, v2: cistTerm.v1 }, cistRim);
+  // Back (+v) wall carries the DISK USAGE placard on the approach-visible wall. A
+  // shallow lowered-ceiling valance drops its face to exactly 128 tall (48..176) so
+  // the 128-tall placard maps once (a 160-tall wall would tile it,
+  // [[doom-wall-texture-128-tiling]]); its centre 256 is the label bay (256 wide ->
+  // placard maps 1:1, centred), flanked by two plain fillers out to the disc block.
+  const CIST_LABEL_CEIL = CIST_FLOOR + queueLabelSize.height; //   176
+  const CIST_LABEL_CU = Math.round((cistChamber.u1 + cistChamber.u2) / 2); // 728: back-wall centre
+  const CIST_LABEL_U1 = CIST_LABEL_CU - queueLabelSize.width / 2; // 600
+  const CIST_LABEL_U2 = CIST_LABEL_CU + queueLabelSize.width / 2; // 856
+  const cistBand = { ...cistRim, ceiling: CIST_LABEL_CEIL };
+  areaRect(direction, "cist-label-l", { u1: cistChamber.u1, v1: cistTerm.v1, u2: CIST_LABEL_U1, v2: cistChamber.v2 }, cistBand);
+  areaRect(direction, "cist-label", { u1: CIST_LABEL_U1, v1: cistTerm.v1, u2: CIST_LABEL_U2, v2: cistChamber.v2 }, {
+    ...cistBand,
+    labelEdge: 2, // high-v (+v back) wall
+    labelTexture: usageLabel.texture,
+    labelWidth: queueLabelSize.width,
+  });
+  areaRect(direction, "cist-label-r", { u1: CIST_LABEL_U2, v1: cistTerm.v1, u2: cistChamber.u2, v2: cistChamber.v2 }, cistBand);
   // Sunburst display block on the +u SIDE wall: a SOLID block (floor == ceiling, like
   // the spindle drum) whose room-facing (-u) lower texture (floor 48 -> block top 176
   // = a 128-tall span matching the 128-tall DPDISC texture 1:1) carries the disk-usage
@@ -982,8 +1012,32 @@ const build = (ctx) => {
     ceiling: IOPS_CEIL,
   });
   const iopsRim = { ...iopsWalk, floor: IOPS_FLOOR, ceiling: IOPS_CEIL };
-  // Front walkway: the player enters here and looks across the gauge row.
-  areaRect(direction, "iops-front", { u1: iopsChamber.u1, v1: iopsChamber.v1, u2: iopsChamber.u2, v2: IOPS_TUBE_V1 }, iopsRim);
+  // The -v wall OPPOSITE the terminal -- the long wall the gauge row stands in front
+  // of -- carries the IOPS BY DEVICE placard, pushed to the +u (entrance-side) end,
+  // which reads as the LEFT end of the wall, so it's seen without walking into the
+  // room, with a bit of margin off the corner. A shallow lowered-ceiling valance along
+  // the front of that wall drops its face to exactly 128 tall (168..296) so the 128-tall
+  // placard maps once ([[doom-wall-texture-128-tiling]]); the label bay (256 wide ->
+  // placard maps 1:1) sits margin-in from the +u end, with the long remainder filling
+  // out toward the -u end.
+  const IOPS_LABEL_DEPTH = 16;
+  const IOPS_LABEL_MARGIN = 40; // gap between the placard and the +u corner
+  const IOPS_LABEL_V2 = iopsChamber.v1 + IOPS_LABEL_DEPTH; // 1233: valance strip depth
+  const IOPS_LABEL_CEIL = IOPS_FLOOR + queueLabelSize.height; // 296
+  const IOPS_LABEL_U2 = iopsChamber.u2 - IOPS_LABEL_MARGIN; // -598: label bay +u edge (margin off the corner)
+  const IOPS_LABEL_U1 = IOPS_LABEL_U2 - queueLabelSize.width; // -854
+  const iopsBand = { ...iopsRim, ceiling: IOPS_LABEL_CEIL };
+  // Front-wall label valance (v iopsChamber.v1..+16): filler | IOPS BY DEVICE | margin filler.
+  areaRect(direction, "iops-label-l", { u1: iopsChamber.u1, v1: iopsChamber.v1, u2: IOPS_LABEL_U1, v2: IOPS_LABEL_V2 }, iopsBand);
+  areaRect(direction, "iops-label", { u1: IOPS_LABEL_U1, v1: iopsChamber.v1, u2: IOPS_LABEL_U2, v2: IOPS_LABEL_V2 }, {
+    ...iopsBand,
+    labelEdge: 0, // low-v (-v) wall opposite the terminal
+    labelTexture: iopsLabel.texture,
+    labelWidth: queueLabelSize.width,
+  });
+  areaRect(direction, "iops-label-r", { u1: IOPS_LABEL_U2, v1: iopsChamber.v1, u2: iopsChamber.u2, v2: IOPS_LABEL_V2 }, iopsBand);
+  // Front walkway (behind the label valance): the player looks across the gauge row.
+  areaRect(direction, "iops-front", { u1: iopsChamber.u1, v1: IOPS_LABEL_V2, u2: iopsChamber.u2, v2: IOPS_TUBE_V1 }, iopsRim);
   // The gauge band: five raised light-tube gauges with a walkway gap before, between
   // and after each. Each tube is a raised pedestal (floor +32 = un-climbable pillar)
   // under a bright downlight-panel ceiling; its riser wears a tech-tube base and its
@@ -1079,8 +1133,9 @@ const textures = [
     height: wallSignSize.height,
     build: () => buildWallSignPatch(sign.text),
   })),
-  // The IO-queue tier placards + the two latency-causeway lane placards.
-  ...[deviceLabel, schedLabel, readAwaitLabel, writeAwaitLabel].map((s) => ({
+  // The IO-queue tier placards, the two latency-causeway lane placards, and the
+  // disk-usage / per-device IOPS hall placards.
+  ...[deviceLabel, schedLabel, readAwaitLabel, writeAwaitLabel, usageLabel, iopsLabel].map((s) => ({
     texture: s.texture,
     patch: s.patch,
     width: queueLabelSize.width,
@@ -1159,9 +1214,10 @@ const terminals = ({ terminalHalfWidth }) => [
   // (The aggregate `iostat -x 1 2` read-point that used to ride the THROUGHPUT hall's
   // dead-end wall was removed — that wall is now tube-panel decoration; its detail is
   // covered by the AWAIT / IO-QUEUE / IOPS / df read-points below.)
-  // df read-point: the restored terminal screen on the back wall (the sunburst sits
-  // to its right as a separate visual instrument).
-  { sign: "storage-usage", segments: [segment([CIST_TERM_CX - terminalHalfWidth, CIST_TERM_V], [CIST_TERM_CX + terminalHalfWidth, CIST_TERM_V])] },
+  // df read-point: the terminal screen now on the FRONT (-v) wall (swapped with the
+  // DISK USAGE placard, which took the approach-visible back wall). cistChamber.v1 is
+  // the front wall; the sunburst sits on the +u side wall as a separate instrument.
+  { sign: "storage-usage", segments: [segment([CIST_TERM_CX - terminalHalfWidth, cistChamber.v1], [CIST_TERM_CX + terminalHalfWidth, cistChamber.v1])] },
   { sign: "storage-iops", segments: [segment([IOPS_TERM_CX - terminalHalfWidth, IOPS_TERM_V], [IOPS_TERM_CX + terminalHalfWidth, IOPS_TERM_V])] },
   // IO QUEUE read-point: the screen rides the queue chamber's back (-u) wall, so it
   // runs terminalHalfWidth either side of the chamber's v-centre (not of u).
