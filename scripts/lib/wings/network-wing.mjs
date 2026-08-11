@@ -88,21 +88,24 @@ const levelSigns = [
 
 const netInscription = makeInscription(tex("FN"), "CURRENT", "west", 2);
 
-// Bus-bar bed flats: a DARK GRAPHITE steel bed (so the bright packet-orbs separate hard
-// from the floor they ride on -- the contrast fix) with lane identity kept in a single
+// Bus-bar bed flats: a DEEP BLUE conductor bed with lane identity kept in a single
 // bright ENERGISED RAIL stripe (RX cyan, TX violet). The engine tempers the BED colour
-// with the stage's live queue fill -- graphite (cool) -> amber -> hot red -- so a
-// saturated bus visibly runs hot, while the rail stripe keeps RX/TX identity in every
-// state (Phase 2, DoomPerf_UpdateNetworkLocks swaps floorpic). Plus a near-black
-// ground/earth grate for the discharge basin at each transformer.
-// [[doom-texture-power-of-two]] [[memory-reclaim-sluice]]
+// with the stage's live queue fill -- deep blue (cool) -> electric blue -> white-hot blue
+// -- so a saturated bus visibly runs at full charge. This is an ELECTRICAL-INTENSITY ramp
+// (brightness climbs within the blue family), not the old heat ramp (graphite->amber->red)
+// -- the wing standardised on blue to match its entryway/conductor palette. The idle bed
+// stays dark enough that the bright packet-orbs still separate from the floor they ride on
+// (the contrast fix), and the rail stripe keeps RX/TX identity. Plus a near-black
+// ground/earth grate for the discharge basin at each transformer. The engine swaps floorpic
+// among the cool/warm/hot tiers BY NAME (Phase 2, DoomPerf_UpdateNetworkLocks) so recolouring
+// here needs no engine rebuild. [[doom-texture-power-of-two]] [[memory-reclaim-sluice]]
 const busFlatNames = {
   rx: { cool: tex("RXL"), amber: tex("RXA"), hot: tex("RXR") },
   tx: { cool: tex("TXL"), amber: tex("TXA"), hot: tex("TXR") },
 };
-const BUS_GRAPHITE = 107; // (59,59,59)  dark steel conductor bed (idle / cool)
-const BUS_AMBER = 222; //    (183,71,0)   warming under load
-const BUS_HOT = 184; //      (155,0,0)    running hot / saturated (alarm)
+const BUS_COOL = 206; // (0,0,107)     deep blue conductor bed (idle / cool)
+const BUS_WARM = 196; // (115,115,255) electric blue, charging under load
+const BUS_HOT = 192; //  (231,231,255) white-hot blue, running saturated (alarm)
 const buildBusFlat = ({ name, base, rail }) => {
   const size = 64;
   const px = new Uint8Array(size * size).fill(base);
@@ -128,14 +131,52 @@ const buildGroundFlat = () => {
   }
   return lump(groundFlatName, Buffer.from(px));
 };
+
+// Authored BLUE service-lit ceiling flat (DPNCEIL) -- replaces freedoom's TLITE6_5, whose
+// four RED lamps were the wing's dominant warm cue. A dark charcoal panel grid (a 2x2
+// ceiling panel, seamed with a darker cross) carrying four recessed BLUE lamps, one per
+// panel, each a radial bloom from a bright core down to a deep-blue halo. Cool-lit to echo
+// the LITEBLU conductor spine + wall light-strips so the whole hall reads blue overhead.
+// Tiles flush: seams at 0/32, lamps centred in each 32-panel (16,48), bloom radius < 16 so
+// no lamp crosses a seam or its neighbour. [[riser-texture-and-light-rules]]
+const ceilingFlatName = tex("CEIL"); // DPNCEIL (referenced as `ceiling` in resourceConfigs.network)
+const buildCeilingFlat = () => {
+  const size = 64;
+  const px = new Uint8Array(size * size).fill(111); // (35,35,35) charcoal ceiling panel
+  const put = (x, y, color) => {
+    if (x >= 0 && x < size && y >= 0 && y < size) px[y * size + x] = color;
+  };
+  // Panel seams: a darker cross every 32 units -> a flush 2x2 ceiling-panel grid.
+  for (let k = 0; k < size; k += 1) {
+    for (const s of [0, 32]) { put(s, k, 6); put(k, s, 6); } // (19,19,19) seam
+  }
+  // Four recessed blue lamps, one per panel; radial bloom bright core -> deep-blue halo.
+  const lampColor = (d) =>
+    d <= 2.0 ? 192 : //  (231,231,255) bright core
+    d <= 3.5 ? 194 : //  (171,171,255)
+    d <= 5.0 ? 196 : //  (115,115,255) electric blue
+    d <= 6.5 ? 199 : //  (27,27,255)
+    d <= 8.0 ? 204 : //  (0,0,155)
+    d <= 8.8 ? 206 : //  (0,0,107) dark halo
+    -1;
+  for (const [cx, cy] of [[16, 16], [48, 16], [16, 48], [48, 48]]) {
+    for (let y = cy - 9; y <= cy + 9; y += 1) {
+      for (let x = cx - 9; x <= cx + 9; x += 1) {
+        const color = lampColor(Math.hypot(x - cx, y - cy));
+        if (color >= 0) put(x, y, color);
+      }
+    }
+  }
+  return lump(ceilingFlatName, Buffer.from(px));
+};
 const busFlats = [
   // RX rail: bright cyan (83,83,255); TX rail: bright violet (207,0,207). Three temper
   // tiers per lane (cool/amber/hot), the sector starts on `cool` and the engine swaps.
-  buildBusFlat({ name: busFlatNames.rx.cool, base: BUS_GRAPHITE, rail: 197 }),
-  buildBusFlat({ name: busFlatNames.rx.amber, base: BUS_AMBER, rail: 197 }),
+  buildBusFlat({ name: busFlatNames.rx.cool, base: BUS_COOL, rail: 197 }),
+  buildBusFlat({ name: busFlatNames.rx.amber, base: BUS_WARM, rail: 197 }),
   buildBusFlat({ name: busFlatNames.rx.hot, base: BUS_HOT, rail: 197 }),
-  buildBusFlat({ name: busFlatNames.tx.cool, base: BUS_GRAPHITE, rail: 252 }),
-  buildBusFlat({ name: busFlatNames.tx.amber, base: BUS_AMBER, rail: 252 }),
+  buildBusFlat({ name: busFlatNames.tx.cool, base: BUS_COOL, rail: 252 }),
+  buildBusFlat({ name: busFlatNames.tx.amber, base: BUS_WARM, rail: 252 }),
   buildBusFlat({ name: busFlatNames.tx.hot, base: BUS_HOT, rail: 252 }),
   buildGroundFlat(),
 ];
@@ -409,7 +450,7 @@ const textures = [
   })),
 ];
 
-const flats = [...netInscription.flats, ...busFlats];
+const flats = [...netInscription.flats, ...busFlats, buildCeilingFlat()];
 
 // Packet-orb ramps (core -> rim). The core is a whiter double-spark and the rim stops
 // BRIGHTER than the graphite bus bed it rides on, so the packet reads as a hot electrical

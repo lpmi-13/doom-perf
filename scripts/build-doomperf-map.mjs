@@ -88,15 +88,18 @@ const resourceConfigs = {
     labelPatch: "DPLNET",
     labelColor: 200,
     labelStyle: "network",
-    // Doom Perf: electrical SUBSTATION kit (NETWORK_POWERPLANT_PLAN.md). Cool dark
-    // riveted steel (METAL2) + SILVER1 panel accent, a cool graphite grate floor
-    // (FCGRATE2, not disk's warm FLOOR0_3) and a dark service-lit vent ceiling
-    // (TLITE6_5). Purges the old warm/blue TEKWALL1/COMPSPAN/FLOOR1_1/CEIL4_3 so no
-    // material is shared with the cpu/memory/storage wings.
-    wall: "METAL2",
+    // Doom Perf: electrical SUBSTATION kit (NETWORK_POWERPLANT_PLAN.md), themed BLUE to
+    // match the wing's own entryway/conductor palette (standardised on the LITEBLU /
+    // COMPTILE blue already present inside). Blue circuit-tile walls (COMPTILE -- the same
+    // tile the NETWORK threshold wears) + SILVER1 panel accent, a cool graphite grate floor
+    // (FCGRATE2, not disk's warm FLOOR0_3) and an authored blue service-lit ceiling
+    // (DPNCEIL, built in network-wing.mjs -- replaces freedoom's red-lamped TLITE6_5).
+    // METAL2 steel is retained only on the bus housings (BUS_HOUSING) so the big wall faces
+    // read blue, not brown. Still shares no material with the cpu/memory/storage wings.
+    wall: "COMPTILE",
     accent: "SILVER1",
     floor: "FCGRATE2",
-    ceiling: "TLITE6_5",
+    ceiling: "DPNCEIL",
   },
 };
 
@@ -123,9 +126,11 @@ const outwardSide = {
 const sideResource = {
   top: "cpu", // north (CPU door) matches the CPU wing wall (REDWALL1)
   right: "memory", // east (MEMORY door) unchanged
-  bottom: "network", // south (DISK door) wears the NETWORK wall
-  left: "COMPTILE", // west (NETWORK door) keeps the blue-ish computer-tile detail,
-  // decoupled from the CPU wing now that CPU's own wall is reactor-red
+  bottom: "METAL2", // south (DISK door): literal steel, keeping the hub's old NETWORK-wall
+  //                    look now that the network WING interior wall is blue COMPTILE (else
+  //                    resolving "network" would drag COMPTILE onto this hub wall too)
+  left: "COMPTILE", // west (NETWORK door) keeps the blue computer-tile detail -- now also
+  // the wing's own interior wall, so entryway and interior read as one blue material
 };
 
 // The geometry builder owns the sectors/things state and the WAD compile
