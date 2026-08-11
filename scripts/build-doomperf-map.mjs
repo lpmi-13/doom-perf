@@ -88,10 +88,15 @@ const resourceConfigs = {
     labelPatch: "DPLNET",
     labelColor: 200,
     labelStyle: "network",
-    wall: "TEKWALL1",
-    accent: "COMPSPAN",
-    floor: "FLOOR1_1",
-    ceiling: "CEIL4_3",
+    // Doom Perf: electrical SUBSTATION kit (NETWORK_POWERPLANT_PLAN.md). Cool dark
+    // riveted steel (METAL2) + SILVER1 panel accent, a cool graphite grate floor
+    // (FCGRATE2, not disk's warm FLOOR0_3) and a dark service-lit vent ceiling
+    // (TLITE6_5). Purges the old warm/blue TEKWALL1/COMPSPAN/FLOOR1_1/CEIL4_3 so no
+    // material is shared with the cpu/memory/storage wings.
+    wall: "METAL2",
+    accent: "SILVER1",
+    floor: "FCGRATE2",
+    ceiling: "TLITE6_5",
   },
 };
 

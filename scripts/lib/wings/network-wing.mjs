@@ -1,24 +1,28 @@
-// Network wing (west): a long DESCENDING HALL carrying the packet stream down the
-// network stack. The player walks STAIRS down either side of the hall, railed off
-// (they cannot step into the middle). Down the centre run TWO TROUGH CHANNELS -- deep
-// contained water channels, RX (left) and TX (right), split by a raised median wall --
-// that carry the packet-orbs the length of the hall and drop them over a CLIFF
-// (waterfall) at each of the two lock boundaries and again into the terminal plaza.
+// Network wing (west): an electrical SUBSTATION carrying the packet stream down the
+// network stack as CURRENT through the gear. The player walks CATWALK stairs down
+// either side of a long descending hall, railed off the live equipment in the middle.
+// Down the centre run TWO BUS BARS -- deep contained conductor channels, RX (left) and
+// TX (right), split by a raised INSULATOR SPINE -- that carry the packet-orbs the
+// length of the hall and drop them through a STEP-DOWN TRANSFORMER at each of the two
+// switchyard-stage boundaries and again into the switchyard head.
 //
-// The three flat levels are the three real queue levels a packet crosses -- socket /
-// OS queue -> kernel buffer -> device ring buffer. Each channel's floor RISES with its
-// lock's live queue fill (the water level); the orbs ride down the channel above it
-// and tumble each cliff. The player is kept out of the channels by an impassable
-// see-through rail (the trench sectors are `blockEdge`: two-sided so you look down
-// into them, blocking so you can't fall in and the NOCLIP orbs pass freely). The deep
-// back wall carries the /proc/net/dev IFACE DEV terminal (the wire). NETWORK_CANAL_PLAN.md.
+// The three flat levels are the three real queue stages a packet crosses -- socket /
+// OS queue -> kernel buffer -> device ring buffer. Each bus's floor RISES with its
+// stage's live queue fill (the charge level); the orbs ride down the bus above it and
+// tumble each transformer. The player is kept off the live gear by an impassable
+// see-through rail (the bus trenches are `blockEdge`: two-sided so you look down into
+// them, blocking so you can't fall in and the NOCLIP orbs pass freely). The deep back
+// wall carries the /proc/net/dev IFACE DEV terminal (the grid tie). This is a SKIN over
+// the three-lock canal geometry -- NETWORK_POWERPLANT_PLAN.md supersedes
+// NETWORK_CANAL_PLAN.md: the geometry and every engine coord are retained, only the
+// palette/materials/lighting/vocabulary change.
 //
 // This is the network wing's independent editing seam. build() lays out only the
-// geometry; screens via `textures`, channel lane flats + TRAFFIC inscription + drain
-// flat via `flats`, packet-orb sprites via `sprites`, read-points via `terminals`. The
-// channel/orb ANIMATION lives in the engine (p_tick.c, fed by the DoomPerf_SetNetLock*
-// setters); the world-centres + walk levels + WATERFALL lines below are mirrored there
-// and MUST stay in sync (the RING_PITCH discipline). See [[map-builder-architecture]],
+// geometry; screens via `textures`, bus lane flats + CURRENT inscription + ground flat
+// via `flats`, packet-orb sprites via `sprites`, read-points via `terminals`. The
+// bus/orb ANIMATION lives in the engine (p_tick.c, fed by the DoomPerf_SetNetLock*
+// setters); the world-centres + walk levels + TRANSFORMER lines below are mirrored
+// there and MUST stay in sync (the RING_PITCH discipline). See [[map-builder-architecture]],
 // [[telemetry-terminal-seam]], [[wing-terminal-segment-rotation]],
 // [[pwad-sprite-override-constraint]], [[doomperf-engine-global-externs]].
 import { addWingEntrance } from "./common.mjs";
@@ -61,20 +65,45 @@ const tex = (suffix) => wingName("network", suffix);
 const screen = { texture: tex("TERM"), patch: tex("PTRM"), lines: ["NETWORK", "IFACE DEV"] };
 const socketsScreen = { texture: tex("STRM"), patch: tex("PSTR"), lines: ["SS -S", "TCP STATES"] };
 
-// Level placards: a two-line wall sign naming each level's queue -- socket/OS queue,
-// kernel buffer, device ring buffer -- mounted in a niche on the outer walls so the
-// player reads which buffer they're descending through. Indexed by level (0/1/2).
+// Stage placards: a two-line wall sign naming each switchyard stage's queue, direction-
+// specific (RX bus on the LEFT wall u<0, TX bus on the RIGHT wall u>0), every label a
+// real observable you'd read in a shell. Indexed [level][lane]; lane 0 = RX, 1 = TX.
+//   socket : ss / /proc/net/tcp (sk_rcvbuf / sk_sndbuf)
+//   kernel : /proc/net/softnet_stat, tc -s qdisc
+//   device : ethtool -g, /proc/net/dev fifo
 const levelSigns = [
-  { texture: tex("SGOS"), patch: tex("PGOS"), l1: "OS", l2: "BUFFER" },
-  { texture: tex("SGKR"), patch: tex("PGKR"), l1: "KERNEL", l2: "BUFFER" },
-  { texture: tex("SGDV"), patch: tex("PGDV"), l1: "DEVICE", l2: "BUFFER" },
+  [
+    { texture: tex("SG0R"), patch: tex("PG0R"), l1: "SOCKET", l2: "RECV-Q" },
+    { texture: tex("SG0T"), patch: tex("PG0T"), l1: "SOCKET", l2: "SEND-Q" },
+  ],
+  [
+    { texture: tex("SG1R"), patch: tex("PG1R"), l1: "SOFTNET", l2: "BACKLOG" },
+    { texture: tex("SG1T"), patch: tex("PG1T"), l1: "QDISC", l2: "BACKLOG" },
+  ],
+  [
+    { texture: tex("SG2R"), patch: tex("PG2R"), l1: "NIC RX", l2: "RING" },
+    { texture: tex("SG2T"), patch: tex("PG2T"), l1: "NIC TX", l2: "RING" },
+  ],
 ];
 
-const netInscription = makeInscription(tex("FN"), "TRAFFIC", "west", 2);
+const netInscription = makeInscription(tex("FN"), "CURRENT", "west", 2);
 
-// Blue channel water flats (RX/TX, framed by rails) + a dark still-water drain flat.
-const laneFlatNames = { rx: tex("RXL"), tx: tex("TXL") };
-const buildLaneFlat = ({ name, base, rail }) => {
+// Bus-bar bed flats: a DARK GRAPHITE steel bed (so the bright packet-orbs separate hard
+// from the floor they ride on -- the contrast fix) with lane identity kept in a single
+// bright ENERGISED RAIL stripe (RX cyan, TX violet). The engine tempers the BED colour
+// with the stage's live queue fill -- graphite (cool) -> amber -> hot red -- so a
+// saturated bus visibly runs hot, while the rail stripe keeps RX/TX identity in every
+// state (Phase 2, DoomPerf_UpdateNetworkLocks swaps floorpic). Plus a near-black
+// ground/earth grate for the discharge basin at each transformer.
+// [[doom-texture-power-of-two]] [[memory-reclaim-sluice]]
+const busFlatNames = {
+  rx: { cool: tex("RXL"), amber: tex("RXA"), hot: tex("RXR") },
+  tx: { cool: tex("TXL"), amber: tex("TXA"), hot: tex("TXR") },
+};
+const BUS_GRAPHITE = 107; // (59,59,59)  dark steel conductor bed (idle / cool)
+const BUS_AMBER = 222; //    (183,71,0)   warming under load
+const BUS_HOT = 184; //      (155,0,0)    running hot / saturated (alarm)
+const buildBusFlat = ({ name, base, rail }) => {
   const size = 64;
   const px = new Uint8Array(size * size).fill(base);
   const put = (x, y, color) => {
@@ -85,60 +114,80 @@ const buildLaneFlat = ({ name, base, rail }) => {
   }
   return lump(name, Buffer.from(px));
 };
-const drainFlatName = tex("DRN");
-const buildDrainFlat = () => lump(drainFlatName, Buffer.from(new Uint8Array(64 * 64).fill(207)));
-const laneFlats = [
-  buildLaneFlat({ name: laneFlatNames.rx, base: 200, rail: 204 }),
-  buildLaneFlat({ name: laneFlatNames.tx, base: 202, rail: 206 }),
-  buildDrainFlat(),
+const groundFlatName = tex("GND");
+const buildGroundFlat = () => {
+  const size = 64;
+  const px = new Uint8Array(size * size).fill(110); // (39,39,39) near-black earth
+  const put = (x, y, color) => {
+    if (x >= 0 && x < size && y >= 0 && y < size) px[y * size + x] = color;
+  };
+  // A faint darker grille (16-unit bars) so the discharge basin reads as an earth
+  // grate ("to ground"), not more conductor bed.
+  for (let i = 0; i < size; i += 16) {
+    for (let k = 0; k < size; k += 1) { put(i, k, 111); put(k, i, 111); }
+  }
+  return lump(groundFlatName, Buffer.from(px));
+};
+const busFlats = [
+  // RX rail: bright cyan (83,83,255); TX rail: bright violet (207,0,207). Three temper
+  // tiers per lane (cool/amber/hot), the sector starts on `cool` and the engine swaps.
+  buildBusFlat({ name: busFlatNames.rx.cool, base: BUS_GRAPHITE, rail: 197 }),
+  buildBusFlat({ name: busFlatNames.rx.amber, base: BUS_AMBER, rail: 197 }),
+  buildBusFlat({ name: busFlatNames.rx.hot, base: BUS_HOT, rail: 197 }),
+  buildBusFlat({ name: busFlatNames.tx.cool, base: BUS_GRAPHITE, rail: 252 }),
+  buildBusFlat({ name: busFlatNames.tx.amber, base: BUS_AMBER, rail: 252 }),
+  buildBusFlat({ name: busFlatNames.tx.hot, base: BUS_HOT, rail: 252 }),
+  buildGroundFlat(),
 ];
 
-// ===== Cross-axis half-widths (local u). Centre-out: median wall | RX/TX trough |
-// player walkway. The centre band (median + troughs, u[-112,112]) is the TRAFFIC that
-// cliffs between levels and is railed off from the player; the side bands (u[112..320])
-// are the walkways/stairs the player descends -- WIDE (208 each) so the player has
-// plenty of room either side of the traffic. Widening these leaves the traffic lanes
-// (and every engine coord) untouched -- only the outer wall + alcove move out.
-const EDGEHW = 320; //   outer wall (walkways doubled to 208 wide each)
-const POOLHW = 112; //   trough outer edge (== traffic-channel outer edge / walkway inner edge)
-const MEDHW = 24; //     central median-wall half-width (48-wide divider between the two troughs)
-const LANEHW = (MEDHW + POOLHW) / 2; // 68 -> |world y| of each lane (trough centre)
-const ALCHW = 504; //    SYN alcove bay deep wall (kept 184 deep past the wider outer wall)
+// ===== Cross-axis half-widths (local u). Centre-out: insulator spine | RX/TX bus |
+// player catwalk. The centre band (spine + buses, u[-112,112]) is the live CURRENT that
+// steps down between stages and is railed off from the player; the side bands
+// (u[112..320]) are the maintenance catwalks the player descends -- WIDE (208 each) so
+// the player has plenty of room either side of the gear. Widening these leaves the bus
+// bars (and every engine coord) untouched -- only the outer wall + alcove move out.
+const EDGEHW = 320; //   outer wall (catwalks doubled to 208 wide each)
+const POOLHW = 112; //   bus outer edge (== current-channel outer edge / catwalk inner edge)
+const MEDHW = 24; //     central insulator-spine half-width (48-wide divider between the two buses)
+const LANEHW = (MEDHW + POOLHW) / 2; // 68 -> |world y| of each lane (bus centre)
+const ALCHW = 504; //    ss-census alcove bay deep wall (kept 184 deep past the wider outer wall)
 const ALC_RECESS = 16;
 
-// ===== Depth boundaries (local v). Long flat levels (512) joined by compact stair /
-// cliff transitions (128). Mirrors the engine's DoomPerf_NET_* region/spawn constants.
+// ===== Depth boundaries (local v). Long flat stages (512) joined by compact catwalk /
+// transformer transitions (128). Mirrors the engine's DoomPerf_NET_* region/spawn constants.
 const V_ENTRY = 704, V_FOYER = 896;
 const LVL_LEN = 512, TRANS = 128, GATE_D = 16;
-const C0 = V_FOYER + LVL_LEN; //       1408  waterfall 0 (socket -> kernel)
-const C1 = C0 + TRANS + LVL_LEN; //    2048  waterfall 1 (kernel -> ring)
-const V_L2END = C1 + TRANS + LVL_LEN;//2688  ring channel end (final cliff -> plaza)
-const V_PLAZA = V_L2END + 112; //      2800  terminal plaza front edge
+const C0 = V_FOYER + LVL_LEN; //       1408  transformer 0 (socket -> kernel)
+const C1 = C0 + TRANS + LVL_LEN; //    2048  transformer 1 (kernel -> ring)
+const V_L2END = C1 + TRANS + LVL_LEN;//2688  ring bus end (final step-down -> switchyard head)
+const V_PLAZA = V_L2END + 112; //      2800  switchyard-head front edge
 const V_TERM_WALL = V_PLAZA + 16; //   2816  back wall: IFACE DEV screen
 
-// ===== Walk floors (local z): 0 / -96 / -192, a deep descent. The channel drops the
-// full 96 as a CLIFF at each waterfall; the walkways take a 4-step staircase.
+// ===== Walk floors (local z): 0 / -96 / -192, a deep descent. The bus drops the full
+// 96 through the STEP-DOWN TRANSFORMER at each stage; the catwalks take a 4-step stair.
 const F0 = 0, F1 = -96, F2 = -192;
-const STEP_DROP = 24; //   walkway staircase riser
-const POOL_EMPTY = 64; //  trough floor below walk when drained (a deep channel)
-const POOL_FULL = 32; //   trough floor below walk when brimming (stays below the low median top)
-const ORB_RIDE = -16; //   orb ride-height RELATIVE to walk: down IN the channel, above the median top (mirrored in p_tick.c)
+const STEP_DROP = 24; //   catwalk staircase riser
+const POOL_EMPTY = 64; //  bus floor below walk when drained (a deep channel)
+const POOL_FULL = 32; //   bus floor below walk when brimming (stays below the low spine top)
+const ORB_RIDE = -16; //   orb ride-height RELATIVE to walk: down IN the bus, above the spine top (mirrored in p_tick.c)
 const HALL_CEIL = 176; //  FLAT ceiling (absolute) for the whole hall -- it does NOT
-//                         drop with the levels, so the space grows more cavernous as
+//                         drop with the stages, so the space grows more cavernous as
 //                         the floor descends and the far depths open up from the top.
 
 const POOL_TAG = ids.sectorTags[0]; //       700 + level*2 + lane
 const GATE_TAG = ids.sectorTags[0] + 10; //  710 + level
 
-// The walls of the TRAFFIC channels (trough sides, median, gate brink) wear a distinct
-// blue computer-tile texture so they read clearly as the network-data area, NOT the
-// same STEP1 tan risers the player's stairs/walkways use (the builder defaults every
-// floor-step riser to STEP1; a sector's `riserWall` overrides the riser its neighbours
-// show it — build-doomperf-map.mjs sideTextures). [[riser-texture-and-light-rules]]
-const TROUGH_WALL = "COMPTILE";
+// Substation material kit (all verified exclusive to this wing -- no element shared with
+// the cpu/memory/storage wings; see NETWORK_POWERPLANT_PLAN.md). Every riser is named
+// off the builder's STEP1 default so the catwalks never read as the disk wing's tan
+// planks. [[riser-texture-and-light-rules]]
+const GANTRY_RISER = "A-GRATE"; //  catwalk stairs/treads -- metal grating (the STEP1 killer)
+const BUS_HOUSING = "METAL2"; //    bus-bar side walls -- dark riveted steel housing
+const SPINE_WALL = "LITEBLU1"; //   insulator spine -- glowing blue conductor edge
+const BREAKER_WALL = "GRAYWARN"; // breaker/transformer risers -- high-voltage hazard bands
 
-// Per level: channel v-range [cv1,cv2] and walkway start `sv1` (later than cv1 by the
-// previous staircase). Level walk floor `walk`.
+// Per stage: bus v-range [cv1,cv2] and catwalk start `sv1` (later than cv1 by the
+// previous staircase). Stage walk floor `walk`.
 const levels = [
   { level: 0, walk: F0, cv1: V_FOYER, cv2: C0,     sv1: V_FOYER },
   { level: 1, walk: F1, cv1: C0,      cv2: C1,     sv1: C0 + TRANS },
@@ -149,9 +198,9 @@ const stairs = [
   { id: "stair1", v1: C1, v2: C1 + TRANS, wTop: F1 },
 ];
 
-// Packet-lane world-coords (west wing), mirrored in p_tick.c. Lanes y=+/-68 (trough
-// centres) along x = -v; RX up-stack (+x), TX down (-x). Waterfalls at world x=-C0/-C1.
-export const networkCanal = {
+// Packet-lane world-coords (west wing), mirrored in p_tick.c. Lanes y=+/-68 (bus
+// centres) along x = -v; RX up-stack (+x), TX down (-x). Transformers at world x=-C0/-C1.
+export const networkFeeder = {
   laneY: LANEHW,
   rxSpawnV: V_L2END - 48, rxExitV: 960,
   txSpawnV: 960, txExitV: V_L2END - 48,
@@ -159,7 +208,7 @@ export const networkCanal = {
 };
 
 const build = (ctx) => {
-  const { areaRect, addAreaThing, direction, base, accent, terminalPanelFloor } = ctx;
+  const { areaRect, direction, base, accent, terminalPanelFloor } = ctx;
 
   addWingEntrance(ctx);
 
@@ -167,88 +216,94 @@ const build = (ctx) => {
   const leftWall = localSideToWorld(direction, "left");
   const rightWall = localSideToWorld(direction, "right");
 
-  const hall = { ...base, kind: "net-hall" };
+  const hall = { ...base, kind: "net-hall", riserWall: GANTRY_RISER };
   const conduit = { ...accent, kind: "net-conduit" };
-  const foyer = { ...base, kind: "foyer", light: 200 };
+  const intake = { ...base, kind: "net-intake", light: 176 };
 
-  // ===== Foyer, split so "TRAFFIC" inscribes flush into the threshold floor.
-  areaRect(direction, "foyer-left", { u1: -EDGEHW, v1: V_ENTRY, u2: -64, v2: V_FOYER }, { ...foyer, ceiling: HALL_CEIL, light: 208 });
-  areaRect(direction, "foyer-right", { u1: 64, v1: V_ENTRY, u2: EDGEHW, v2: V_FOYER }, { ...foyer, ceiling: HALL_CEIL, light: 208 });
-  areaRect(direction, "foyer-front", { u1: -64, v1: V_ENTRY, u2: 64, v2: 832 }, { ...foyer, ceiling: HALL_CEIL, light: 208 });
+  // ===== Service intake, split so "CURRENT" inscribes flush into the threshold floor.
+  areaRect(direction, "intake-left", { u1: -EDGEHW, v1: V_ENTRY, u2: -64, v2: V_FOYER }, { ...intake, ceiling: HALL_CEIL, light: 176 });
+  areaRect(direction, "intake-right", { u1: 64, v1: V_ENTRY, u2: EDGEHW, v2: V_FOYER }, { ...intake, ceiling: HALL_CEIL, light: 176 });
+  areaRect(direction, "intake-front", { u1: -64, v1: V_ENTRY, u2: 64, v2: 832 }, { ...intake, ceiling: HALL_CEIL, light: 176 });
   netInscription.names.forEach((flatName, k) => {
     const u1 = -64 + k * 64;
     areaRect(direction, `net-inscription-${k}`, { u1, v1: 832, u2: u1 + 64, v2: V_FOYER }, {
-      ...foyer, ceiling: HALL_CEIL, floorFlat: flatName, light: 216,
+      ...intake, ceiling: HALL_CEIL, floorFlat: flatName, light: 192,
     });
   });
 
-  // ===== The central TRAFFIC CHANNEL, per level: a raised median WALL divider and two
-  // deep TROUGH channels (RX/TX) either side of it, floor rising with the lock's fill.
-  // The troughs are `blockEdge` -- an impassable, see-through rail: the player looks
-  // down into them but cannot enter, and the NOCLIP orbs pass through.
-  const channel = (lvl) => {
+  // ===== The central CURRENT PATH, per stage: a raised INSULATOR SPINE divider and two
+  // deep BUS BARS (RX/TX) either side of it, floor rising with the stage's charge level.
+  // The buses are `blockEdge` -- an impassable, see-through rail: the player looks down
+  // into them but cannot enter, and the NOCLIP orbs pass through.
+  const feeder = (lvl) => {
     const { level, walk, cv1 } = lvl;
     const id = `net${level}`;
-    const brink = lvl.cv2 - GATE_D; // troughs run to the brink; the gate sill is the last GATE_D
+    const brink = lvl.cv2 - GATE_D; // buses run to the brink; the breaker sill is the last GATE_D
     const ceiling = HALL_CEIL;
-    // The median is a LOW divider (walk-24, well below the elevated walkways and below
-    // the orb ride-height, above the full water line) so the player, standing on the
-    // raised side walkways, can see over it into BOTH troughs from either side. It is
-    // `blockEdge` (impassable, see-through) so it reads as a rail, not a floor to enter.
-    areaRect(direction, `${id}-median`, { u1: -MEDHW, v1: cv1, u2: MEDHW, v2: brink }, { ...conduit, kind: "net-median", floor: walk - 24, ceiling, light: 176, blockEdge: true, riserWall: TROUGH_WALL });
-    areaRect(direction, `${id}-trough-rx`, { u1: -POOLHW, v1: cv1, u2: -MEDHW, v2: brink }, { ...conduit, kind: "net-pool", floor: walk - POOL_EMPTY, ceiling, floorFlat: laneFlatNames.rx, light: 168, tag: POOL_TAG + level * 2 + 0, blockEdge: true, riserWall: TROUGH_WALL });
-    areaRect(direction, `${id}-trough-tx`, { u1: MEDHW, v1: cv1, u2: POOLHW, v2: brink }, { ...conduit, kind: "net-pool", floor: walk - POOL_EMPTY, ceiling, floorFlat: laneFlatNames.tx, light: 168, tag: POOL_TAG + level * 2 + 1, blockEdge: true, riserWall: TROUGH_WALL });
+    // The spine is a LOW divider (walk-24, well below the elevated catwalks and below the
+    // orb ride-height, above the full charge line) so the player, standing on the raised
+    // side catwalks, can see over it into BOTH buses from either side. It is `blockEdge`
+    // (impassable, see-through) so it reads as a rail, not a floor to enter; its trough-
+    // facing sides glow (SPINE_WALL) as the energised conductor between the two buses.
+    areaRect(direction, `${id}-spine`, { u1: -MEDHW, v1: cv1, u2: MEDHW, v2: brink }, { ...conduit, kind: "net-spine", floor: walk - 24, ceiling, light: 168, blockEdge: true, riserWall: SPINE_WALL });
+    areaRect(direction, `${id}-bus-rx`, { u1: -POOLHW, v1: cv1, u2: -MEDHW, v2: brink }, { ...conduit, kind: "net-bus", floor: walk - POOL_EMPTY, ceiling, floorFlat: busFlatNames.rx.cool, light: 144, tag: POOL_TAG + level * 2 + 0, blockEdge: true, riserWall: BUS_HOUSING });
+    areaRect(direction, `${id}-bus-tx`, { u1: MEDHW, v1: cv1, u2: POOLHW, v2: brink }, { ...conduit, kind: "net-bus", floor: walk - POOL_EMPTY, ceiling, floorFlat: busFlatNames.tx.cool, light: 144, tag: POOL_TAG + level * 2 + 1, blockEdge: true, riserWall: BUS_HOUSING });
   };
 
-  // The brink sill (last GATE_D of a level's channel): a lit band across the troughs at
-  // the water's edge that BRIGHTENS with the lock's saturation (the congestion gate),
-  // the water pooling behind it before spilling over the cliff. Overspill orbs plop
-  // here on drops (engine). Also `blockEdge` so the player can't drop onto it.
-  const gateSill = (lvl) => {
+  // The breaker sill (last GATE_D of a stage's bus): a lit hazard band across the buses
+  // at the charge's edge that BRIGHTENS with the stage's saturation (the load lamp / trip
+  // breaker), the charge pooling behind it before spilling through the transformer.
+  // Overspill orbs plop here on drops (engine). Also `blockEdge` so the player can't drop
+  // onto it. Its risers wear the high-voltage hazard band so the whole breaker zone reads
+  // as live equipment from the catwalk.
+  const breaker = (lvl) => {
     const { level, walk, cv2 } = lvl;
     const v1 = cv2 - GATE_D;
     const ceiling = HALL_CEIL;
-    areaRect(direction, `net${level}-gate`, { u1: -POOLHW, v1, u2: POOLHW, v2: cv2 }, { ...conduit, kind: "net-gate", floor: walk - POOL_EMPTY, ceiling, floorFlat: drainFlatName, light: 150, tag: GATE_TAG + level, blockEdge: true, riserWall: TROUGH_WALL });
+    areaRect(direction, `net${level}-breaker`, { u1: -POOLHW, v1, u2: POOLHW, v2: cv2 }, { ...conduit, kind: "net-breaker", floor: walk - POOL_EMPTY, ceiling, floorFlat: groundFlatName, light: 128, tag: GATE_TAG + level, blockEdge: true, riserWall: BREAKER_WALL });
   };
 
-  // The player BANK walkways of a level: a flat walk on each side, run the FULL level
-  // [sv1, cv2] (the gate sill is centre-only, so the walkway must span past it or the
+  // The player CATWALK of a stage: a flat gantry on each side, run the FULL stage
+  // [sv1, cv2] (the breaker sill is centre-only, so the catwalk must span past it or the
   // player hits a dead-end wall there). It meets the next staircase at cv2.
-  const banks = (lvl) => {
+  const catwalks = (lvl) => {
     const { level, walk, sv1, cv2 } = lvl;
     const ceiling = HALL_CEIL;
-    areaRect(direction, `net${level}-walk-l`, { u1: -EDGEHW, v1: sv1, u2: -POOLHW, v2: cv2 }, { ...hall, kind: "net-walk", floor: walk, ceiling, light: 186 });
-    areaRect(direction, `net${level}-walk-r`, { u1: POOLHW, v1: sv1, u2: EDGEHW, v2: cv2 }, { ...hall, kind: "net-walk", floor: walk, ceiling, light: 186 });
+    areaRect(direction, `net${level}-walk-l`, { u1: -EDGEHW, v1: sv1, u2: -POOLHW, v2: cv2 }, { ...hall, kind: "net-walk", floor: walk, ceiling, light: 160 });
+    areaRect(direction, `net${level}-walk-r`, { u1: POOLHW, v1: sv1, u2: EDGEHW, v2: cv2 }, { ...hall, kind: "net-walk", floor: walk, ceiling, light: 160 });
   };
 
-  // The BANK staircase between two levels: constant-grade 24-unit steps on the side
-  // bands ONLY (u[POOLHW..EDGEHW]); the centre band is the next level's channel,
-  // already dropped over its cliff -- so the water falls while the player steps down.
-  const sideStair = (s) => {
+  // The CATWALK staircase between two stages: constant-grade 24-unit steps on the side
+  // bands ONLY (u[POOLHW..EDGEHW]); the centre band is the next stage's bus, already
+  // stepped down through its transformer -- so the current drops while the player steps
+  // down. The grated treads (GANTRY_RISER via `hall`) read as a maintenance gantry.
+  const gantryStair = (s) => {
     const stepV = (s.v2 - s.v1) / 4;
     for (let k = 0; k < 4; k += 1) {
       const floor = s.wTop - (k + 1) * STEP_DROP;
       const ceiling = HALL_CEIL;
       const sv1 = s.v1 + k * stepV, sv2 = s.v1 + (k + 1) * stepV;
-      areaRect(direction, `${s.id}-l-${k}`, { u1: -EDGEHW, v1: sv1, u2: -POOLHW, v2: sv2 }, { ...hall, kind: "net-stair", floor, ceiling, light: 172 });
-      areaRect(direction, `${s.id}-r-${k}`, { u1: POOLHW, v1: sv1, u2: EDGEHW, v2: sv2 }, { ...hall, kind: "net-stair", floor, ceiling, light: 172 });
+      areaRect(direction, `${s.id}-l-${k}`, { u1: -EDGEHW, v1: sv1, u2: -POOLHW, v2: sv2 }, { ...hall, kind: "net-stair", floor, ceiling, light: 152 });
+      areaRect(direction, `${s.id}-r-${k}`, { u1: POOLHW, v1: sv1, u2: EDGEHW, v2: sv2 }, { ...hall, kind: "net-stair", floor, ceiling, light: 152 });
     }
   };
 
-  levels.forEach(channel);
-  levels.forEach(gateSill);
-  levels.forEach(banks);
-  stairs.forEach(sideStair);
+  levels.forEach(feeder);
+  levels.forEach(breaker);
+  levels.forEach(catwalks);
+  stairs.forEach(gantryStair);
 
-  // ===== Level placards: a two-line wall sign (OS / KERNEL / DEVICE + BUFFER) in a
-  // shallow 256-wide x 128-tall niche in each level's outer wall, naming the queue the
-  // player is descending through. The niche is floor-flush with a lowered valance so
-  // the 128-tall sign maps once ([[doom-wall-texture-128-tiling]]); labelWidth=256
-  // centres it ([[wall-label-centering-width]]). Placed on BOTH outer walls of every
-  // level (the SYN alcove was tucked to the socket-level entrance to keep this centre
-  // clear).
+  // ===== Stage placards: a two-line wall sign (direction-specific, real Linux terms) in
+  // a shallow 256-wide x 128-tall niche in each stage's outer wall, naming the queue the
+  // player is descending through -- RX metric on the left (u<0) wall, TX metric on the
+  // right (u>0). The niche is floor-flush with a lowered valance so the 128-tall sign
+  // maps once ([[doom-wall-texture-128-tiling]]); labelWidth=256 centres it
+  // ([[wall-label-centering-width]]). Placed on BOTH outer walls of every stage (the ss
+  // alcove was tucked to the socket-stage entrance to keep this centre clear).
   const SIGN_W = wallSignSize.width; // 256
   const placard = (lvl, side) => {
+    const lane = side === "left" ? 0 : 1; // left wall = RX bus, right wall = TX bus
+    const sign = levelSigns[lvl.level][lane];
     const vc = Math.round((lvl.sv1 + lvl.cv2) / 2);
     const uNiche = side === "left"
       ? { u1: -EDGEHW - ALC_RECESS, u2: -EDGEHW }
@@ -258,22 +313,22 @@ const build = (ctx) => {
       kind: "net-sign",
       floor: lvl.walk,
       ceiling: lvl.walk + wallSignSize.height, // a 128-tall labelled face (no tiling)
-      light: 210,
+      light: 208,
       labelSide: side === "left" ? leftWall : rightWall,
-      labelTexture: levelSigns[lvl.level].texture,
+      labelTexture: sign.texture,
       labelWidth: SIGN_W,
     });
   };
-  placard(levels[0], "left"); placard(levels[0], "right"); // socket / OS buffer
-  placard(levels[1], "left"); placard(levels[1], "right"); // kernel
-  placard(levels[2], "left"); placard(levels[2], "right"); // device
+  placard(levels[0], "left"); placard(levels[0], "right"); // socket: RECV-Q / SEND-Q
+  placard(levels[1], "left"); placard(levels[1], "right"); // kernel: SOFTNET / QDISC
+  placard(levels[2], "left"); placard(levels[2], "right"); // device: NIC RX / NIC TX
 
-  // ===== SYN-RECV alcove off the socket level's left bank: a walk-in bay whose deep
+  // ===== ss-census alcove off the socket stage's left catwalk: a walk-in bay whose deep
   // wall carries a backlog COLUMN (floor rises into a pillar with the half-open count,
-  // tag 730) and the ss census terminal. Sits near the level ENTRANCE (v 904..1016) so
-  // it leaves the level centre clear for the OS BUFFER placard on this same left wall.
+  // tag 730) and the ss census terminal. Sits near the stage ENTRANCE (v 904..1016) so
+  // it leaves the stage centre clear for the RECV-Q placard on this same left wall.
   areaRect(direction, "syn-bay", { u1: -ALCHW, v1: 904, u2: -EDGEHW, v2: 1016 }, {
-    ...conduit, kind: "net-alcove", floor: F0, ceiling: HALL_CEIL, light: 196,
+    ...conduit, kind: "net-alcove", floor: F0, ceiling: HALL_CEIL, light: 168,
   });
   areaRect(direction, "syn-column", { u1: -ALCHW - ALC_RECESS, v1: 912, u2: -ALCHW, v2: 960 }, {
     ...conduit, kind: "net-instrument", floor: F0, ceiling: F0 + 160, light: 208, tag: ids.sectorTags[0] + 30,
@@ -283,22 +338,24 @@ const build = (ctx) => {
     kind: "terminal",
     floor: F0 + terminalPanelFloor,
     ceiling: F0 + terminalPanelFloor + terminalTextureSize.height,
-    light: 192,
+    light: 184,
     labelSide: leftWall,
     labelTexture: socketsScreen.texture,
     controlPanel: true,
+    riserWall: BUS_HOUSING, // metal base under the panel; keep STEP1 off this recess
   });
 
-  // ===== Terminal plaza at the wire/ring level: the back wall carries the IFACE DEV
-  // screen on its control-panel riser above the deep plaza floor.
+  // ===== Switchyard head at the wire/ring level: the back wall carries the IFACE DEV
+  // screen (the grid tie / /proc/net/dev boundary) on its control-panel riser above the
+  // deep floor.
   areaRect(direction, "plaza", { u1: -EDGEHW, v1: V_L2END, u2: EDGEHW, v2: V_PLAZA }, {
-    ...hall, kind: "net-plaza", floor: F2, ceiling: HALL_CEIL, light: 176,
+    ...hall, kind: "net-plaza", floor: F2, ceiling: HALL_CEIL, light: 156,
   });
   areaRect(direction, "plaza-back-left", { u1: -EDGEHW, v1: V_PLAZA, u2: -128, v2: V_TERM_WALL }, {
-    ...hall, kind: "net-plaza", floor: F2, ceiling: HALL_CEIL, light: 168,
+    ...hall, kind: "net-plaza", floor: F2, ceiling: HALL_CEIL, light: 146,
   });
   areaRect(direction, "plaza-back-right", { u1: 128, v1: V_PLAZA, u2: EDGEHW, v2: V_TERM_WALL }, {
-    ...hall, kind: "net-plaza", floor: F2, ceiling: HALL_CEIL, light: 168,
+    ...hall, kind: "net-plaza", floor: F2, ceiling: HALL_CEIL, light: 146,
   });
   areaRect(direction, "network-terminal", { u1: -128, v1: V_PLAZA, u2: 128, v2: V_TERM_WALL }, {
     ...hall,
@@ -309,14 +366,29 @@ const build = (ctx) => {
     labelSide: backWall,
     labelTexture: screen.texture,
     controlPanel: true,
+    riserWall: BUS_HOUSING, // metal base under the panel; keep STEP1 off this recess
   });
 
-  // ===== Techno floor lamps, only in the two wide open rooms (foyer + plaza), hugging
-  // the (now wider) side walls so they stay clear of the walking area.
-  addAreaThing(direction, 2028, -288, 800);
-  addAreaThing(direction, 2028, 288, 800);
-  addAreaThing(direction, 2028, -288, V_PLAZA - 24);
-  addAreaThing(direction, 2028, 288, V_PLAZA - 24);
+  // ===== Wall-mounted BUS LIGHT STRIPS: narrow full-height LITEBLU pilasters recessed
+  // into the side walls of the two wide open rooms (intake + switchyard head), a glowing
+  // energised conductor strip flanking each. This replaces the old shared floor-lamp
+  // thing (2028, also in the memory wing) with a fixture exclusive to this wing and made
+  // of geometry -- no engine prop-allowlist change (that's Phase 2). The strip is a
+  // seamless full-height bump-out (floor/ceiling flush with the room) whose walls wear
+  // the blue conductor texture; lit bright so it reads as a live light strip.
+  const STRIP_W = 32;
+  const lightStrip = (id, sideSign, vCenter, floor) => {
+    const uNiche = sideSign < 0
+      ? { u1: -EDGEHW - ALC_RECESS, u2: -EDGEHW }
+      : { u1: EDGEHW, u2: EDGEHW + ALC_RECESS };
+    areaRect(direction, id, { ...uNiche, v1: vCenter - STRIP_W / 2, v2: vCenter + STRIP_W / 2 }, {
+      ...hall, kind: "net-strip", wall: SPINE_WALL, floor, ceiling: HALL_CEIL, light: 216,
+    });
+  };
+  lightStrip("intake-strip-l", -1, 800, F0);
+  lightStrip("intake-strip-r", 1, 800, F0);
+  lightStrip("plaza-strip-l", -1, V_PLAZA - 40, F2);
+  lightStrip("plaza-strip-r", 1, V_PLAZA - 40, F2);
 };
 
 const textures = [
@@ -327,8 +399,8 @@ const textures = [
     height: terminalTextureSize.height,
     build: () => buildTerminalPatch(s),
   })),
-  // Level placards (OS / KERNEL / DEVICE buffer), two-line wall signs.
-  ...levelSigns.map((s) => ({
+  // Stage placards (direction-specific Linux queue metrics), two-line wall signs.
+  ...levelSigns.flat().map((s) => ({
     texture: s.texture,
     patch: s.patch,
     width: wallSignSize.width,
@@ -337,12 +409,15 @@ const textures = [
   })),
 ];
 
-const flats = [...netInscription.flats, ...laneFlats];
+const flats = [...netInscription.flats, ...busFlats];
 
-const cyanRamp = [4, 192, 194, 196, 198, 200];
-const cyanFlash = [4, 4, 4, 192, 194, 198];
-const violetRamp = [4, 250, 251, 252, 253, 254];
-const violetFlash = [4, 4, 250, 251, 252, 254];
+// Packet-orb ramps (core -> rim). The core is a whiter double-spark and the rim stops
+// BRIGHTER than the graphite bus bed it rides on, so the packet reads as a hot electrical
+// spark against dark steel (the contrast fix, belt-and-suspenders with the bed flat).
+const cyanRamp = [4, 4, 192, 194, 195, 196]; // white core -> electric-blue rim (115,115,255)
+const cyanFlash = [4, 4, 4, 192, 194, 196];
+const violetRamp = [4, 4, 250, 251, 251, 252]; // white core -> hot-violet rim (207,0,207)
+const violetFlash = [4, 4, 250, 251, 252, 252];
 const sprites = [
   { name: "PINVA0", build: () => buildOrbPatch(cyanRamp) },
   { name: "PINVB0", build: () => buildFxPatch({ size: 22, ramp: cyanRamp, outerFrac: 0.78 }) },
