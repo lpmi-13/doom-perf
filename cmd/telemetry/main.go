@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -676,15 +677,22 @@ func (s *sampler) sample(now time.Time) (telemetry, error) {
 	network.BackloggedSockets = tcp.backlogged
 	network.TopSockets = tcp.top
 	// Kernel-lock RX backlog: softnet drops + squeeze as per-second rates. Ring depth
-	// (ethtool) and qdisc backlog (tc) are not probed yet, so their nullable fields
-	// stay nil and the ring/kernel-TX locks show their honest fallbacks downstream.
+	// (ethtool) is not probed yet, so RingDepthRx/Tx stay nil and the ring lock shows
+	// its honest "unknown brim" fallback downstream.
 	softnetDropped, softnetSqueezed := readSoftnet()
 	network.SoftnetDropsPerSecond = counterRate(softnetDropped, s.softnetDropped, elapsed)
 	network.SoftnetSqueezePerSecond = counterRate(softnetSqueezed, s.softnetSqueezed, elapsed)
-	// Fold softnet squeeze into USE Saturation now that it's known: a softirq that
-	// ran out of budget with packets pending is saturated even with zero drops (the
-	// pre-loss regime), so this can lift Saturation on a busy host before it drops.
-	network.Saturation = netSaturation(network.DropsPerSecond, network.SoftnetSqueezePerSecond)
+	// Transmit-lock backlog: qdisc backlog bytes via netlink (RTM_GETQDISC). nil when
+	// netlink is unavailable, which keeps the honest tx-drop-proxy fallback.
+	network.QdiscBacklogBytes = readQdiscBacklog()
+	// Fold both PRE-LOSS pressure signals into USE Saturation now that they're known:
+	// a softirq out of budget (receive) or a qdisc backlog the link can't drain
+	// (transmit) is saturated even at zero drops, so Saturation lifts before loss.
+	qdiscBytes := 0.0
+	if network.QdiscBacklogBytes != nil {
+		qdiscBytes = float64(*network.QdiscBacklogBytes)
+	}
+	network.Saturation = netSaturation(network.DropsPerSecond, network.SoftnetSqueezePerSecond, qdiscBytes)
 
 	s.lastAt = now
 	s.cpu = cpu
@@ -1423,23 +1431,31 @@ func reduceNetwork(nets []netCounter, previous map[string]netCounter, elapsed fl
 	if capacity > 0 {
 		result.Utilization = clamp((result.RXBytesPerSecond + result.TXBytesPerSecond) * 8 / capacity)
 	}
-	// Drops are half the USE Saturation story; sample() folds in softnet squeeze (the
-	// pre-loss receive-path saturation) once /proc/net/softnet_stat is read.
-	result.Saturation = netSaturation(result.DropsPerSecond, 0)
+	// Drops are only the LOSS half of USE Saturation; sample() folds in the pre-loss
+	// pressure signals (softnet squeeze, qdisc backlog) once they're read.
+	result.Saturation = netSaturation(result.DropsPerSecond, 0, 0)
 	result.Errors = clamp(result.ErrorsPerSecond / 50)
 	return result, current
 }
 
 // netSqueezeSatFull is the softnet time_squeeze rate (events/s) taken as full
-// receive-path saturation. Approximate, like the drops/100 scale — a demo threshold.
-const netSqueezeSatFull = 200
+// receive-path saturation. netQdiscSatFull is the qdisc backlog (bytes) taken as
+// full transmit-path saturation. Both approximate, like the drops/100 scale.
+const (
+	netSqueezeSatFull = 200
+	netQdiscSatFull   = 512 * 1024
+)
 
-// netSaturation folds the two USE network-saturation signals into one [0,1] scalar:
-// packet LOSS (rx+tx drops) and receive-softirq SQUEEZE (net_rx_action ran out of
-// budget with packets still pending — saturation that PRECEDES loss). Either can
-// drive it, so a box squeezing its softirq reads saturated before it starts dropping.
-func netSaturation(dropsPerSecond, squeezePerSecond float64) float64 {
-	return math.Max(clamp(dropsPerSecond/100), clamp(squeezePerSecond/netSqueezeSatFull))
+// netSaturation folds the USE network-saturation signals into one [0,1] scalar. Two
+// are LOSS (rx+tx drops); the other two are PRE-LOSS PRESSURE, one per direction —
+// receive-softirq SQUEEZE (net_rx_action out of budget with packets pending) and
+// transmit QDISC BACKLOG (bytes queued that the link can't drain yet). Any can drive
+// it, so a host reads saturated as soon as EITHER direction backs up, before it drops.
+func netSaturation(dropsPerSecond, squeezePerSecond, qdiscBacklogBytes float64) float64 {
+	return math.Max(
+		math.Max(clamp(dropsPerSecond/100), clamp(squeezePerSecond/netSqueezeSatFull)),
+		clamp(qdiscBacklogBytes/netQdiscSatFull),
+	)
 }
 
 func readNetCounters() ([]netCounter, error) {
@@ -1518,6 +1534,134 @@ func readSoftnet() (dropped, squeezed uint64) {
 		}
 	}
 	return dropped, squeezed
+}
+
+// Netlink constants (not in the syscall package) for dumping traffic-control qdiscs.
+const (
+	rtmNewQdisc   = 36
+	rtmGetQdisc   = 38
+	tcmsgLen      = 20         // sizeof(struct tcmsg)
+	tcHRoot       = 0xFFFFFFFF // TC_H_ROOT: the interface's root qdisc
+	tcaStats2     = 7          // TCA_STATS2 (nested)
+	tcaStatsQueue = 3          // TCA_STATS_QUEUE (struct gnet_stats_queue) within TCA_STATS2
+)
+
+// readQdiscBacklog returns the total bytes backlogged across every interface's ROOT
+// qdisc — the transmit-side pre-loss pressure (packets queued that the link can't
+// drain yet), read straight from the kernel via netlink (RTM_GETQDISC), the same
+// source `tc -s qdisc` uses but with no dependency on the tc binary. It returns nil
+// (not zero) when netlink is unavailable or no qdisc stats parse, so the caller keeps
+// its honest "unknown" fallback rather than reporting a fake empty queue. Native byte
+// order (netlink is host-endian); the collector runs on the little-endian host it
+// samples. Only TCA_STATS2 is parsed (every kernel since ~2.6.19 emits it).
+//
+// The dump request is built by hand rather than via syscall.NetlinkRIB: that helper
+// sends only a 1-byte rtgenmsg body, and RTM_GETQDISC needs a full 20-byte tcmsg or
+// the kernel returns an empty dump. A 1s receive timeout keeps a wedged netlink socket
+// from stalling the once-per-second sampler.
+func readQdiscBacklog() *uint64 {
+	s, err := syscall.Socket(syscall.AF_NETLINK, syscall.SOCK_RAW|syscall.SOCK_CLOEXEC, syscall.NETLINK_ROUTE)
+	if err != nil {
+		return nil
+	}
+	defer syscall.Close(s)
+	lsa := &syscall.SockaddrNetlink{Family: syscall.AF_NETLINK}
+	if err := syscall.Bind(s, lsa); err != nil {
+		return nil
+	}
+	_ = syscall.SetsockoptTimeval(s, syscall.SOL_SOCKET, syscall.SO_RCVTIMEO, &syscall.Timeval{Sec: 1})
+
+	// nlmsghdr(16) + tcmsg(20), ifindex 0 = every interface.
+	req := make([]byte, syscall.NLMSG_HDRLEN+tcmsgLen)
+	binary.LittleEndian.PutUint32(req[0:4], uint32(len(req)))
+	binary.LittleEndian.PutUint16(req[4:6], rtmGetQdisc)
+	binary.LittleEndian.PutUint16(req[6:8], syscall.NLM_F_REQUEST|syscall.NLM_F_DUMP)
+	binary.LittleEndian.PutUint32(req[8:12], 1) // seq
+	if err := syscall.Sendto(s, req, 0, lsa); err != nil {
+		return nil
+	}
+
+	var total uint64
+	found := false
+	buf := make([]byte, 65536)
+	for {
+		n, _, err := syscall.Recvfrom(s, buf, 0)
+		if err != nil || n < syscall.NLMSG_HDRLEN {
+			break
+		}
+		msgs, err := syscall.ParseNetlinkMessage(buf[:n])
+		if err != nil {
+			break
+		}
+		done := false
+		for i := range msgs {
+			m := &msgs[i]
+			switch m.Header.Type {
+			case syscall.NLMSG_DONE:
+				done = true
+			case syscall.NLMSG_ERROR:
+				return nil
+			case rtmNewQdisc:
+				if len(m.Data) < tcmsgLen {
+					continue
+				}
+				ifindex := int32(binary.LittleEndian.Uint32(m.Data[4:8]))
+				parent := binary.LittleEndian.Uint32(m.Data[12:16])
+				if parent != tcHRoot || ifindex == 1 { // root qdisc only (no double-count); skip lo
+					continue
+				}
+				if backlog, ok := qdiscBacklogFromAttrs(m.Data[tcmsgLen:]); ok {
+					total += backlog
+					found = true
+				}
+			}
+		}
+		if done {
+			break
+		}
+	}
+	if !found {
+		return nil
+	}
+	return &total
+}
+
+// qdiscBacklogFromAttrs walks a qdisc message's rtattrs for the TCA_STATS2 block and,
+// within it, the TCA_STATS_QUEUE sub-attr, returning gnet_stats_queue.backlog (bytes
+// currently queued). Pure byte-walking so it's unit-tested against a fixture buffer.
+func qdiscBacklogFromAttrs(b []byte) (uint64, bool) {
+	for len(b) >= 4 {
+		alen := int(binary.LittleEndian.Uint16(b[0:2]))
+		atype := binary.LittleEndian.Uint16(b[2:4])
+		if alen < 4 || alen > len(b) {
+			break
+		}
+		if atype == tcaStats2 {
+			nested := b[4:alen]
+			for len(nested) >= 4 {
+				nlen := int(binary.LittleEndian.Uint16(nested[0:2]))
+				ntype := binary.LittleEndian.Uint16(nested[2:4])
+				if nlen < 4 || nlen > len(nested) {
+					break
+				}
+				// gnet_stats_queue = { u32 qlen; u32 backlog; ... }: backlog at offset 4.
+				if ntype == tcaStatsQueue && nlen >= 4+8 {
+					return uint64(binary.LittleEndian.Uint32(nested[8:12])), true
+				}
+				adv := (nlen + 3) &^ 3
+				if adv > len(nested) {
+					break
+				}
+				nested = nested[adv:]
+			}
+		}
+		adv := (alen + 3) &^ 3
+		if adv > len(b) {
+			break
+		}
+		b = b[adv:]
+	}
+	return 0, false
 }
 
 func interfaceSpeed(name string) float64 {

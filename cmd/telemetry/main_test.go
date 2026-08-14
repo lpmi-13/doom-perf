@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"fmt"
 	"io"
 	"net/http"
@@ -204,22 +205,55 @@ func TestReduceNetworkSplitsDropsByDirection(t *testing.T) {
 	}
 }
 
-func TestNetSaturationFoldsDropsAndSqueeze(t *testing.T) {
+func TestNetSaturationFoldsLossAndPressure(t *testing.T) {
 	// Drops alone: 50 drops/s -> 0.5 (drops/100).
-	if got := netSaturation(50, 0); got != 0.5 {
-		t.Fatalf("netSaturation(50,0) = %v, want 0.5", got)
+	if got := netSaturation(50, 0, 0); got != 0.5 {
+		t.Fatalf("netSaturation(50,0,0) = %v, want 0.5", got)
 	}
-	// Squeeze alone (no drops): the pre-loss saturation still registers.
-	if got := netSaturation(0, 100); got != 0.5 {
-		t.Fatalf("netSaturation(0,100) = %v, want 0.5 (100/netSqueezeSatFull)", got)
+	// Receive squeeze alone (no drops): the pre-loss saturation still registers.
+	if got := netSaturation(0, 100, 0); got != 0.5 {
+		t.Fatalf("netSaturation(0,100,0) = %v, want 0.5 (100/netSqueezeSatFull)", got)
 	}
-	// Either signal can drive it; the larger wins (no double-count).
-	if got := netSaturation(30, 160); got != 0.8 {
-		t.Fatalf("netSaturation(30,160) = %v, want 0.8 (squeeze dominates)", got)
+	// Transmit qdisc backlog alone (no drops, no squeeze): pre-loss transmit pressure.
+	if got := netSaturation(0, 0, netQdiscSatFull/4); got != 0.25 {
+		t.Fatalf("netSaturation(0,0,128K) = %v, want 0.25 (qdisc/netQdiscSatFull)", got)
 	}
-	// Both clamp to [0,1].
-	if got := netSaturation(9000, 9000); got != 1 {
-		t.Fatalf("netSaturation(9000,9000) = %v, want 1", got)
+	// Any signal can drive it; the larger wins (no double-count).
+	if got := netSaturation(30, 160, netQdiscSatFull/10); got != 0.8 {
+		t.Fatalf("netSaturation(30,160,...) = %v, want 0.8 (squeeze dominates)", got)
+	}
+	// All clamp to [0,1].
+	if got := netSaturation(9000, 9000, 9<<20); got != 1 {
+		t.Fatalf("netSaturation(saturating) = %v, want 1", got)
+	}
+}
+
+func TestQdiscBacklogFromAttrs(t *testing.T) {
+	le := binary.LittleEndian
+	// gnet_stats_queue: qlen, backlog=12345, drops, requeues, overlimits (5x u32).
+	q := make([]byte, 20)
+	le.PutUint32(q[4:8], 12345) // backlog bytes
+	// TCA_STATS_QUEUE sub-attr (type 3) wrapping the struct.
+	statsQueue := make([]byte, 4+len(q))
+	le.PutUint16(statsQueue[0:2], uint16(4+len(q)))
+	le.PutUint16(statsQueue[2:4], tcaStatsQueue)
+	copy(statsQueue[4:], q)
+	// TCA_STATS2 (type 7) nesting the sub-attr, preceded by an unrelated attr to prove
+	// the walker skips past it.
+	other := []byte{0x08, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00} // len 8, type 1, 4B pad
+	stats2 := make([]byte, 4+len(statsQueue))
+	le.PutUint16(stats2[0:2], uint16(4+len(statsQueue)))
+	le.PutUint16(stats2[2:4], tcaStats2)
+	copy(stats2[4:], statsQueue)
+	buf := append(append([]byte{}, other...), stats2...)
+
+	got, ok := qdiscBacklogFromAttrs(buf)
+	if !ok || got != 12345 {
+		t.Fatalf("qdiscBacklogFromAttrs = (%d,%v), want (12345,true)", got, ok)
+	}
+	// No TCA_STATS2 present -> not found (caller then reports nil / unknown).
+	if _, ok := qdiscBacklogFromAttrs(other); ok {
+		t.Fatalf("qdiscBacklogFromAttrs(no stats2) = ok, want not found")
 	}
 }
 

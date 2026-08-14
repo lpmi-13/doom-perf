@@ -654,14 +654,17 @@ const formatNetwork = (telemetry: TelemetrySnapshot): string => {
   lines.push(`errors       ${bar(n.errors)} ${pctText(n.errors)}%`);
   // Break the saturation bar into named counters so it isn't a black box, and so
   // PRESSURE and LOSS read distinctly: rx/tx-drops are LOSS (a queue overflowed on the
-  // receive vs transmit side), rx-queue is PRESSURE (the receive stack queue backing
-  // up short of loss — it climbs before drops start). The receive/transmit saturation
-  // demos light one direction at a time. (rx-queue is the softnet backlog rate; kept
-  // generic here, `softnet` in the collector where the data source is documented.)
+  // receive vs transmit side), rx/tx-queue are PRESSURE (a queue backing up short of
+  // loss — it climbs before drops start). The receive/transmit saturation demos light
+  // one direction at a time. (rx-queue = softnet backlog rate; tx-queue = qdisc backlog
+  // bytes — both kept generic here, named at their real sources in the collector.
+  // tx-queue reads n/a when the qdisc netlink probe returns nothing.)
+  const txQueue = n.qdiscBacklogBytes === undefined ? "n/a" : `${kib(n.qdiscBacklogBytes)}K`;
   lines.push("");
   lines.push(`  rx-drops    ${String(Math.round(rate(n.rxDropsPerSecond))).padStart(7)}/s   (receive-side loss)`);
   lines.push(`  tx-drops    ${String(Math.round(rate(n.txDropsPerSecond))).padStart(7)}/s   (transmit-side loss)`);
   lines.push(`  rx-queue    ${String(Math.round(rate(n.softnetSqueezePerSecond))).padStart(7)}/s   (receive backlog — pre-loss)`);
+  lines.push(`  tx-queue    ${txQueue.padStart(9)}   (transmit backlog — pre-loss)`);
   return lines.join("\n");
 };
 
