@@ -53,7 +53,7 @@
  };
  
  menu_t  MainDef =
-@@ -268,6 +263,63 @@
+@@ -268,6 +263,72 @@
      0
  };
  
@@ -85,7 +85,15 @@
 +    // only follow-on was src/index.ts's scenario synthesis.
 +    mode_simmemsatnoswap,
 +    mode_simnetutil,
-+    mode_simnetsat,
++    // A RECEIVE / TRANSMIT saturation pair: one direction's whole column (socket queue
++    // -> kernel queue -> NIC ring) backs up while the other stays calm, so one lane of
++    // the canal lights. Each folds pressure -> loss (steady queue backlog + pulsing
++    // drops) rather than splitting those into separate modes; kept ADJACENT so the two
++    // directions flip back to back. Appended after the network group, so no earlier
++    // mode renumbers; network is never referenced engine-side, and src/index.ts's
++    // scenario synthesis follows.
++    mode_simnetsatrx,
++    mode_simnetsattx,
 +    mode_end
 +} mode_e;
 +
@@ -101,7 +109,8 @@
 +    {1,"",M_ChooseMode,'p'},
 +    {1,"",M_ChooseMode,'o'},
 +    {1,"",M_ChooseMode,'n'},
-+    {1,"",M_ChooseMode,'t'}
++    {1,"",M_ChooseMode,'r'},
++    {1,"",M_ChooseMode,'x'}
 +};
 +
 +menu_t  ModeDef =
@@ -117,7 +126,7 @@
  
  //
  // EPISODE SELECT
-@@ -338,11 +390,6 @@
+@@ -338,11 +399,6 @@
  //
  enum
  {
@@ -129,7 +138,7 @@
      mousesens,
      option_empty2,
      soundvol,
-@@ -351,11 +398,6 @@
+@@ -351,11 +407,6 @@
  
  menuitem_t OptionsMenu[]=
  {
@@ -141,7 +150,7 @@
      {2,"M_MSENS",	M_ChangeSensitivity,'m'},
      {-1,"",0},
      {1,"M_SVOL",	M_Sound,'s'}
-@@ -855,7 +897,10 @@
+@@ -855,7 +906,10 @@
  //
  void M_DrawMainMenu(void)
  {
@@ -152,7 +161,7 @@
  }
  
  
-@@ -877,11 +922,102 @@
+@@ -877,11 +931,106 @@
  	M_StartMessage(NEWGAME,NULL,false);
  	return;
      }
@@ -190,7 +199,11 @@
 +    "SIM: MEMORY SATURATION, SWAP",
 +    "SIM: MEMORY SATURATION, NO SWAP",
 +    "SIM: HIGH NETWORK UTILIZATION",
-+    "SIM: HIGH NETWORK SATURATION"
++    // A receive / transmit saturation pair: one direction's column backs up (queue
++    // pressure) and then drops (loss). Flipping the two is the lesson — saturation has
++    // a direction, and which side is dropping is where you look.
++    "SIM: NETWORK RECEIVE SATURATION",
++    "SIM: NETWORK TRANSMIT SATURATION"
 +};
 +
 +//
@@ -251,16 +264,16 @@
 +void M_ChooseMode(int choice)
 +{
 +    // 0 = live telemetry; 1/2 = simulated high CPU utilization/saturation
-+    // (read by the CPU room renderer); 3/4/5 disk, 6/7/8 memory, 9/10 network
-+    // (read by the browser's USE terminal scenarios). Memory has THREE: 5
-+    // utilization, 6 saturation with swap, 7 saturation with no swap.
++    // (read by the CPU room renderer); 3/4/5 disk, 6/7/8 memory, 9/10/11 network
++    // (read by the browser's USE terminal scenarios). Network has THREE: 9
++    // utilization, 10 receive saturation, 11 transmit saturation.
 +    doomperf_sim_mode = choice;
 +    G_DeferedInitNew(hurtme,1,1);
 +    M_ClearMenus ();
  }
  
  
-@@ -945,24 +1081,14 @@
+@@ -945,24 +1094,14 @@
  // M_Options
  //
  char    detailNames[2][9]	= {"M_GDHIGH","M_GDLOW"};
@@ -285,7 +298,7 @@
  }
  
  void M_Options(int choice)
-@@ -1579,10 +1705,6 @@
+@@ -1579,10 +1718,6 @@
  	    M_EndGame(0);
  	    return true;
  				
@@ -296,7 +309,7 @@
  				
  	  case KEY_F9:            // Quickload
  	    S_StartSound(NULL,sfx_swtchn);
-@@ -1864,12 +1986,6 @@
+@@ -1864,12 +1999,6 @@
      switch ( gamemode )
      {
        case commercial:

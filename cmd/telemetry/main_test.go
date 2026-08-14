@@ -180,6 +180,49 @@ func TestReduceNetworkHidesIdleInterfaces(t *testing.T) {
 	}
 }
 
+func TestReduceNetworkSplitsDropsByDirection(t *testing.T) {
+	previous := map[string]netCounter{
+		"eth0": {name: "eth0", rxDrops: 100, txDrops: 100, speedBps: 1e9},
+		"eth1": {name: "eth1", rxDrops: 100, txDrops: 100, speedBps: 1e9},
+	}
+	// Over 1s: eth0 +40 rx-drops/+5 tx-drops, eth1 +10 rx-drops/+0 tx-drops.
+	// Aggregate: 50 rx-drops/s, 5 tx-drops/s, 55 total drops/s (Saturation input).
+	nets := []netCounter{
+		{name: "eth0", rxDrops: 140, txDrops: 105, speedBps: 1e9},
+		{name: "eth1", rxDrops: 110, txDrops: 100, speedBps: 1e9},
+	}
+	result, _ := reduceNetwork(nets, previous, 1.0)
+
+	if result.RxDropsPerSecond != 50 {
+		t.Fatalf("RxDropsPerSecond = %v, want 50", result.RxDropsPerSecond)
+	}
+	if result.TxDropsPerSecond != 5 {
+		t.Fatalf("TxDropsPerSecond = %v, want 5", result.TxDropsPerSecond)
+	}
+	if result.DropsPerSecond != 55 {
+		t.Fatalf("DropsPerSecond = %v, want 55 (rx+tx)", result.DropsPerSecond)
+	}
+}
+
+func TestNetSaturationFoldsDropsAndSqueeze(t *testing.T) {
+	// Drops alone: 50 drops/s -> 0.5 (drops/100).
+	if got := netSaturation(50, 0); got != 0.5 {
+		t.Fatalf("netSaturation(50,0) = %v, want 0.5", got)
+	}
+	// Squeeze alone (no drops): the pre-loss saturation still registers.
+	if got := netSaturation(0, 100); got != 0.5 {
+		t.Fatalf("netSaturation(0,100) = %v, want 0.5 (100/netSqueezeSatFull)", got)
+	}
+	// Either signal can drive it; the larger wins (no double-count).
+	if got := netSaturation(30, 160); got != 0.8 {
+		t.Fatalf("netSaturation(30,160) = %v, want 0.8 (squeeze dominates)", got)
+	}
+	// Both clamp to [0,1].
+	if got := netSaturation(9000, 9000); got != 1 {
+		t.Fatalf("netSaturation(9000,9000) = %v, want 1", got)
+	}
+}
+
 func TestReduceStorageAggregatesIopsAndRanksDevices(t *testing.T) {
 	previous := map[string]diskCounter{
 		"sda":   {name: "sda"},

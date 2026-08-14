@@ -572,13 +572,19 @@ const pushTelemetryToEngine = (
 
   // Kernel lock (1): RX = softnet backlog (squeeze), always present; TX = qdisc
   // backlog when known, else a labelled tx-drop proxy. ?qdisc=off forces the proxy.
+  // Overspill is direction-scoped: the RX lane surfaces receive-side drops (the
+  // softnet backlog drop plus the /proc/net/dev rx-drop column), the TX lane only
+  // transmit-side drops — so rx-drops no longer bleed onto the TX lane the way the
+  // aggregate dropsPerSecond used to.
   const qdiscKnown = net.qdiscBacklogBytes !== undefined && !qdiscDisabled;
   engine?._DoomPerf_SetNetLockFill?.(1, 0, netPm((net.softnetSqueezePerSecond ?? 0) / SOFTNET_FULL));
   engine?._DoomPerf_SetNetLockFill?.(1, 1, netPm(
-    qdiscKnown ? (net.qdiscBacklogBytes ?? 0) / SOCKET_Q_FULL : (net.dropsPerSecond ?? 0) / KERN_TX_FULL
+    qdiscKnown ? (net.qdiscBacklogBytes ?? 0) / SOCKET_Q_FULL : (net.txDropsPerSecond ?? 0) / KERN_TX_FULL
   ));
-  engine?._DoomPerf_SetNetLockDrops?.(1, 0, netPm((net.softnetDropsPerSecond ?? 0) / DROP_FULL));
-  engine?._DoomPerf_SetNetLockDrops?.(1, 1, netPm((net.dropsPerSecond ?? 0) / DROP_FULL));
+  engine?._DoomPerf_SetNetLockDrops?.(1, 0, netPm(
+    Math.max(net.softnetDropsPerSecond ?? 0, net.rxDropsPerSecond ?? 0) / DROP_FULL
+  ));
+  engine?._DoomPerf_SetNetLockDrops?.(1, 1, netPm((net.txDropsPerSecond ?? 0) / DROP_FULL));
 
   // Ring lock (2): overruns (fifo) are always present; the pool fill is a pressure
   // proxy off the overrun rate (no instantaneous ring occupancy lives in /proc). Ring
@@ -606,7 +612,7 @@ const scenarioTelemetry = (
   engine: DoomPerfEngine | undefined
 ): TelemetrySnapshot | undefined => {
   const mode = engine?._DoomPerf_GetSimMode?.() ?? 0;
-  if (mode < 1 || mode > 10) {
+  if (mode < 1 || mode > 11) {
     return undefined;
   }
 
@@ -629,8 +635,17 @@ const scenarioTelemetry = (
   const memoryMode = mode === 6 || mode === 7 || mode === 8;
   const memorySaturated = mode === 7 || mode === 8;
   const memoryNoSwap = mode === 8;
-  const networkMode = mode === 9 || mode === 10;
-  const networkSaturated = mode === 10;
+  // Network has THREE scenarios: 9 utilization (throughput pinned, no loss), then a
+  // RECEIVE / TRANSMIT saturation pair (10 / 11) — one direction's whole column backs
+  // up (socket queue -> kernel queue -> NIC ring) while the other stays calm, so one
+  // lane of the canal lights. Each sim folds PRESSURE -> LOSS: a steady queue backlog
+  // (the pressure the saturation bar reads throughout) plus drops that PULSE in and
+  // out (the loss), so you watch a lane brim, overspill, then recover on the same run
+  // — the "saturation precedes errors" lesson, without a separate mode for it.
+  const networkMode = mode >= 9 && mode <= 11;
+  const netRecvSat = mode === 10; // receive-path saturation (RX lane backs up + drops)
+  const netXmitSat = mode === 11; // transmit-path saturation (TX lane backs up + drops)
+  const networkSaturated = netRecvSat || netXmitSat;
   const count = Math.max(1, Math.min(doomPerfCpuCoreCapacity, engine?._DoomPerf_GetEffectiveCpuCoreCount?.() ?? 8));
   const now = Date.now();
   // CPU is the stressed signal only in the CPU scenario, where the engine
@@ -658,7 +673,8 @@ const scenarioTelemetry = (
     : mode === 7 ? "sim: memory saturation, swap configured"
     : mode === 8 ? "sim: memory saturation, no swap configured"
     : mode === 9 ? "sim: high network utilization"
-    : "sim: high network saturation";
+    : mode === 10 ? "sim: network receive saturation"
+    : "sim: network transmit saturation";
   // Background memory stats so the memory and vmstat terminals are meaningful in
   // every scenario. Modes 5/6 follow the USE memory lab pattern: mode 5 is a
   // large resident set with low MemAvailable but quiet swap/PSI; mode 6 adds
@@ -1001,7 +1017,7 @@ const scenarioTelemetry = (
   // plateauing. Counts feed both the sockets terminal and (later) the wall glow.
   const netEstab = networkSaturated ? 1500 + Math.round(80 * netWave) : 1800 + Math.round(120 * netWave);
   const netTimeWait = networkSaturated ? 2400 + Math.round(300 * netWave) : 380 + Math.round(60 * netWave);
-  const netSynRecv = networkSaturated ? 160 + Math.round(60 * netWave) : 6;
+  const netSynRecv = netRecvSat ? 160 + Math.round(60 * netWave) : 6;
   const netCloseWait = networkSaturated ? 120 + Math.round(30 * netWave) : 4;
   const netListen = 12;
   const netClosing = networkSaturated ? 8 : 0;
@@ -1014,11 +1030,21 @@ const scenarioTelemetry = (
     closing: netClosing,
     total: netEstab + netTimeWait + netSynRecv + netCloseWait + netListen + netClosing,
   };
-  // Send/Recv-Q backlog: near-zero under high-utilization (throughput pinned but
-  // draining fine), blows out under saturation — inbound app-read lag + outbound
-  // peer-drain lag. Drives the twin RecvQ/SendQ standpipe gauges.
-  const netRecvQ = networkSaturated ? (2.4 + 0.6 * netWave) * mib : 12 * 1024;
-  const netSendQ = networkSaturated ? (3.4 + 0.8 * netWave) * mib : 48 * 1024;
+  // Send/Recv-Q backlog is the STEADY queue-pressure signal: near-zero under high-
+  // utilization (throughput pinned but draining fine), high and sustained under its
+  // direction's saturation — inbound app-read lag (RecvQ, receive) / outbound peer-
+  // drain lag (SendQ, transmit). Held high across the whole sim so the saturation
+  // reads even in the loss troughs (pressure persists; only the drops come and go).
+  const netRecvQ = netRecvSat ? (2.4 + 0.6 * netWave) * mib : 12 * 1024;
+  const netSendQ = netXmitSat ? (3.4 + 0.8 * netWave) * mib : 48 * 1024;
+  // Loss PULSES against that steady pressure: netLossPulse dips through ~0 each cycle,
+  // so a saturated lane visibly brims (pressure high, drops ~0) and then overspills
+  // (drops spike) on the same run. Receive-sat drops on the RX side only, transmit-sat
+  // on the TX side; dropsPerSecond is their sum (the loss half of USE Saturation, the
+  // steady queue/softnet backlog being the pressure half).
+  const netLossPulse = Math.abs(Math.sin(now / 1500));
+  const netRxDrops = netRecvSat ? 760 * netLossPulse : 0;
+  const netTxDrops = netXmitSat ? 640 * netLossPulse : 0;
   // The network-sim branch is guarded by SimNetworkTelemetry, so omitting any
   // field a network terminal reads is a compile error (see src/telemetry/types.ts).
   const networkSim: SimNetworkTelemetry = {
@@ -1035,9 +1061,12 @@ const scenarioTelemetry = (
         // less than the merely-busy one as contention caps goodput.
         rxBytesPerSecond: netRx,
         txBytesPerSecond: netTx,
-        // drops/s blow out only under saturation; NIC errors are a separate
-        // signal kept at zero here.
-        dropsPerSecond: networkSaturated ? 900 + 600 * Math.abs(Math.sin(now / 1500)) : 0,
+        // drops/s pulse against the steady queue pressure, on one direction at a time so
+        // the terminal names rx-drops vs tx-drops and the receive/transmit demos isolate
+        // each; NIC errors are a separate signal kept at zero here.
+        dropsPerSecond: netRxDrops + netTxDrops,
+        rxDropsPerSecond: netRxDrops,
+        txDropsPerSecond: netTxDrops,
         errorsPerSecond: 0,
         // eth0 is the primary (noisiest) NIC, eth1 idles alongside, so the interface
         // terminal shows a real breakdown with a marked primary; their rx/tx sum to
@@ -1050,7 +1079,7 @@ const scenarioTelemetry = (
         tcp: netTcp,
         recvQueueBytes: netRecvQ,
         sendQueueBytes: netSendQ,
-        backloggedSockets: networkSaturated ? 130 + Math.round(30 * netWave) : 2,
+        backloggedSockets: netRecvSat ? 130 + Math.round(30 * netWave) : 2,
         topSockets: networkSaturated
           ? [
               { local: "10.0.0.5:443", remote: "203.0.113.9:52344", state: "ESTAB", recvQueueBytes: 0.2 * mib, sendQueueBytes: (1.4 + 0.3 * netWave) * mib },
@@ -1060,17 +1089,21 @@ const scenarioTelemetry = (
           : [
               { local: "10.0.0.5:443", remote: "203.0.113.9:52344", state: "ESTAB", recvQueueBytes: 0, sendQueueBytes: 24 * 1024 },
             ],
-        // Canal lock signals: kernel softnet backlog + drops and ring fifo overruns
-        // blow out under saturation. A ring depth + qdisc backlog are supplied so the
-        // demo shows the ring BRIM and the kernel-TX qdisc pool rather than the
-        // tx-drop fallback; a 1 GbE link so the lanes scale to link rate.
-        softnetSqueezePerSecond: networkSaturated ? 150 + 70 * netWave : 6,
-        softnetDropsPerSecond: networkSaturated ? 80 + 50 * netWave : 0,
-        rxFifoPerSecond: networkSaturated ? 65 + 45 * netWave : 0,
-        txFifoPerSecond: networkSaturated ? 40 + 25 * netWave : 0,
+        // Canal lock signals split into PRESSURE (steady) and LOSS (pulsing), gated by
+        // direction. Receive: softnet backlog is the pressure — steady-high in receive-
+        // sat, BRIMMING the kernel-RX pool; softnet DROPS + rx-ring fifo overruns are
+        // the loss — they pulse with netLossPulse so the pool overspills only on the
+        // spikes. Transmit: qdisc backlog is the steady pressure, tx-ring fifo the
+        // pulsing loss. So each saturation demo shows its lane brim (pressure) then
+        // overspill (loss) and recover. Ring depth + qdisc backlog are supplied so the
+        // demo shows the ring BRIM and qdisc pool rather than the tx-drop fallback.
+        softnetSqueezePerSecond: netRecvSat ? 160 + 90 * netWave : 6,
+        softnetDropsPerSecond: netRecvSat ? 130 * netLossPulse : 0,
+        rxFifoPerSecond: netRecvSat ? 95 * netLossPulse : 0,
+        txFifoPerSecond: netXmitSat ? 65 * netLossPulse : 0,
         ringDepthRx: 1024,
         ringDepthTx: 1024,
-        qdiscBacklogBytes: networkSaturated ? (1.3 + 0.5 * netWave) * mib : 4 * 1024,
+        qdiscBacklogBytes: netXmitSat ? (1.3 + 0.5 * netWave) * mib : 4 * 1024,
         linkCapacityBps: 1_000_000_000,
   };
   // Calm baseline link for every non-network scenario: a lightly-used eth0 (~11%
@@ -1092,6 +1125,8 @@ const scenarioTelemetry = (
     rxBytesPerSecond: baseEth0Rx + baseEth1Rx,
     txBytesPerSecond: baseEth0Tx + baseEth1Tx,
     dropsPerSecond: 0,
+    rxDropsPerSecond: 0,
+    txDropsPerSecond: 0,
     errorsPerSecond: 0,
     primaryInterface: "eth0",
     interfaces: [
@@ -1320,8 +1355,8 @@ const start = async () => {
     const refreshEffectiveTelemetry = (forceScenarioSample = false) => {
       const engine = getEngine();
       const mode = engine?._DoomPerf_GetSimMode?.() ?? 0;
-      // Must match scenarioTelemetry's own range check (1..10 — 3/4/5 disk, 6/7/8 memory, 9/10 network).
-      const inScenario = mode >= 1 && mode <= 10;
+      // Must match scenarioTelemetry's own range check (1..11 — 3/4/5 disk, 6/7/8 memory, 9/10/11 network).
+      const inScenario = mode >= 1 && mode <= 11;
       const now = Date.now();
       if (!inScenario) {
         lastScenario = undefined;

@@ -170,7 +170,13 @@ export interface SocketTelemetry {
 export interface NetworkTelemetry extends ResourceTelemetry {
   rxBytesPerSecond?: number;
   txBytesPerSecond?: number;
+  // dropsPerSecond is the aggregate (rx+tx) drop rate driving the USE Saturation
+  // bar; rx/txDropsPerSecond split it by direction so receive-side (backlog / rx-ring
+  // exhaustion) vs transmit-side (qdisc / txqueue) saturation reads distinctly. The
+  // network terminal names both; the RX-drop / TX-drop demo modes fire only one.
   dropsPerSecond?: number;
+  rxDropsPerSecond?: number;
+  txDropsPerSecond?: number;
   errorsPerSecond?: number;
   // Noisiest real NIC this sample + the per-interface breakdown (busiest first);
   // the packet grove binds to the primary interface rather than the aggregate.
@@ -246,6 +252,9 @@ export type SimStorageTelemetry = StorageTelemetry &
 export type SimNetworkTelemetry = NetworkTelemetry &
   Required<Pick<NetworkTelemetry,
     | "rxBytesPerSecond" | "txBytesPerSecond"
+    // Directional drop rates the network terminal names line-by-line: required so
+    // both sim branches synthesize them (the RX-drop / TX-drop demo modes fire one).
+    | "rxDropsPerSecond" | "txDropsPerSecond"
     | "primaryInterface" | "interfaces" | "tcp"
     | "recvQueueBytes" | "sendQueueBytes" | "backloggedSockets" | "topSockets"
     // Canal lock inputs the engine feeds from the effective snapshot: requiring them

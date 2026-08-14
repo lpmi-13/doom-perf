@@ -185,7 +185,14 @@ type networkTelemetry struct {
 	resourceUSE
 	RXBytesPerSecond float64 `json:"rxBytesPerSecond"`
 	TXBytesPerSecond float64 `json:"txBytesPerSecond"`
+	// DropsPerSecond is the aggregate (rx+tx) drop rate that drives the USE
+	// Saturation term; Rx/TxDropsPerSecond split it by direction so a receive-side
+	// (backlog/rx-ring exhaustion) vs transmit-side (qdisc/txqueue) saturation reads
+	// distinctly — the network terminal names both, and only one fires in the
+	// RX-drop / TX-drop demo modes.
 	DropsPerSecond   float64 `json:"dropsPerSecond"`
+	RxDropsPerSecond float64 `json:"rxDropsPerSecond"`
+	TxDropsPerSecond float64 `json:"txDropsPerSecond"`
 	ErrorsPerSecond  float64 `json:"errorsPerSecond"`
 	// PrimaryInterface is the noisiest real NIC this sample (highest rx+tx); the
 	// packet grove binds to it so the in-world lanes track the main interface
@@ -674,6 +681,10 @@ func (s *sampler) sample(now time.Time) (telemetry, error) {
 	softnetDropped, softnetSqueezed := readSoftnet()
 	network.SoftnetDropsPerSecond = counterRate(softnetDropped, s.softnetDropped, elapsed)
 	network.SoftnetSqueezePerSecond = counterRate(softnetSqueezed, s.softnetSqueezed, elapsed)
+	// Fold softnet squeeze into USE Saturation now that it's known: a softirq that
+	// ran out of budget with packets pending is saturated even with zero drops (the
+	// pre-loss regime), so this can lift Saturation on a busy host before it drops.
+	network.Saturation = netSaturation(network.DropsPerSecond, network.SoftnetSqueezePerSecond)
 
 	s.lastAt = now
 	s.cpu = cpu
@@ -1375,7 +1386,11 @@ func reduceNetwork(nets []netCounter, previous map[string]netCounter, elapsed fl
 		tx := counterRate(net.txBytes, old.txBytes, elapsed)
 		result.RXBytesPerSecond += rx
 		result.TXBytesPerSecond += tx
-		result.DropsPerSecond += counterRate(net.rxDrops+net.txDrops, old.rxDrops+old.txDrops, elapsed)
+		rxDrops := counterRate(net.rxDrops, old.rxDrops, elapsed)
+		txDrops := counterRate(net.txDrops, old.txDrops, elapsed)
+		result.RxDropsPerSecond += rxDrops
+		result.TxDropsPerSecond += txDrops
+		result.DropsPerSecond += rxDrops + txDrops
 		result.ErrorsPerSecond += counterRate(net.rxErrors+net.txErrors, old.rxErrors+old.txErrors, elapsed)
 		result.RxFifoPerSecond += counterRate(net.rxFifo, old.rxFifo, elapsed)
 		result.TxFifoPerSecond += counterRate(net.txFifo, old.txFifo, elapsed)
@@ -1408,9 +1423,23 @@ func reduceNetwork(nets []netCounter, previous map[string]netCounter, elapsed fl
 	if capacity > 0 {
 		result.Utilization = clamp((result.RXBytesPerSecond + result.TXBytesPerSecond) * 8 / capacity)
 	}
-	result.Saturation = clamp(result.DropsPerSecond / 100)
+	// Drops are half the USE Saturation story; sample() folds in softnet squeeze (the
+	// pre-loss receive-path saturation) once /proc/net/softnet_stat is read.
+	result.Saturation = netSaturation(result.DropsPerSecond, 0)
 	result.Errors = clamp(result.ErrorsPerSecond / 50)
 	return result, current
+}
+
+// netSqueezeSatFull is the softnet time_squeeze rate (events/s) taken as full
+// receive-path saturation. Approximate, like the drops/100 scale — a demo threshold.
+const netSqueezeSatFull = 200
+
+// netSaturation folds the two USE network-saturation signals into one [0,1] scalar:
+// packet LOSS (rx+tx drops) and receive-softirq SQUEEZE (net_rx_action ran out of
+// budget with packets still pending — saturation that PRECEDES loss). Either can
+// drive it, so a box squeezing its softirq reads saturated before it starts dropping.
+func netSaturation(dropsPerSecond, squeezePerSecond float64) float64 {
+	return math.Max(clamp(dropsPerSecond/100), clamp(squeezePerSecond/netSqueezeSatFull))
 }
 
 func readNetCounters() ([]netCounter, error) {

@@ -315,6 +315,8 @@ const readNetwork = (payload: Record<string, unknown>): NetworkTelemetry => {
     rxBytesPerSecond: numberValue(source.rxBytesPerSecond),
     txBytesPerSecond: numberValue(source.txBytesPerSecond),
     dropsPerSecond: numberValue(source.dropsPerSecond),
+    rxDropsPerSecond: numberValue(source.rxDropsPerSecond),
+    txDropsPerSecond: numberValue(source.txDropsPerSecond),
     errorsPerSecond: numberValue(source.errorsPerSecond),
     primaryInterface: typeof source.primaryInterface === "string" ? source.primaryInterface : undefined,
     interfaces: readNetworkInterfaces(source.interfaces),

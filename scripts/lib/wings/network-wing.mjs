@@ -77,8 +77,12 @@ const levelSigns = [
     { texture: tex("SG0T"), patch: tex("PG0T"), l1: "SOCKET", l2: "SEND-Q" },
   ],
   [
-    { texture: tex("SG1R"), patch: tex("PG1R"), l1: "SOFTNET", l2: "BACKLOG" },
-    { texture: tex("SG1T"), patch: tex("PG1T"), l1: "QDISC", l2: "BACKLOG" },
+    // The kernel software-queue tier: generalized from the Linux impl names
+    // (softnet backlog / qdisc) to a KERNEL RX/TX QUEUE abstraction so the three
+    // tiers read as one ladder -- socket (transport) -> kernel (stack) -> NIC
+    // (hardware). Provenance stays in the comment above; the sign stays legible.
+    { texture: tex("SG1R"), patch: tex("PG1R"), l1: "KERNEL RX", l2: "QUEUE" },
+    { texture: tex("SG1T"), patch: tex("PG1T"), l1: "KERNEL TX", l2: "QUEUE" },
   ],
   [
     { texture: tex("SG2R"), patch: tex("PG2R"), l1: "NIC RX", l2: "RING" },
@@ -361,7 +365,7 @@ const build = (ctx) => {
     });
   };
   placard(levels[0], "left"); placard(levels[0], "right"); // socket: RECV-Q / SEND-Q
-  placard(levels[1], "left"); placard(levels[1], "right"); // kernel: SOFTNET / QDISC
+  placard(levels[1], "left"); placard(levels[1], "right"); // kernel: KERNEL RX / TX QUEUE
   placard(levels[2], "left"); placard(levels[2], "right"); // device: NIC RX / NIC TX
 
   // ===== ss-census alcove off the socket stage's left catwalk: a walk-in bay whose deep

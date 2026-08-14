@@ -650,8 +650,18 @@ const formatNetwork = (telemetry: TelemetrySnapshot): string => {
   lines.push(`primary interface: ${n.primaryInterface ?? "-"}   (* = noisiest; grove shows all)`);
   lines.push("");
   lines.push(`utilization  ${bar(n.utilization)} ${pctText(n.utilization)}%   (throughput vs link speed)`);
-  lines.push(`saturation   ${bar(n.saturation)} ${pctText(n.saturation)}%   (drops)`);
+  lines.push(`saturation   ${bar(n.saturation)} ${pctText(n.saturation)}%   (queue backup + drops)`);
   lines.push(`errors       ${bar(n.errors)} ${pctText(n.errors)}%`);
+  // Break the saturation bar into named counters so it isn't a black box, and so
+  // PRESSURE and LOSS read distinctly: rx/tx-drops are LOSS (a queue overflowed on the
+  // receive vs transmit side), rx-queue is PRESSURE (the receive stack queue backing
+  // up short of loss — it climbs before drops start). The receive/transmit saturation
+  // demos light one direction at a time. (rx-queue is the softnet backlog rate; kept
+  // generic here, `softnet` in the collector where the data source is documented.)
+  lines.push("");
+  lines.push(`  rx-drops    ${String(Math.round(rate(n.rxDropsPerSecond))).padStart(7)}/s   (receive-side loss)`);
+  lines.push(`  tx-drops    ${String(Math.round(rate(n.txDropsPerSecond))).padStart(7)}/s   (transmit-side loss)`);
+  lines.push(`  rx-queue    ${String(Math.round(rate(n.softnetSqueezePerSecond))).padStart(7)}/s   (receive backlog — pre-loss)`);
   return lines.join("\n");
 };
 
