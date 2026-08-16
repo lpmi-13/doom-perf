@@ -260,7 +260,10 @@ const oppositeSide = {
   left: "right",
 };
 
-const equipmentKinds = new Set(["core-column", "load-gauge", "server-rack", "metric-display", "rq-tower"]);
+// `net-signal` = the network wing's trackside block-signal posts: like other equipment,
+// only the `textureSide` face wears the display texture (the swappable lamp) and the rest
+// wear `sideWall` (dark housing). See network-wing.mjs signalPost.
+const equipmentKinds = new Set(["core-column", "load-gauge", "server-rack", "metric-display", "rq-tower", "net-signal"]);
 const equipmentTextureForSide = (equipment, side) =>
   equipment.textureSide && side !== equipment.textureSide
     ? (equipment.sideWall ?? equipment.wall)

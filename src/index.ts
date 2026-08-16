@@ -310,6 +310,10 @@ type DoomPerfEngine = {
   _DoomPerf_SetNetLockFill?: (level: number, lane: number, permille: number) => void;
   _DoomPerf_SetNetLockDrops?: (level: number, lane: number, permille: number) => void;
   _DoomPerf_SetNetSoftnetSqueeze?: (permille: number) => void;
+  // Pure softnet backlog-drop rate (permille) for the kernel-RX decomposition coils'
+  // DROP pillar; distinct from the blended kernel-RX lock-drop so the coil isolates
+  // per-CPU input-queue overflow from NIC-ring drops.
+  _DoomPerf_SetNetSoftnetDrops?: (permille: number) => void;
   _DoomPerf_SetNetBacklogged?: (count: number) => void;
   _DoomPerf_SetNetSynRecv?: (count: number) => void;
   _DoomPerf_SetNetRingDepthKnown?: (lane: number, known: number) => void;
@@ -597,10 +601,34 @@ const pushTelemetryToEngine = (
   engine?._DoomPerf_SetNetLockDrops?.(2, 1, netPm((net.txFifoPerSecond ?? 0) / DROP_FULL));
 
   // Global + socket-alcove signals: the aggregate softnet squeeze, the socket accept
-  // backlog, and the SYN-RECV half-open count (the alcove's backlog column).
+  // backlog, and the SYN-RECV half-open count (the alcove's backlog column). Plus the
+  // pure softnet backlog-drop rate feeding the kernel-RX decomposition coils' DROP
+  // pillar — kept SEPARATE from the blended kernel-RX drop above (which folds in the
+  // NIC-ring rx-drop) so the coil reads only per-CPU input-queue overflow.
   engine?._DoomPerf_SetNetSoftnetSqueeze?.(netPm((net.softnetSqueezePerSecond ?? 0) / SOFTNET_FULL));
+  engine?._DoomPerf_SetNetSoftnetDrops?.(netPm((net.softnetDropsPerSecond ?? 0) / DROP_FULL));
   engine?._DoomPerf_SetNetBacklogged?.(Math.max(0, Math.round(net.backloggedSockets ?? 0)));
   engine?._DoomPerf_SetNetSynRecv?.(Math.max(0, Math.round(net.tcp?.synRecv ?? 0)));
+};
+
+// The network saturation sims (RX = mode 10, TX = mode 11) rotate the bottleneck through
+// the three stages (0 socket / 1 kernel / 2 NIC ring) instead of saturating the whole
+// column at once: a real path has ONE dominant bottleneck, and the stages downstream of it
+// are starved (which the engine's gate model reproduces on its own). Every NET_HOT_STAGE_MS
+// the active lane's hot stage jumps to a DIFFERENT one at random (+1 or +2 mod 3, so never
+// an immediate repeat). RX and TX keep independent rotation state so switching between the
+// two demos doesn't reset the other. This is sim-only shaping of the per-stage fill/drops
+// the gates already read — no engine change. [[network-trackside-signals]]
+const NET_HOT_STAGE_MS = 20000;
+const netHotStageByLane = [0, 0]; //  [rx, tx] currently-bottlenecked stage
+const netHotSlotByLane = [-1, -1]; // [rx, tx] last NET_HOT_STAGE_MS slot each lane advanced on
+const netPickHotStage = (now: number, lane: number): number => {
+  const slot = Math.floor(now / NET_HOT_STAGE_MS);
+  if (slot !== netHotSlotByLane[lane]) {
+    netHotSlotByLane[lane] = slot;
+    netHotStageByLane[lane] = (netHotStageByLane[lane] + 1 + Math.floor(Math.random() * 2)) % 3;
+  }
+  return netHotStageByLane[lane];
 };
 
 // A scenario is a SELF-CONTAINED simulation: every resource is synthesized here,
@@ -636,18 +664,29 @@ const scenarioTelemetry = (
   const memorySaturated = mode === 7 || mode === 8;
   const memoryNoSwap = mode === 8;
   // Network has THREE scenarios: 9 utilization (throughput pinned, no loss), then a
-  // RECEIVE / TRANSMIT saturation pair (10 / 11) — one direction's whole column backs
-  // up (socket queue -> kernel queue -> NIC ring) while the other stays calm, so one
-  // lane of the canal lights. Each sim folds PRESSURE -> LOSS: a steady queue backlog
-  // (the pressure the saturation bar reads throughout) plus drops that PULSE in and
-  // out (the loss), so you watch a lane brim, overspill, then recover on the same run
-  // — the "saturation precedes errors" lesson, without a separate mode for it.
+  // RECEIVE / TRANSMIT saturation pair (10 / 11). In each saturation demo ONE stage of the
+  // active direction is the bottleneck at a time (socket / kernel / NIC ring), and it
+  // ROTATES every NET_HOT_STAGE_MS — so over a run you watch each gate in turn back a queue
+  // up and overspill while the others flow, matching how a real path has a single dominant
+  // bottleneck (downstream stages are starved, which the engine's gate model handles). The
+  // hot stage folds PRESSURE (steady high fill -> gate red) -> LOSS (drops pulse -> the full
+  // queue overspills), the "saturation precedes errors" lesson, without a separate mode.
   const networkMode = mode >= 9 && mode <= 11;
   const netRecvSat = mode === 10; // receive-path saturation (RX lane backs up + drops)
   const netXmitSat = mode === 11; // transmit-path saturation (TX lane backs up + drops)
   const networkSaturated = netRecvSat || netXmitSat;
   const count = Math.max(1, Math.min(doomPerfCpuCoreCapacity, engine?._DoomPerf_GetEffectiveCpuCoreCount?.() ?? 8));
   const now = Date.now();
+  // Which single stage is the bottleneck this instant (rotates every NET_HOT_STAGE_MS).
+  // Only the hot stage's queue-pressure fields are driven; the rest stay idle so their
+  // gates flow green. RX (lane 0) and TX (lane 1) rotate independently.
+  const netHotStage = netRecvSat ? netPickHotStage(now, 0) : netXmitSat ? netPickHotStage(now, 1) : -1;
+  const socHotRx = netRecvSat && netHotStage === 0;
+  const kerHotRx = netRecvSat && netHotStage === 1;
+  const ringHotRx = netRecvSat && netHotStage === 2;
+  const socHotTx = netXmitSat && netHotStage === 0;
+  const kerHotTx = netXmitSat && netHotStage === 1;
+  const ringHotTx = netXmitSat && netHotStage === 2;
   // CPU is the stressed signal only in the CPU scenario, where the engine
   // synthesizes the per-core / load / run-queue values and we read them back so
   // the terminal matches the CPU room. In every OTHER scenario those same getters
@@ -1017,7 +1056,7 @@ const scenarioTelemetry = (
   // plateauing. Counts feed both the sockets terminal and (later) the wall glow.
   const netEstab = networkSaturated ? 1500 + Math.round(80 * netWave) : 1800 + Math.round(120 * netWave);
   const netTimeWait = networkSaturated ? 2400 + Math.round(300 * netWave) : 380 + Math.round(60 * netWave);
-  const netSynRecv = netRecvSat ? 160 + Math.round(60 * netWave) : 6;
+  const netSynRecv = socHotRx ? 160 + Math.round(60 * netWave) : 6;
   const netCloseWait = networkSaturated ? 120 + Math.round(30 * netWave) : 4;
   const netListen = 12;
   const netClosing = networkSaturated ? 8 : 0;
@@ -1035,16 +1074,21 @@ const scenarioTelemetry = (
   // direction's saturation — inbound app-read lag (RecvQ, receive) / outbound peer-
   // drain lag (SendQ, transmit). Held high across the whole sim so the saturation
   // reads even in the loss troughs (pressure persists; only the drops come and go).
-  const netRecvQ = netRecvSat ? (2.4 + 0.6 * netWave) * mib : 12 * 1024;
-  const netSendQ = netXmitSat ? (3.4 + 0.8 * netWave) * mib : 48 * 1024;
+  // A hot stage sits in a HIGH BAND that dips and brims with netWave, so its gate stays RED
+  // (a queue is always present) but only OVERFLOWS -- sheds drops -- near the brim. The
+  // 0.5*mib / 200 / 100 scales below match the SOCKET_Q_FULL / SOFTNET_FULL / RING_FIFO_FULL
+  // divisors in refreshEffectiveTelemetry, so netHotFill maps straight onto the fill permille.
+  const netHotFill = 0.62 + 0.55 * netWave; // ~0.62..1.17 of full -> ~620..1000 permille
+  const netRecvQ = socHotRx ? netHotFill * 0.5 * mib : 12 * 1024;
+  const netSendQ = socHotTx ? netHotFill * 0.5 * mib : 48 * 1024;
   // Loss PULSES against that steady pressure: netLossPulse dips through ~0 each cycle,
   // so a saturated lane visibly brims (pressure high, drops ~0) and then overspills
   // (drops spike) on the same run. Receive-sat drops on the RX side only, transmit-sat
   // on the TX side; dropsPerSecond is their sum (the loss half of USE Saturation, the
   // steady queue/softnet backlog being the pressure half).
   const netLossPulse = Math.abs(Math.sin(now / 1500));
-  const netRxDrops = netRecvSat ? 760 * netLossPulse : 0;
-  const netTxDrops = netXmitSat ? 640 * netLossPulse : 0;
+  const netRxDrops = kerHotRx ? 760 * netLossPulse : 0;
+  const netTxDrops = kerHotTx ? 640 * netLossPulse : 0;
   // The network-sim branch is guarded by SimNetworkTelemetry, so omitting any
   // field a network terminal reads is a compile error (see src/telemetry/types.ts).
   const networkSim: SimNetworkTelemetry = {
@@ -1079,7 +1123,7 @@ const scenarioTelemetry = (
         tcp: netTcp,
         recvQueueBytes: netRecvQ,
         sendQueueBytes: netSendQ,
-        backloggedSockets: netRecvSat ? 130 + Math.round(30 * netWave) : 2,
+        backloggedSockets: socHotRx ? 130 + Math.round(30 * netWave) : 2,
         topSockets: networkSaturated
           ? [
               { local: "10.0.0.5:443", remote: "203.0.113.9:52344", state: "ESTAB", recvQueueBytes: 0.2 * mib, sendQueueBytes: (1.4 + 0.3 * netWave) * mib },
@@ -1089,21 +1133,20 @@ const scenarioTelemetry = (
           : [
               { local: "10.0.0.5:443", remote: "203.0.113.9:52344", state: "ESTAB", recvQueueBytes: 0, sendQueueBytes: 24 * 1024 },
             ],
-        // Canal lock signals split into PRESSURE (steady) and LOSS (pulsing), gated by
-        // direction. Receive: softnet backlog is the pressure — steady-high in receive-
-        // sat, BRIMMING the kernel-RX pool; softnet DROPS + rx-ring fifo overruns are
-        // the loss — they pulse with netLossPulse so the pool overspills only on the
-        // spikes. Transmit: qdisc backlog is the steady pressure, tx-ring fifo the
-        // pulsing loss. So each saturation demo shows its lane brim (pressure) then
-        // overspill (loss) and recover. Ring depth + qdisc backlog are supplied so the
-        // demo shows the ring BRIM and qdisc pool rather than the tx-drop fallback.
-        softnetSqueezePerSecond: netRecvSat ? 160 + 90 * netWave : 6,
-        softnetDropsPerSecond: netRecvSat ? 130 * netLossPulse : 0,
-        rxFifoPerSecond: netRecvSat ? 95 * netLossPulse : 0,
-        txFifoPerSecond: netXmitSat ? 65 * netLossPulse : 0,
+        // Per-stage lock signals, driven for the ONE hot stage of the active lane (the
+        // rotating bottleneck): its fill sits in netHotFill's high band so its gate stays
+        // shut/red, and its drops pulse so the full queue overspills near the brim. The
+        // OTHER two stages read idle here, so their gates flow green. Which stage is hot
+        // (socket/kernel/ring) cycles every NET_HOT_STAGE_MS; see netPickHotStage above.
+        // Socket = recvQ/sendQ + accept backlog; kernel = softnet squeeze / qdisc + drops;
+        // ring = rx/tx fifo overruns.
+        softnetSqueezePerSecond: kerHotRx ? netHotFill * 200 : 6,
+        softnetDropsPerSecond: kerHotRx ? 130 * netLossPulse : 0,
+        rxFifoPerSecond: ringHotRx ? netHotFill * 100 : 0,
+        txFifoPerSecond: ringHotTx ? netHotFill * 100 : 0,
         ringDepthRx: 1024,
         ringDepthTx: 1024,
-        qdiscBacklogBytes: netXmitSat ? (1.3 + 0.5 * netWave) * mib : 4 * 1024,
+        qdiscBacklogBytes: kerHotTx ? netHotFill * 0.5 * mib : 4 * 1024,
         linkCapacityBps: 1_000_000_000,
   };
   // Calm baseline link for every non-network scenario: a lightly-used eth0 (~11%

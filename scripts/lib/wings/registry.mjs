@@ -119,6 +119,8 @@ export const reserved = {
     //   710-712 lock gates  (710+level) -- congestion light brightens with saturation
     //   720-725 side drains (720+level*2+lane) -- overspill basin per pool
     //   730     SYN-RECV backlog column (socket-lock alcove)
+    //   740-745 trackside signal posts (740+level*2+lane) -- lamp swapped green/red by
+    //           the engine off the lane's stall state (network-wing.mjs signalPost)
     // Lights 124-128 stay reserved (gate glow is driven by TAG, not light-sentinel
     // match, so no exact-value sentinel is spent). Line tags 760-799 currently unused.
     sectorTags: [700, 759],
@@ -130,8 +132,10 @@ export const reserved = {
     // NAMES + frame letters (the DPN prefix can't apply) — see
     // [[pwad-sprite-override-constraint]]. PINV (A–D) -> cyan RX packet + bloom/
     // fade FX; PMAP (A–D) -> violet TX packet + FX. Both unused by CPU (PINS/
-    // SOUL/BON1/BON2).
-    spriteReplacements: ["PINVA0", "PINVB0", "PINVC0", "PINVD0", "PMAPA0", "PMAPB0", "PMAPC0", "PMAPD0"],
+    // SOUL/BON1/BON2). BLUD A/B/C -> softnet Tesla-coil lightning (MT_DP_NETARC): A/B a
+    // small flickering bolt, C the tall branchy bolt fired at very high saturation. Blood
+    // is never spawned in a combat-free lab, so the frames are free.
+    spriteReplacements: ["PINVA0", "PINVB0", "PINVC0", "PINVD0", "PMAPA0", "PMAPB0", "PMAPC0", "PMAPD0", "BLUDA0", "BLUDB0", "BLUDC0"],
   },
 };
 

@@ -302,4 +302,5 @@ export type TerminalSign =
   | "storage-await"
   | "network"
   | "network-sockets"
-  | "network-queues";
+  | "network-queues"
+  | "network-softnet";

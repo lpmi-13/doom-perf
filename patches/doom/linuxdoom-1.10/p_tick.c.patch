@@ -27,6 +27,13 @@
 #         player-drag scale read by p_user.c P_MovePlayer (lane tags 652/653)
 #   (+)   network-substation-phase2 (load->colour temper on the bus beds, breaker
 #         trip strobe, lane-coloured arc-flash at the step-down transformers)
+#   (+)   network-signals + gate-metered lanes (trackside block-signal posts, sector tags
+#         740-745): orbs glide free then QUEUE at each stage's metered gate (shut time grows
+#         with the stage's queue pressure = max of its fill and its live drop rate); the
+#         catwalk-facing lamp reads RED only while an orb is physically held, GREEN when clear
+#         (doomperf_net_gate_red); loss is overflow-only -- a drop fires ONLY when the tail
+#         orb hits a full MAXQ-deep queue (so every drop has a red line), and it DISSIPATES
+#         upward in a lane-coloured spark spray (DoomPerf_NetDrop), not a downward fall
 # Order-independent: this is the only Doom Perf patch that touches p_tick.c.
 # Regenerate by diffing a clean tree against the staged build tree;
 # see scripts/build-doom-wasm.sh.
@@ -39,7 +46,7 @@
  //-----------------------------------------------------------------------------
  //
  // $Id:$
-@@ -30,9 +30,3800 @@
+@@ -30,9 +30,4037 @@
  
  #include "doomstat.h"
  
@@ -2829,27 +2836,26 @@
 +// UP the stack toward the hub (+x), violet TX orbs (MT_DP_NETTX) flow DOWN toward the
 +// wire (-x). The orbs are non-blocking + NOCLIP (the player walks freely through
 +// them); each lane's population is a representative sqrt gradient over throughput.
-+// The new part: where a lock is SATURATED (its pool near-brim), orbs entering that
-+// lock's region SLOW and bunch -- the crowd waiting to be locked through -- so
-+// throughput reads as the gap between locks draining and saturation as the crowd.
-+// The orb also FALLS off each cliff (waterfall) as it descends the ravine: ride-z is
-+// flat within a level then drops sharply at the two waterfall lines. All world coords
-+// below MUST match network-wing.mjs (RING_PITCH rule): lanes at y=+/-68 (LANEHW),
-+// travelling along world x = -v over [-2640,-960]; the hall bottoms at walk -192.
++// The behaviour: orbs glide FREELY toward the exit, but each stage's transformer is a
++// metered GATE (DoomPerf_NetLane) that shuts under load -- an orb halts short of a shut
++// gate and the ones behind it stack into a visible queue, released a clump at a time when
++// the gate opens. The orb also FALLS off each cliff (waterfall) as it descends the ravine:
++// ride-z is flat within a level then drops sharply at the two waterfall lines. All world
++// coords below MUST match network-wing.mjs (RING_PITCH rule): lanes at y=+/-68 (LANEHW),
++// travelling along world x = -v over [-2680,-960]; the hall bottoms at walk -192.
 +#define DOOMPERF_NET_LANE_Y	68			// |world y| of each lane (LANEHW; trough centre)
-+#define DOOMPERF_NET_RX_SPAWN_X	(-2640)			// RX spawns deep (ring channel)
++#define DOOMPERF_NET_RX_SPAWN_X	(-2680)			// RX spawns deep (behind the ring gate: runway)
 +#define DOOMPERF_NET_RX_EXIT_X	(-960)			// RX exits near the foyer (+x)
 +#define DOOMPERF_NET_TX_SPAWN_X	(-960)			// TX spawns near the foyer
-+#define DOOMPERF_NET_TX_EXIT_X	(-2640)			// TX exits at the wire (-x)
-+#define DOOMPERF_NET_LEN	1680			// |spawn - exit| in map units
++#define DOOMPERF_NET_TX_EXIT_X	(-2680)			// TX exits at the wire (behind the ring gate)
++#define DOOMPERF_NET_LEN	1720			// |spawn - exit| in map units
 +#define DOOMPERF_NET_CAP	28			// max orbs per lane (long hall; perf cap)
-+#define DOOMPERF_NET_SPEED	(4 * FRACUNIT)		// forward glide / tic at a draining lock
++#define DOOMPERF_NET_SPEED	(4 * FRACUNIT)		// forward free-glide speed / tic
 +#define DOOMPERF_NET_STEER	(2 * FRACUNIT)		// lateral homing toward lane centre
 +#define DOOMPERF_NET_MINTARGET	6			// baseline orbs/lane (hall never reads dead)
-+// Lock region boundaries in world x = the WATERFALL lines from network-wing.mjs (local
-+// v=1408 / 2048 -> x=-1408 / -2048): x > B0 = socket, B1 < x <= B0 = kernel, else
-+// ring. A region's per-lane fill slows an orb passing through it, and these are also
-+// where the orb tumbles off the cliff to the next level.
++// Stage WATERFALL lines from network-wing.mjs (local v=1408 / 2048 -> x=-1408 / -2048):
++// x > B0 = socket, B1 < x <= B0 = kernel, else ring. These are where the orb tumbles off
++// the cliff to the next level (the ride-z step below); the gates sit just inside each.
 +#define DOOMPERF_NET_REGION_B0	(-1408)
 +#define DOOMPERF_NET_REGION_B1	(-2048)
 +// Orb ride-z: flat per level at walk+ORB_RIDE(-16) -- DOWN IN the channel, above the
@@ -2865,6 +2871,28 @@
 +#define DOOMPERF_NET_GATE_TAG	710	// 710 + level          : brink gate congestion light
 +#define DOOMPERF_NET_DRAIN_TAG	720	// 720 + level*2 + lane : (retired -- overspill plops at the cliffs)
 +#define DOOMPERF_NET_SYN_TAG	730	//                        SYN-RECV backlog column
++#define DOOMPERF_NET_SIG_TAG	740	// 740 + level*2 + lane : trackside block-signal post
++// ===== Trackside GATE model. Each stage's transformer is a metered GATE the packets
++// queue at: orbs flow FREE along the lane, then a CLOSED gate halts them and they back up
++// (car-following) into a visible line; when the gate opens it releases the front clump and
++// shuts again. The gate's CLOSED time grows with that stage's queue PRESSURE -- the worse
++// of its live queue fill and its live drop rate, so a lane that is dropping is visibly
++// backed up -- and the trackside signal reads RED only while an orb is actually HELD there
++// (green the moment the way is clear). Packet loss is NOT a free-floating rate: a drop only
++// happens when an orb reaches a queue that is already MAXQ deep, so every dropped orb has a
++// full red queue in front of it (it "crashes into the back of the line").
++#define DOOMPERF_NET_GATE_STOP	20	// halt this far before a closed gate (map units)
++#define DOOMPERF_NET_GATE_GAP	40	// car-following spacing between queued orbs (map units)
++#define DOOMPERF_NET_GATE_WAIT	56	// an orb within this of a closed gate counts as HELD -> red
++#define DOOMPERF_NET_GATE_OPEN	9	// tics a gate stays open per cycle (its release window)
++#define DOOMPERF_NET_GATE_SHUT	72	// extra closed tics at full pressure (0 at idle -> free flow)
++#define DOOMPERF_NET_GATE_MAXQ	5	// a queue this deep is FULL: the next arrival is dropped
++#define DOOMPERF_NET_DROP_RISE	(2 * FRACUNIT)	// a dropped orb drifts gently UP as it fizzles
++// Gate world x per stage level (socket/kernel/ring) = the signal-post centres from
++// network-wing.mjs (brink-32 -> world x=-v). Both lanes share them; y=+/-68 is the lane.
++static const int	doomperf_net_gate_x[3] = {-1360, -2000, -2640};
++static int		doomperf_net_gate_red[3][2];	// 1 while a gate holds an orb (signal swap reads this)
++static int		doomperf_net_gate_phase[3][2];	// per-gate service-cycle counter (persists across tics)
 +// Trough floor geometry (map units): floor = walk - POOL_EMPTY + TRAVEL*fill/1000 (a
 +// deep channel: walk-64 drained .. walk-32 brimming, staying below the walk-24 median).
 +#define DOOMPERF_NET_POOL_EMPTY	64
@@ -2875,6 +2903,14 @@
 +static const int doomperf_net_drain_x[3] = {-1408, -2048, -2688};
 +static const int doomperf_net_drain_z[3] = {-16, -112, -208};
 +#define DOOMPERF_NET_DRAIN_Y	68
++// Softnet Tesla electrodes: two upright coils in the kernel-RX (west) bay, mirrored from
++// network-wing.mjs (RING_PITCH discipline -- keep in sync). West wing maps local (u,v) ->
++// world (-v, u), so the rods at local u=-400, v=1664/1920 share world y=-400 and sit at
++// the world x below; their tips are at F1+120 = 24 map units, where the bolts crackle.
++#define DOOMPERF_NET_COIL_Y	(-400)		// electrodes' world y (local u on the RX catwalk)
++#define DOOMPERF_NET_COIL_TOPZ	24		// electrode tip height (map units)
++#define DOOMPERF_NET_COIL_BIG	780		// smoothed glow above this fires the tall branchy bolt
++static const int doomperf_net_coil_x[2] = {-1664, -1920};	// squeeze / drop electrode world x
 +
 +static mobj_t*	doomperf_netpkt_rx[DOOMPERF_NET_CAP];
 +static mobj_t*	doomperf_netpkt_tx[DOOMPERF_NET_CAP];
@@ -2882,17 +2918,6 @@
 +// bursty after each spawn so packets travel in clumps rather than an even train.
 +static int	doomperf_netpkt_rxgap;
 +static int	doomperf_netpkt_txgap;
-+
-+// Which lock region a world x sits in (0 socket / 1 kernel / 2 ring). The region's
-+// per-lane pool fill slows an orb passing through it.
-+static int DoomPerf_NetRegion (int x)
-+{
-+    if (x > DOOMPERF_NET_REGION_B0)
-+	return 0;
-+    if (x > DOOMPERF_NET_REGION_B1)
-+	return 1;
-+    return 2;
-+}
 +
 +// The orb ride-height TARGET at world x: flat at each level's walk-16 (down IN the
 +// channel, above the full water surface), dropping sharply at the two waterfall lines
@@ -2931,6 +2956,35 @@
 +    {
 +	if (doomperf_net_softnet_squeeze > s)
 +	    s = doomperf_net_softnet_squeeze;
++    }
++    return s;
++}
++
++// Per-LANE queue pressure (permille) that drives how long a stage's GATE stays SHUT (so a
++// backed-up stage holds its packets longer and the queue lengthens): the lane's OWN pool
++// fill, lifted on the receive lane (lane 0) by the socket accept backlog (level 0) and the
++// softnet squeeze (level 1) -- the two receive-side pressures that stall packets without
++// the trough itself brimming. The trackside signal's red/green is NOT read from this; it
++// reflects whether an orb is physically held at the gate (doomperf_net_gate_red).
++static int DoomPerf_NetLaneSat (int level, int lane)
++{
++    int	s = doomperf_net_lock_fill[level][lane];
++
++    if (lane == 0)
++    {
++	if (level == 0)
++	{
++	    int	bl = doomperf_net_backlogged * 5;	// 200 backlogged -> full
++	    if (bl > 1000)
++		bl = 1000;
++	    if (bl > s)
++		s = bl;
++	}
++	else if (level == 1)
++	{
++	    if (doomperf_net_softnet_squeeze > s)
++		s = doomperf_net_softnet_squeeze;
++	}
 +    }
 +    return s;
 +}
@@ -2976,59 +3030,191 @@
 +// `target` is the AVERAGE packet count for this density; the bursty per-spawn gap
 +// (*nextGap) lets clumps briefly overshoot it and lulls fall below. `dir` is +1
 +// (toward +x) or -1.
++// A DROPPED packet DISSIPATES: instead of just blinking out, the orb drifts gently UPWARD
++// and rings out (a fizzle), shedding a couple of lane-coloured SPARKS that spray up-and-out
++// and crackle away -- the packet's charge discharging into the air. Electric, in the lane's
++// own colour (cyan RX / violet TX), and kept distinct from the softnet coils' lightning. The
++// sparks start on the smaller/quicker ring frame (FADE2) so they read as a spray UNDER the
++// packet's own fade rather than three identical pops. Drop the pool reference first (like
++// DoomPerf_RqDespawn); the momenta set here outlive the fade states' tics.
++static void DoomPerf_NetDrop (mobj_t* mo, statenum_t fade, int laneY)
++{
++    statenum_t	sparkfade;
++    int		out;
++    int		n;
++
++    if (!mo)
++	return;
++    out = (laneY < 0) ? -1 : 1;		// sign of y toward the outer trough wall
++    sparkfade = (mo->type == MT_DP_NETRX) ? S_DP_NETRX_FADE2 : S_DP_NETTX_FADE2;
++
++    // A brief spark spray leaps off the failing packet -- scattering up and outward.
++    for (n = 0; n < 2; n++)
++    {
++	mobj_t*	sp = P_SpawnMobj (mo->x, mo->y, mo->z, mo->type);
++
++	P_SetMobjState (sp, sparkfade);
++	sp->momx = ((P_Random () - 128) * FRACUNIT) / 40;		// +/- ~3 along the lane
++	sp->momy = (out * FRACUNIT) + ((P_Random () - 128) * FRACUNIT) / 64;
++	sp->momz = (96 + (P_Random () & 127)) * (FRACUNIT / 32);	// rise ~3..7 / tic
++    }
++    // The packet itself unblocks, eases off the lane centre, rises gently, and fizzles out.
++    mo->flags &= ~MF_SOLID;
++    mo->flags |= MF_NOGRAVITY;
++    P_SetMobjState (mo, fade);
++    mo->momx = ((P_Random () - 128) * FRACUNIT) / 64;
++    mo->momy = out * (FRACUNIT / 2);
++    mo->momz = DOOMPERF_NET_DROP_RISE + (P_Random () & 63) * (FRACUNIT / 32);	// gentle up
++}
++
++// One lane, GATE-METERED. Orbs glide FREE toward the exit, but each stage's transformer is
++// a gate that shuts under load: an orb halts short of a shut gate and the ones behind it
++// stack up (car-following) into a visible queue; when the gate opens it releases the front
++// of the line and shuts again. The trackside signal (doomperf_net_gate_red) reads RED only
++// while an orb is actually held at its gate. A queue that overflows -- or the live per-lane
++// drop rate -- sheds its tail orb, which peels out of the trough (packet loss). `target` is
++// the average arrival count for this throughput; `dir` is +1 (toward +x) or -1.
 +static void DoomPerf_NetLane (mobj_t** pool, int* nextGap, mobjtype_t type,
 +			      statenum_t fade, int laneY, int spawnX, int exitX,
 +			      int dir, int lane, int target)
 +{
++    mobj_t*	live[DOOMPERF_NET_CAP];
++    int		open[3];
++    int		qcount[3];
++    mobj_t*	qtail[3];
++    int		n;
 +    int		i;
-+    int		w;
++    int		k;
++    int		L;
 +    int		alive;
 +    int		spacing;
 +    int		min_prog;
 +    mobj_t*	mo;
 +
-+    w = 0;
++    // ----- 1. Gather the live orbs (fading out any that crossed the exit), front-most
++    // first: insertion-sort by progress p = dir*x descending, so orb k always has the orb
++    // ahead of it at k-1 -- the order car-following needs.
++    n = 0;
 +    for (i = 0; i < DOOMPERF_NET_CAP; i++)
 +    {
-+	fixed_t	dy;
-+	int	region;
-+	int	fill;
-+	int	speed;
++	int	p;
++	int	j;
 +
 +	mo = pool[i];
 +	if (!mo)
 +	    continue;
 +	if (mo->thinker.function.acv == (actionf_v)(-1))
 +	    continue;	// already freed elsewhere
-+	// Crossed the exit line (dir * (x - exitX) >= 0): hand to the fade animation.
 +	if (dir * ((mo->x >> FRACBITS) - exitX) >= 0)
 +	{
-+	    DoomPerf_RqDespawn (mo, fade);
++	    DoomPerf_RqDespawn (mo, fade);	// crossed the exit line
 +	    continue;
 +	}
-+	// Slow the orb where its current lock is saturated: it bunches, waiting to be
-+	// locked through (throughput = the gap between locks draining). Floored at 15%
-+	// so the lock always eventually cycles and no orb freezes forever.
-+	region = DoomPerf_NetRegion (mo->x >> FRACBITS);
-+	fill = doomperf_net_lock_fill[region][lane];
-+	speed = (DOOMPERF_NET_SPEED * (1000 - (fill * 85) / 100)) / 1000;
++	p = dir * (mo->x >> FRACBITS);
++	for (j = n; j > 0 && (dir * (live[j - 1]->x >> FRACBITS)) < p; j--)
++	    live[j] = live[j - 1];
++	live[j] = mo;
++	n++;
++    }
++
++    // ----- 2. Advance this lane's three gate service cycles. A gate is OPEN for GATE_OPEN
++    // tics, then SHUT for a span that grows with the stage's queue PRESSURE -- the worse of
++    // its fill (backlog/squeeze-lifted) and its live DROP rate, so a stage that is dropping
++    // is held shut and visibly backs up rather than silently shedding a free-flowing stream.
++    // At idle (pressure 0) the shut span is 0 -- the gate never closes and packets flow through.
++    for (L = 0; L < 3; L++)
++    {
++	int	press = DoomPerf_NetLaneSat (L, lane);
++	int	shut;
++	int	cycle;
++	int	phase = doomperf_net_gate_phase[L][lane] + 1;
++
++	if (doomperf_net_lock_drops[L][lane] > press)
++	    press = doomperf_net_lock_drops[L][lane];
++	shut = (press * DOOMPERF_NET_GATE_SHUT) / 1000;
++	cycle = DOOMPERF_NET_GATE_OPEN + shut;
++
++	if (phase >= cycle)
++	    phase = 0;
++	doomperf_net_gate_phase[L][lane] = phase;
++	open[L] = (phase < DOOMPERF_NET_GATE_OPEN);
++	doomperf_net_gate_red[L][lane] = 0;	// re-derived below from who is actually held
++	qcount[L] = 0;
++	qtail[L] = NULL;
++    }
++
++    // ----- 3. Drive each orb front-to-back: free glide, capped by the nearest SHUT gate
++    // ahead and by the orb ahead (car-following), so a shut gate backs a line up behind it.
++    // Tally who is queued at each gate (held -> red; queue length -> drops).
++    for (k = 0; k < n; k++)
++    {
++	fixed_t	dy;
++	int	p;
++	int	cap;
++	int	newp;
++	int	step;
++	int	nearGate;
++	int	nearDist;
++
++	mo = live[k];
++	p = dir * (mo->x >> FRACBITS);
++	cap = p + (DOOMPERF_NET_SPEED >> FRACBITS);	// free-glide target (map units)
++
++	nearGate = -1;
++	nearDist = 0x7fffffff;
++	for (L = 0; L < 3; L++)
++	{
++	    int	d = (dir * doomperf_net_gate_x[L]) - p;	// >0 => gate is ahead
++
++	    if (d > 0 && !open[L] && d < nearDist)
++	    {
++		nearDist = d;
++		nearGate = L;
++	    }
++	}
++	if (nearGate >= 0)
++	{
++	    int	gbar = (dir * doomperf_net_gate_x[nearGate]) - DOOMPERF_NET_GATE_STOP;
++
++	    if (gbar < cap)
++		cap = gbar;
++	    if (nearDist <= DOOMPERF_NET_GATE_WAIT)
++		doomperf_net_gate_red[nearGate][lane] = 1;	// an orb is HELD here
++	    // Count only orbs within the physical length of a FULL queue -- the stack itself,
++	    // not the whole approach -- so "queue is full" means MAXQ orbs actually bunched up.
++	    if (nearDist <= DOOMPERF_NET_GATE_STOP
++		+ (DOOMPERF_NET_GATE_MAXQ + 1) * DOOMPERF_NET_GATE_GAP)
++	    {
++		qcount[nearGate]++;
++		if (!qtail[nearGate]
++		    || p < (dir * (qtail[nearGate]->x >> FRACBITS)))
++		    qtail[nearGate] = mo;	// furthest-back orb in this queue
++	    }
++	}
++	if (k > 0)		// car-following: don't overrun the orb ahead
++	{
++	    int	abar = (dir * (live[k - 1]->x >> FRACBITS)) - DOOMPERF_NET_GATE_GAP;
++	    if (abar < cap)
++		cap = abar;
++	}
++	newp = cap;
++	if (newp < p)
++	    newp = p;			// never reverse
++	step = newp - p;		// 0..NET_SPEED (map units)
++
 +	dy = (laneY << FRACBITS) - mo->y;
 +	if (dy > DOOMPERF_NET_STEER)
 +	    dy = DOOMPERF_NET_STEER;
 +	else if (dy < -DOOMPERF_NET_STEER)
 +	    dy = -DOOMPERF_NET_STEER;
-+	mo->momx = dir * speed;
++	mo->momx = dir * (step << FRACBITS);
 +	mo->momy = dy;
-+	// Ride flat at the level's surface; at a waterfall the target drops 96 and the
-+	// orb FALLS to it (fast ease down) so it tumbles the cliff -- combined with the
-+	// forward glide it arcs down the fall. Rising (a rare backward case) snaps.
++	// Ride flat at the level's surface; at a waterfall the target drops 96 and the orb
++	// FALLS to it so it tumbles the cliff (unchanged from the free-glide version).
 +	{
 +	    fixed_t rz = DoomPerf_NetRideZ (mo->x >> FRACBITS);
 +	    fixed_t dz = mo->z - rz;
-+	    // Arc-flash: on the tic an orb crosses a step-down transformer its ride-z
-+	    // target jumps a full 96 units, so |dz| ~= 96 for just that tic. Fire a
-+	    // lane-coloured spark there (reusing the orb's self-removing fade FX) about
-+	    // half the time, so the transformer arcs as traffic passes.
++
 +	    if ((dz >= (90 << FRACBITS) || dz <= -(90 << FRACBITS)) && P_Random () < 128)
 +	    {
 +		mobj_t*	arc = P_SpawnMobj (mo->x, mo->y, (dz > 0) ? mo->z : rz, type);
@@ -3043,21 +3229,44 @@
 +	    else
 +		mo->z = rz;
 +	}
-+	pool[w++] = mo;
 +    }
-+    for (i = w; i < DOOMPERF_NET_CAP; i++)
-+	pool[i] = NULL;
-+    alive = w;
 +
++    // ----- 4. Drops: ONLY a gate whose queue has OVERFLOWED (a full MAXQ-deep line, plus the
++    // arrival that couldn't fit) sheds a packet -- its tail orb peels out of the trough. So a
++    // drop always has a full red queue in front of it; there is no free-floating loss rate.
++    // (How hard the lane is dropping is already expressed as how OFTEN the queue overflows,
++    // since the drop rate drives how long the gate stays shut in step 2.)
++    for (L = 0; L < 3; L++)
++    {
++	int	drop = (qcount[L] > DOOMPERF_NET_GATE_MAXQ);
++
++	if (drop && qtail[L])
++	{
++	    for (k = 0; k < n; k++)
++		if (live[k] == qtail[L])
++		{
++		    DoomPerf_NetDrop (qtail[L], fade, laneY);
++		    live[k] = NULL;
++		    break;
++		}
++	}
++    }
++
++    // ----- 5. Repack the pool from the survivors.
++    alive = 0;
++    for (k = 0; k < n; k++)
++	if (live[k])
++	    pool[alive++] = live[k];
++    for (i = alive; i < DOOMPERF_NET_CAP; i++)
++	pool[i] = NULL;
++
++    // ----- 6. Spawn (bursty, ~target density): emit once the newest orb has cleared a
++    // randomized clumpy gap from the spawn line.
 +    if (target > DOOMPERF_NET_CAP)
 +	target = DOOMPERF_NET_CAP;
 +    if (target <= 0)
 +	return;
-+
-+    // Mean inter-packet gap for this density (the average the bursts vary around).
 +    spacing = DOOMPERF_NET_LEN / target;
-+
-+    // Distance the closest-to-spawn live orb has travelled from the spawn line.
 +    min_prog = DOOMPERF_NET_LEN;
 +    for (i = 0; i < alive; i++)
 +    {
@@ -3065,10 +3274,6 @@
 +	if (prog < min_prog)
 +	    min_prog = prog;
 +    }
-+
-+    // Bursty emission: spawn once the newest has cleared a randomized (clumpy) gap,
-+    // then re-roll the gap. Capped at NET_CAP for perf; the mean gap keeps the
-+    // average near `target` while clumps overshoot and lulls drop below it.
 +    if (alive < DOOMPERF_NET_CAP && (alive == 0 || min_prog >= *nextGap))
 +    {
 +	mo = P_SpawnMobj (spawnX << FRACBITS, laneY << FRACBITS,
@@ -3556,23 +3761,22 @@
 +    int		i;
 +    int		level;
 +    int		lane;
-+    // Doom Perf (substation Phase 2): the tempered bus-bed flats, resolved once. The
-+    // pool branch swaps floorpic among these by live fill so a saturated bus runs hot;
-+    // the rail stripe baked into each keeps RX/TX identity in every tier. [lane] 0=RX 1=TX.
-+    static int	flats_ready = 0;
-+    static int	bus_cool[2];	// graphite (idle)
-+    static int	bus_warm[2];	// amber (warming)
-+    static int	bus_hot[2];		// red (running hot)
++    int		which;
++    // Doom Perf: per-electrode smoothed drive for the softnet Tesla coils. A one-pole
++    // low-pass so a bursty softnet rate eases the lightning CRACKLE DENSITY up and down
++    // instead of flickering. [0]=squeeze [1]=drop. The bus beds no longer move or temper
++    // (lane height + colour frozen), so no flats here.
++    static int	coil_glow[2] = {0, 0};
++    // Trackside signal lamps: cached texture nums (queried once; -2 = not yet looked up).
++    // The lit aspect is NOT a threshold here -- it mirrors doomperf_net_gate_red, set by
++    // DoomPerf_NetLane when an orb is physically held at the gate.
++    static int	sig_go = -2;
++    static int	sig_stop = -2;
 +
-+    if (!flats_ready)
++    if (sig_go == -2)
 +    {
-+	bus_cool[0] = R_FlatNumForName ("DPNRXL");
-+	bus_warm[0] = R_FlatNumForName ("DPNRXA");
-+	bus_hot[0]  = R_FlatNumForName ("DPNRXR");
-+	bus_cool[1] = R_FlatNumForName ("DPNTXL");
-+	bus_warm[1] = R_FlatNumForName ("DPNTXA");
-+	bus_hot[1]  = R_FlatNumForName ("DPNTXR");
-+	flats_ready = 1;
++	sig_go = R_CheckTextureNumForName ("DPNSIGGO");
++	sig_stop = R_CheckTextureNumForName ("DPNSIGST");
 +    }
 +
 +    for (i = 0; i < numsectors; i++)
@@ -3585,28 +3789,18 @@
 +	if (idx >= 0 && idx < 6)
 +	{
 +	    int	fill;
-+	    int	floor_u;
 +	    int	light;
 +
 +	    level = idx / 2;
 +	    lane = idx & 1;
 +	    fill = doomperf_net_lock_fill[level][lane];
-+	    floor_u = doomperf_net_walk[level] - DOOMPERF_NET_POOL_EMPTY
-+		    + (DOOMPERF_NET_POOL_TRAVEL * fill) / 1000;
-+	    sectors[i].floorheight = floor_u * FRACUNIT;
-+	    // Temper the conductor bed with load -- graphite (cool) -> amber -> red --
-+	    // so a saturated bus visibly runs hot; a hot bus also shimmers (live glow).
-+	    if (fill >= 800)
-+		sectors[i].floorpic = (short)bus_hot[lane];
-+	    else if (fill >= 500)
-+		sectors[i].floorpic = (short)bus_warm[lane];
-+	    else
-+		sectors[i].floorpic = (short)bus_cool[lane];
++	    // The lane is a CONSTANT channel: its floor height and colour never change
++	    // (frozen cool bed from the map). Saturation reads via the Tesla-coil arcs +
++	    // the gate/breaker lights. Only a gentle, smoothed brightness tracks fill here
++	    // (no floor move, no colour swap, no strobe) so the bed stays everpresent.
 +	    light = 150 + (fill * 80) / 1000;
-+	    if (fill > 850 && (leveltime & 4))
-+		light += 12;
-+	    if (light > 250)
-+		light = 250;
++	    if (light > 240)
++		light = 240;
 +	    sectors[i].lightlevel = (short)light;
 +	    continue;
 +	}
@@ -3652,29 +3846,79 @@
 +	    sectors[i].lightlevel = (short)(170 + (syn * 60) / 256);
 +	    continue;
 +	}
++
++	// Trackside SIGNAL post: swap its catwalk-facing lamp green<->red to mirror whether an
++	// orb is physically HELD at this gate (doomperf_net_gate_red, set by DoomPerf_NetLane).
++	// Only the one riser wearing a signal texture flips -- the dark housing faces are left
++	// alone (match-then-swap, the memory-wing cascade pattern).
++	idx = tag - DOOMPERF_NET_SIG_TAG;
++	if (idx >= 0 && idx < 6 && sig_go >= 0 && sig_stop >= 0)
++	{
++	    int		slevel = idx / 2;
++	    int		slane = idx & 1;
++	    short	want = (short)(doomperf_net_gate_red[slevel][slane] ? sig_stop : sig_go);
++	    int		j;
++
++	    for (j = 0; j < sectors[i].linecount; j++)
++	    {
++		line_t*	ln = sectors[i].lines[j];
++		int	sn;
++
++		for (sn = 0; sn < 2; sn++)
++		{
++		    int	side = ln->sidenum[sn];
++		    if (side == -1)
++			continue;
++		    if (sides[side].bottomtexture == sig_go
++			|| sides[side].bottomtexture == sig_stop)
++			sides[side].bottomtexture = want;
++		}
++	    }
++	    continue;
++	}
 +    }
 +
-+    // Overspill: on a lock/lane's drop signal, occasionally plop a fading orb into
-+    // that drain (reusing the lane orb's fade FX; it self-removes at S_NULL). The
-+    // per-tic chance scales with the drop rate, capped low so a handful ever coexist.
-+    for (level = 0; level < 3; level++)
++    // (Packet DROPS are now shown in-lane: DoomPerf_NetLane peels the tail orb out of an
++    // overflowing gate queue -- see DoomPerf_NetDrop -- so the old cliff-plop overspill was
++    // retired to keep loss reading as one thing.)
++
++    // Softnet TESLA COILS: two upright electrodes (kernel-RX RX catwalk) that crackle
++    // blue lightning around their tips at a rate set by their (smoothed) cause -- 0 =
++    // NAPI time_squeeze, 1 = per-CPU backlog drop. coil_glow eases so a bursty rate ramps
++    // the CRACKLE DENSITY smoothly: a rare idle spark rising to a dense storm under
++    // saturation. Bolts are NOCLIP FX that flicker once and self-remove; positions jitter
++    // around the tip so the discharge reads as arcing off the coil.
++    for (which = 0; which < 2; which++)
 +    {
-+	for (lane = 0; lane < 2; lane++)
++	int	target = which ? doomperf_net_softnet_drops
++			       : doomperf_net_softnet_squeeze;
++	int	spawns;
++	int	n;
++
++	if (target > 1000)
++	    target = 1000;
++	coil_glow[which] += (target - coil_glow[which]) / 8;	// one-pole low-pass
++	spawns = (coil_glow[which] * 3) / 1000;			// up to ~3 bolts/tic hot
++	if (P_Random () < 8 + (coil_glow[which] * 200) / 1000)	// idle shimmer .. dense
++	    spawns += 1;
++	// The discharge REACHES HIGHER as the coil is hammered (tip .. tip+~168 hot), and
++	// above the DOOMPERF_NET_COIL_BIG threshold it also fires the tall BRANCHY bolt so a
++	// storm reads as escalating in scale, not just count.
++	for (n = 0; n < spawns; n++)
 +	{
-+	    int		drops = doomperf_net_lock_drops[level][lane];
-+	    int		y;
++	    int		reach = 72 + (coil_glow[which] * 96) / 1000;	// vertical spread grows
++	    int		big = coil_glow[which] > DOOMPERF_NET_COIL_BIG && P_Random () < 128;
++	    int		jx = (P_Random () - 128) / 3;			// +/- ~42 world units
++	    int		jy = (P_Random () - 128) / 6;			// +/- ~21 (thin electrode)
++	    int		jz = DOOMPERF_NET_COIL_TOPZ + (P_Random () * reach) / 255;
 +	    mobj_t*	mo;
 +
-+	    if (drops <= 0)
-+		continue;
-+	    if (P_Random () >= (drops * 40) / 1000)
-+		continue;
-+	    y = (lane == 0) ? -DOOMPERF_NET_DRAIN_Y : DOOMPERF_NET_DRAIN_Y;
-+	    mo = P_SpawnMobj (doomperf_net_drain_x[level] << FRACBITS,
-+			      y << FRACBITS,
-+			      doomperf_net_drain_z[level] << FRACBITS,
-+			      (lane == 0) ? MT_DP_NETRX : MT_DP_NETTX);
-+	    P_SetMobjState (mo, (lane == 0) ? S_DP_NETRX_FADE1 : S_DP_NETTX_FADE1);
++	    mo = P_SpawnMobj ((doomperf_net_coil_x[which] + jx) << FRACBITS,
++			      (DOOMPERF_NET_COIL_Y + jy) << FRACBITS,
++			      jz << FRACBITS,
++			      MT_DP_NETARC);
++	    if (big)
++		P_SetMobjState (mo, S_DP_NETARC_BIG);
 +	}
 +    }
 +}
@@ -3840,7 +4084,7 @@
  //
  // THINKERS
  // All thinkers should be allocated by Z_Malloc
-@@ -123,6 +3914,194 @@
+@@ -123,6 +4151,194 @@
  
  
  
@@ -4035,7 +4279,7 @@
  //
  // P_Ticker
  //
-@@ -130,11 +4109,11 @@
+@@ -130,11 +4346,11 @@
  void P_Ticker (void)
  {
      int		i;
@@ -4049,7 +4293,7 @@
      // pause if in menu and at least one tic has been run
      if ( !netgame
  	 && menuactive
-@@ -143,16 +4122,37 @@
+@@ -143,16 +4359,37 @@
      {
  	return;
      }

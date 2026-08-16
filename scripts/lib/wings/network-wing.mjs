@@ -36,7 +36,7 @@ import {
   buildFxPatch,
   makeInscription,
 } from "../textures.mjs";
-import { lump } from "../wad-bytes.mjs";
+import { lump, buildPatch } from "../wad-bytes.mjs";
 
 // Network is fixed to the WEST cardinal wing. Local (u,v) -> world (-v,u).
 const localSideToWorld = (direction, side) => {
@@ -64,6 +64,9 @@ const tex = (suffix) => wingName("network", suffix);
 
 const screen = { texture: tex("TERM"), patch: tex("PTRM"), lines: ["NETWORK", "IFACE DEV"] };
 const socketsScreen = { texture: tex("STRM"), patch: tex("PSTR"), lines: ["SS -S", "TCP STATES"] };
+// The softnet terminal that stands between the two Tesla electrodes: the shell view that
+// confirms the saturation the coils crackle (cat /proc/net/softnet_stat).
+const softnetScreen = { texture: tex("KTRM"), patch: tex("PKTR"), lines: ["SOFTNET", "STAT"] };
 
 // Stage placards: a two-line wall sign naming each switchyard stage's queue, direction-
 // specific (RX bus on the LEFT wall u<0, TX bus on the RIGHT wall u>0), every label a
@@ -89,6 +92,123 @@ const levelSigns = [
     { texture: tex("SG2T"), patch: tex("PG2T"), l1: "NIC TX", l2: "RING" },
   ],
 ];
+
+// Kernel-RX softnet decomposition COILS: two upright TESLA electrodes (physical rods) in
+// a bay off the kernel-RX catwalk, each crackling blue lightning around its tip at a rate
+// set by its /proc/net/softnet_stat cause -- NAPI time_squeeze vs per-CPU backlog drop.
+// The rods are geometry; the lightning is MT_DP_NETARC bolts the engine spawns (see
+// p_tick.c). A single softnet_stat terminal stands on the back wall between the two rods,
+// with a wall label on each SIDE wall (orthogonal to the terminal) naming its electrode:
+// left = time_squeeze, right = backlog drop (matching p_tick's coil 0 / 1).
+const coilWallLabels = [
+  { texture: tex("WLKS"), patch: tex("PWKS"), l1: "NAPI", l2: "SQUEEZE" },   // left / squeeze
+  { texture: tex("WLKD"), patch: tex("PWKD"), l1: "BACKLOG", l2: "DROP" },    // right / backlog
+];
+
+// Tesla-coil lightning bolt (SPR_BLUD A/B, MT_DP_NETARC): a jagged white-core / electric-
+// blue arc that the engine crackles around the electrode tips. Two frames wobble so a bolt
+// flickers over its brief life; the arc DENSITY (spawn rate) carries the load, not the art.
+const buildNetLightningSprite = (frame) => {
+  const W = 20, H = 26, T = 247;
+  const px = new Uint8Array(W * H).fill(T);
+  const plot = (x, y, c) => {
+    if (x >= 0 && x < W && y >= 0 && y < H && (px[y * W + x] === T || c === 4)) px[y * W + x] = c;
+  };
+  const main = frame === 0
+    ? [[10, 25], [7, 19], [12, 13], [8, 7], [11, 1]]
+    : [[10, 25], [13, 19], [8, 13], [12, 7], [9, 1]];
+  const branch = frame === 0 ? [[12, 13], [17, 9], [15, 4]] : [[8, 13], [3, 10], [5, 5]];
+  const stroke = (pts) => {
+    for (let s = 0; s < pts.length - 1; s += 1) {
+      const [x0, y0] = pts[s];
+      const [x1, y1] = pts[s + 1];
+      const steps = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0));
+      for (let t = 0; t <= steps; t += 1) {
+        const x = Math.round(x0 + ((x1 - x0) * t) / steps);
+        const y = Math.round(y0 + ((y1 - y0) * t) / steps);
+        plot(x - 1, y, 196); plot(x + 1, y, 196); // electric-blue glow
+        plot(x, y - 1, 196); plot(x, y + 1, 196);
+        plot(x, y, 4); // white-hot core
+      }
+    }
+  };
+  stroke(main);
+  stroke(branch);
+  return buildPatch(px, W, H, { transparent: T, leftOffset: 10, topOffset: 13 });
+};
+
+// The BIG bolt (SPR_BLUD C): taller and branchier, fired only at very high saturation so
+// a storm reads as escalating, not just denser. Anchored near its base (topOffset ~= H)
+// so it rises UP from the spawn point -- higher reach when the coil is hammered.
+const buildNetLightningBig = () => {
+  const W = 30, H = 40, T = 247;
+  const px = new Uint8Array(W * H).fill(T);
+  const plot = (x, y, c) => {
+    if (x >= 0 && x < W && y >= 0 && y < H && (px[y * W + x] === T || c === 4)) px[y * W + x] = c;
+  };
+  const strokes = [
+    [[15, 39], [11, 31], [17, 23], [12, 15], [16, 7], [13, 1]], // tall main spine
+    [[17, 23], [24, 19], [21, 12], [27, 8]],                     // right branch
+    [[12, 15], [5, 12], [8, 5], [3, 2]],                         // left branch
+    [[11, 31], [4, 28], [7, 22]],                                // low-left fork
+  ];
+  strokes.forEach((pts) => {
+    for (let s = 0; s < pts.length - 1; s += 1) {
+      const [x0, y0] = pts[s];
+      const [x1, y1] = pts[s + 1];
+      const steps = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0));
+      for (let t = 0; t <= steps; t += 1) {
+        const x = Math.round(x0 + ((x1 - x0) * t) / steps);
+        const y = Math.round(y0 + ((y1 - y0) * t) / steps);
+        plot(x - 1, y, 196); plot(x + 1, y, 196);
+        plot(x, y - 1, 196); plot(x, y + 1, 196);
+        plot(x, y, 4);
+      }
+    }
+  });
+  return buildPatch(px, W, H, { transparent: T, leftOffset: 15, topOffset: H - 2 });
+};
+
+// ===== Trackside SIGNAL HEAD (railway block signal) beside each bus lane. A dark
+// riveted backboard carries two round lamps -- red (STOP, upper) over green (GO, lower)
+// -- with exactly ONE burning. The engine swaps the lit lamp per post by texture name in
+// DoomPerf_UpdateNetworkLocks: DPNSIGGO (green lit / red dark) = line clear, orbs
+// flowing; DPNSIGST (red lit / green dark) = the block is saturated enough that orbs
+// stall. Authored 64 wide (maps 1:1) x 96 tall (<=128 -> no vertical tiling); the lamp
+// sits in the upper band so it clears the rail at head height.
+// [[doom-texture-power-of-two]] [[doom-wall-texture-128-tiling]] [[prefer-everpresent-over-flicker]]
+const signalScreens = { go: tex("SIGGO"), stop: tex("SIGST") };
+const SIGTEX_W = 64, SIGTEX_H = 96;
+const buildSignalPatch = ({ redLit }) => {
+  const px = new Uint8Array(SIGTEX_W * SIGTEX_H).fill(6); // (19,19,19) dark backboard
+  const put = (x, y, c) => { if (x >= 0 && x < SIGTEX_W && y >= 0 && y < SIGTEX_H) px[y * SIGTEX_W + x] = c; };
+  // Riveted metal frame around the backboard.
+  for (let x = 0; x < SIGTEX_W; x += 1) { put(x, 0, 110); put(x, 1, 111); put(x, SIGTEX_H - 2, 111); put(x, SIGTEX_H - 1, 110); }
+  for (let y = 0; y < SIGTEX_H; y += 1) { put(0, y, 110); put(1, y, 111); put(SIGTEX_W - 2, y, 111); put(SIGTEX_W - 1, y, 110); }
+  // Two lamps on the centre line: red upper, green lower. Each is a disc in a dark
+  // housing ring; the LIT one glows from a white-hot core out through its colour, the
+  // dark one is a deep unlit bulb -- so the head still reads as two-aspect (which lamp
+  // is which) even when only one is burning.
+  const disc = (cy, ramp) => {
+    const R = 15;
+    for (let y = cy - R - 2; y <= cy + R + 2; y += 1) {
+      for (let x = 32 - R - 2; x <= 32 + R + 2; x += 1) {
+        const d = Math.hypot(x - 32, y - cy);
+        if (d > R + 1.5) continue;
+        if (d > R - 1) { put(x, y, 8); continue; } // dark housing rim
+        const step = Math.min(ramp.length - 1, Math.floor((d / R) * ramp.length));
+        put(x, y, ramp[step]);
+      }
+    }
+  };
+  const redOn = [4, 176, 179, 183, 187];    // white core -> bright red -> deep red halo
+  const redOff = [188, 190, 191, 191, 191]; // unlit: deep red bulb, no glow
+  const grnOn = [4, 112, 114, 117, 120];    // white core -> bright green -> deep green halo
+  const grnOff = [125, 126, 127, 127, 127]; // unlit: deep green bulb
+  disc(30, redLit ? redOn : redOff);
+  disc(66, redLit ? grnOff : grnOn);
+  return buildPatch(px, SIGTEX_W, SIGTEX_H);
+};
 
 const netInscription = makeInscription(tex("FN"), "CURRENT", "west", 2);
 
@@ -222,6 +342,18 @@ const HALL_CEIL = 176; //  FLAT ceiling (absolute) for the whole hall -- it does
 const POOL_TAG = ids.sectorTags[0]; //       700 + level*2 + lane
 const GATE_TAG = ids.sectorTags[0] + 10; //  710 + level
 
+// Trackside SIGNAL-HEAD posts (one per lane per stage): a thin plate carved off each
+// bus's OUTER edge at the stage brink, raised SIG_H above the catwalk so its catwalk-
+// facing face reads as a railway block signal the descending player passes. Each is
+// tagged SIG_SEC_TAG + level*2 + lane so the engine can swap its lit lamp (green while
+// the lane flows, red while it is saturated enough to stall the orbs) in
+// DoomPerf_UpdateNetworkLocks -- reading the same per-lane fills the orbs slow on, so no
+// new telemetry. [[prefer-everpresent-over-flicker]]
+const SIG_SEC_TAG = ids.sectorTags[0] + 40; // 740 + level*2 + lane
+const SIG_LEN = 64; //   post face width (v-extent); a 64-wide texture maps 1:1
+const SIG_DEPTH = 16; // post depth (u): carved off the bus's outermost 16 units, at the rail
+const SIG_H = 96; //     signal-head height above the catwalk (<=128 -> no vertical tiling)
+
 // Substation material kit (all verified exclusive to this wing -- no element shared with
 // the cpu/memory/storage wings; see NETWORK_POWERPLANT_PLAN.md). Every riser is named
 // off the builder's STEP1 default so the catwalks never read as the disk wing's tan
@@ -258,6 +390,7 @@ const build = (ctx) => {
   addWingEntrance(ctx);
 
   const backWall = localSideToWorld(direction, "top");
+  const frontWall = localSideToWorld(direction, "bottom");
   const leftWall = localSideToWorld(direction, "left");
   const rightWall = localSideToWorld(direction, "right");
 
@@ -280,19 +413,50 @@ const build = (ctx) => {
   // deep BUS BARS (RX/TX) either side of it, floor rising with the stage's charge level.
   // The buses are `blockEdge` -- an impassable, see-through rail: the player looks down
   // into them but cannot enter, and the NOCLIP orbs pass through.
+  // A trackside SIGNAL POST: a thin plate raised SIG_H above the catwalk, its catwalk-
+  // facing face wearing the block-signal lamp (green DPNSIGGO initially). `net-signal` is
+  // an equipment kind so ONLY the player-facing side shows the lamp (textureSide -> the
+  // catwalk-facing riser); the other three faces wear the dark bus housing. Tagged
+  // SIG_SEC_TAG + level*2 + lane -- the engine swaps the lit lamp per post in
+  // DoomPerf_UpdateNetworkLocks (match-then-swap, so only the lamp face flips).
+  const signalPost = (id, level, lane, { u1, u2, v1, v2, walk }) => {
+    areaRect(direction, `${id}-signal-${lane}`, { u1, v1, u2, v2 }, {
+      ...conduit,
+      kind: "net-signal",
+      floor: walk + SIG_H,
+      ceiling: HALL_CEIL,
+      light: 200,
+      floorFlat: groundFlatName,
+      wall: signalScreens.go, //     player-facing lamp face (swapped green<->red by the engine)
+      sideWall: BUS_HOUSING, //      dark housing on the other three faces
+      textureSide: lane === 0 ? leftWall : rightWall,
+      tag: SIG_SEC_TAG + level * 2 + lane,
+    });
+  };
+
   const feeder = (lvl) => {
     const { level, walk, cv1 } = lvl;
     const id = `net${level}`;
     const brink = lvl.cv2 - GATE_D; // buses run to the brink; the breaker sill is the last GATE_D
+    const sigV1 = brink - SIG_LEN; // the bus's last SIG_LEN before the breaker becomes the signal band
     const ceiling = HALL_CEIL;
+    const busOpts = (lane, flat) => ({ ...conduit, kind: "net-bus", floor: walk - POOL_EMPTY, ceiling, floorFlat: flat, light: 144, tag: POOL_TAG + level * 2 + lane, blockEdge: true, riserWall: BUS_HOUSING });
     // The spine is a LOW divider (walk-24, well below the elevated catwalks and below the
     // orb ride-height, above the full charge line) so the player, standing on the raised
     // side catwalks, can see over it into BOTH buses from either side. It is `blockEdge`
     // (impassable, see-through) so it reads as a rail, not a floor to enter; its trough-
     // facing sides glow (SPINE_WALL) as the energised conductor between the two buses.
     areaRect(direction, `${id}-spine`, { u1: -MEDHW, v1: cv1, u2: MEDHW, v2: brink }, { ...conduit, kind: "net-spine", floor: walk - 24, ceiling, light: 168, blockEdge: true, riserWall: SPINE_WALL });
-    areaRect(direction, `${id}-bus-rx`, { u1: -POOLHW, v1: cv1, u2: -MEDHW, v2: brink }, { ...conduit, kind: "net-bus", floor: walk - POOL_EMPTY, ceiling, floorFlat: busFlatNames.rx.cool, light: 144, tag: POOL_TAG + level * 2 + 0, blockEdge: true, riserWall: BUS_HOUSING });
-    areaRect(direction, `${id}-bus-tx`, { u1: MEDHW, v1: cv1, u2: POOLHW, v2: brink }, { ...conduit, kind: "net-bus", floor: walk - POOL_EMPTY, ceiling, floorFlat: busFlatNames.tx.cool, light: 144, tag: POOL_TAG + level * 2 + 1, blockEdge: true, riserWall: BUS_HOUSING });
+    // Bus bars run the stage to the signal band; the trough itself carries the CURRENT.
+    areaRect(direction, `${id}-bus-rx`, { u1: -POOLHW, v1: cv1, u2: -MEDHW, v2: sigV1 }, busOpts(0, busFlatNames.rx.cool));
+    areaRect(direction, `${id}-bus-tx`, { u1: MEDHW, v1: cv1, u2: POOLHW, v2: sigV1 }, busOpts(1, busFlatNames.tx.cool));
+    // Signal band (the last SIG_LEN before the breaker): the outermost SIG_DEPTH of each
+    // bus rises into a trackside SIGNAL POST; the rest of the band stays trough (same fill
+    // tag + rail), so the current still runs the full length under the signal.
+    areaRect(direction, `${id}-bus-rx-sig`, { u1: -POOLHW + SIG_DEPTH, v1: sigV1, u2: -MEDHW, v2: brink }, busOpts(0, busFlatNames.rx.cool));
+    areaRect(direction, `${id}-bus-tx-sig`, { u1: MEDHW, v1: sigV1, u2: POOLHW - SIG_DEPTH, v2: brink }, busOpts(1, busFlatNames.tx.cool));
+    signalPost(id, level, 0, { u1: -POOLHW, u2: -POOLHW + SIG_DEPTH, v1: sigV1, v2: brink, walk });
+    signalPost(id, level, 1, { u1: POOLHW - SIG_DEPTH, u2: POOLHW, v1: sigV1, v2: brink, walk });
   };
 
   // The breaker sill (last GATE_D of a stage's bus): a lit hazard band across the buses
@@ -365,7 +529,7 @@ const build = (ctx) => {
     });
   };
   placard(levels[0], "left"); placard(levels[0], "right"); // socket: RECV-Q / SEND-Q
-  placard(levels[1], "left"); placard(levels[1], "right"); // kernel: KERNEL RX / TX QUEUE
+  placard(levels[1], "right"); // kernel TX QUEUE; the RX (left) wall carries the softnet coil bay
   placard(levels[2], "left"); placard(levels[2], "right"); // device: NIC RX / NIC TX
 
   // ===== ss-census alcove off the socket stage's left catwalk: a walk-in bay whose deep
@@ -388,6 +552,62 @@ const build = (ctx) => {
     labelTexture: socketsScreen.texture,
     controlPanel: true,
     riserWall: BUS_HOUSING, // metal base under the panel; keep STEP1 off this recess
+  });
+
+  // ===== Kernel-RX softnet TESLA-COIL BAY off the kernel stage's LEFT (RX) catwalk. The
+  // combined kernel-RX bus bed reads "receive is hot"; this bay DECOMPOSES that into its
+  // two real /proc/net/softnet_stat causes -- NAPI time_squeeze vs per-CPU BACKLOG DROP --
+  // as two upright ELECTRODES that crackle blue lightning around their tips, denser under
+  // load (MT_DP_NETARC bolts spawned in p_tick.c; electrode world coords mirrored there,
+  // RING_PITCH discipline). The rods are physical geometry; the labels sit on the deep wall.
+  // The walk floor is TILED around the two rod footprints (the builder forbids overlaps).
+  const ROD_U1 = -414, ROD_U2 = -386, RHW = 14; // electrode footprint: thin (28) rod
+  const rodV = [1664, 1920];                     // squeeze / drop electrode v-centres
+  const ROD_TOP = F1 + 120;                      // tip height = 24 map units (== p_tick COIL_TOPZ)
+  const bayMat = { ...conduit, kind: "net-alcove", floor: F1, ceiling: HALL_CEIL, light: 150 };
+  areaRect(direction, "coil-bay-deep", { u1: -ALCHW, v1: levels[1].sv1, u2: ROD_U1, v2: levels[1].cv2 }, bayMat);
+  areaRect(direction, "coil-bay-front", { u1: ROD_U2, v1: levels[1].sv1, u2: -EDGEHW, v2: levels[1].cv2 }, bayMat);
+  [
+    [levels[1].sv1, rodV[0] - RHW],
+    [rodV[0] + RHW, rodV[1] - RHW],
+    [rodV[1] + RHW, levels[1].cv2],
+  ].forEach(([v1, v2], k) => {
+    areaRect(direction, `coil-bay-mid${k}`, { u1: ROD_U1, v1, u2: ROD_U2, v2 }, bayMat);
+  });
+  // The two electrodes: thin blue conductor rods standing 120 tall, tip cap fullbright-ish.
+  rodV.forEach((vc, k) => {
+    areaRect(direction, k === 0 ? "coil-rod-squeeze" : "coil-rod-drop",
+      { u1: ROD_U1, v1: vc - RHW, u2: ROD_U2, v2: vc + RHW }, {
+        ...conduit, kind: "net-instrument", floor: ROD_TOP, ceiling: HALL_CEIL, light: 210,
+        floorFlat: busFlatNames.rx.hot, riserWall: SPINE_WALL,
+      });
+  });
+  // The softnet_stat TERMINAL on the deep wall, centred BETWEEN the two electrodes: a
+  // control-panel console showing the command that confirms this saturation + its live
+  // output (see terminalOverlay formatNetworkSoftnet). Sits at the rods' v-midpoint, on
+  // the deep wall behind them, so it reads as the readout the two coils crackle from.
+  const coilTermVC = (rodV[0] + rodV[1]) / 2; // 1792, between the rods
+  areaRect(direction, "coil-terminal", { u1: -ALCHW - ALC_RECESS, v1: coilTermVC - 96, u2: -ALCHW, v2: coilTermVC + 96 }, {
+    ...conduit,
+    kind: "terminal",
+    floor: F1 + terminalPanelFloor,
+    ceiling: F1 + terminalPanelFloor + terminalTextureSize.height,
+    light: 184,
+    labelSide: leftWall,
+    labelTexture: softnetScreen.texture,
+    controlPanel: true,
+    riserWall: BUS_HOUSING,
+  });
+  // Electrode labels on the bay's two SIDE walls (orthogonal to the terminal): a shallow
+  // recess in each end wall, its back face carrying the name of the rod on that side.
+  // Left end (v = stage start, screen-left) = squeeze; right end = backlog drop.
+  areaRect(direction, "coil-label-squeeze", { u1: -ALCHW, v1: levels[1].sv1 - ALC_RECESS, u2: -EDGEHW, v2: levels[1].sv1 }, {
+    ...hall, kind: "net-sign", floor: F1, ceiling: F1 + wallSignSize.height, light: 200,
+    labelSide: frontWall, labelTexture: coilWallLabels[0].texture, labelWidth: SIGN_W,
+  });
+  areaRect(direction, "coil-label-backlog", { u1: -ALCHW, v1: levels[1].cv2, u2: -EDGEHW, v2: levels[1].cv2 + ALC_RECESS }, {
+    ...hall, kind: "net-sign", floor: F1, ceiling: F1 + wallSignSize.height, light: 200,
+    labelSide: backWall, labelTexture: coilWallLabels[1].texture, labelWidth: SIGN_W,
   });
 
   // ===== Switchyard head at the wire/ring level: the back wall carries the IFACE DEV
@@ -437,21 +657,25 @@ const build = (ctx) => {
 };
 
 const textures = [
-  ...[screen, socketsScreen].map((s) => ({
+  ...[screen, socketsScreen, softnetScreen].map((s) => ({
     texture: s.texture,
     patch: s.patch,
     width: terminalTextureSize.width,
     height: terminalTextureSize.height,
     build: () => buildTerminalPatch(s),
   })),
-  // Stage placards (direction-specific Linux queue metrics), two-line wall signs.
-  ...levelSigns.flat().map((s) => ({
+  // Stage placards + Tesla-electrode side-wall labels, two-line wall signs.
+  ...[...levelSigns.flat(), ...coilWallLabels].map((s) => ({
     texture: s.texture,
     patch: s.patch,
     width: wallSignSize.width,
     height: wallSignSize.height,
     build: () => buildWallSign2Patch(s.l1, s.l2),
   })),
+  // Trackside block-signal lamp heads (green flowing / red stalling), swapped per post
+  // by the engine (DoomPerf_UpdateNetworkLocks).
+  { texture: signalScreens.go, patch: tex("PSGO"), width: SIGTEX_W, height: SIGTEX_H, build: () => buildSignalPatch({ redLit: false }) },
+  { texture: signalScreens.stop, patch: tex("PSST"), width: SIGTEX_W, height: SIGTEX_H, build: () => buildSignalPatch({ redLit: true }) },
 ];
 
 const flats = [...netInscription.flats, ...busFlats, buildCeilingFlat()];
@@ -472,6 +696,10 @@ const sprites = [
   { name: "PMAPB0", build: () => buildFxPatch({ size: 22, ramp: violetRamp, outerFrac: 0.78 }) },
   { name: "PMAPC0", build: () => buildFxPatch({ size: 32, ramp: violetFlash, outerFrac: 0.72 }) },
   { name: "PMAPD0", build: () => buildFxPatch({ size: 32, ramp: violetRamp, innerFrac: 0.55 }) },
+  // Softnet Tesla-coil lightning bolts (MT_DP_NETARC): A/B small flicker, C big & branchy.
+  { name: "BLUDA0", build: () => buildNetLightningSprite(0) },
+  { name: "BLUDB0", build: () => buildNetLightningSprite(1) },
+  { name: "BLUDC0", build: () => buildNetLightningBig() },
 ];
 
 const terminals = ({ terminalHalfWidth }) => {
@@ -489,6 +717,12 @@ const terminals = ({ terminalHalfWidth }) => {
     {
       sign: "network-sockets",
       segments: [segment([deep, 968], [deep, 1016])],
+    },
+    {
+      // softnet_stat terminal on the kernel-RX Tesla bay deep wall, between the rods
+      // (v 1696..1888 = the rods' midpoint 1792 +/- 96; matches the coil-terminal sector).
+      sign: "network-softnet",
+      segments: [segment([deep, 1696], [deep, 1888])],
     },
   ];
 };

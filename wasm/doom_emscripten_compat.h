@@ -190,6 +190,10 @@ int DoomPerf_EffectiveNetworkTx(void);
 extern int doomperf_net_lock_fill[3][2];
 extern int doomperf_net_lock_drops[3][2];
 extern int doomperf_net_softnet_squeeze;
+// Kernel-RX softnet backlog DROP rate (permille), split out from the blended
+// kernel-RX drop signal so the softnet decomposition coils can read the pure
+// per-CPU input-queue overflow (netdev_max_backlog exhaustion) on its own.
+extern int doomperf_net_softnet_drops;
 extern int doomperf_net_backlogged;
 extern int doomperf_net_synrecv;
 extern int doomperf_net_ring_known[2];

@@ -13,7 +13,7 @@
 
 --- a/info.h
 +++ b/info.h
-@@ -1140,6 +1140,164 @@
+@@ -1140,6 +1140,169 @@
      S_TECH2LAMP2,
      S_TECH2LAMP3,
      S_TECH2LAMP4,
@@ -175,10 +175,15 @@
 +    // fullbright billboard (tics -1); rides the free teleport-fog frame TFOG F (the
 +    // COMPLETION orb spends only A-E, and the lab has no teleporters).
 +    S_DP_DISKRAIN,
++    // Network Tesla-coil lightning: a short-lived blue bolt (SPR_BLUD A/B, fullbright)
++    // spawned around the softnet electrodes at a rate set by the live squeeze/drop.
++    S_DP_NETARC1,
++    S_DP_NETARC2,
++    S_DP_NETARC_BIG,
      NUMSTATES
  } statenum_t;
  
-@@ -1298,6 +1456,19 @@
+@@ -1298,6 +1461,20 @@
      MT_MISC84,
      MT_MISC85,
      MT_MISC86,
@@ -195,6 +200,7 @@
 +    MT_DP_IOCOMP,
 +    MT_DP_DISKPLATE,
 +    MT_DP_DISKRAIN,
++    MT_DP_NETARC,
      NUMMOBJTYPES
  
  } mobjtype_t;

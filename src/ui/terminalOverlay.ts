@@ -743,6 +743,26 @@ const formatNetworkQueues = (telemetry: TelemetrySnapshot): string => {
   return lines.join("\n");
 };
 
+// NETWORK wing — softnet decomposition (the Tesla-coil bay). Kernel-RX saturation
+// splits into two /proc/net/softnet_stat causes: time_squeeze (NAPI ran out of budget
+// with packets pending — the receive path is CPU/softirq-bound) vs backlog drops (the
+// per-CPU input queue overflowed). The two electrodes crackle at these rates; this
+// screen is how you'd confirm and tell them apart in a shell.
+const formatNetworkSoftnet = (telemetry: TelemetrySnapshot): string => {
+  const n = telemetry.network;
+  const squeeze = Math.max(0, Math.round(rate(n.softnetSqueezePerSecond)));
+  const drops = Math.max(0, Math.round(rate(n.softnetDropsPerSecond)));
+  const lines: string[] = [];
+  lines.push("$ cat /proc/net/softnet_stat   (per-CPU, hex; col2=drops col3=squeeze)");
+  lines.push("$ awk '{d+=strtonum(\"0x\"$2);s+=strtonum(\"0x\"$3)}END{print d,s}' \\");
+  lines.push("        /proc/net/softnet_stat     (watched as a per-second delta)");
+  lines.push("");
+  const scale = Math.max(1, squeeze, drops, 50);
+  lines.push(`  squeeze  ${bar(clamp(squeeze / scale))} ${padStart(String(squeeze), 6)}/s   NAPI out of budget (RX softirq-bound)`);
+  lines.push(`  backlog  ${bar(clamp(drops / scale))} ${padStart(String(drops), 6)}/s   netdev_max_backlog overflow (loss)`);
+  return lines.join("\n");
+};
+
 // Sign -> instrument terminal. Each wing's screens register one entry here; the
 // CPU wing's three sub-area screens plus one primary screen per resource wing.
 // `Record<TerminalSign, ...>` keeps this exhaustive: adding a sign to the union
@@ -765,6 +785,7 @@ const terminals: Record<TerminalSign, { title: string; render: (telemetry: Telem
   network: { title: "NETWORK — per-interface throughput", render: formatNetwork },
   "network-sockets": { title: "NETWORK — TCP socket state census", render: formatNetworkSockets },
   "network-queues": { title: "NETWORK — SendQ / RecvQ backlog", render: formatNetworkQueues },
+  "network-softnet": { title: "NETWORK — softnet backlog (squeeze / drop)", render: formatNetworkSoftnet },
 };
 
 const renderTerminal = (sign: TerminalSign, telemetry: TelemetrySnapshot): string =>

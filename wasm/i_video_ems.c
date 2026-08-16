@@ -64,6 +64,10 @@ int doomperf_net_tx = 0;
 int doomperf_net_lock_fill[3][2];
 int doomperf_net_lock_drops[3][2];
 int doomperf_net_softnet_squeeze = 0;
+// Kernel-RX softnet backlog DROP rate (permille): the per-CPU input queue
+// (netdev_max_backlog) overflowed. Fed separately from the blended kernel-RX
+// drop so the softnet decomposition coils read the pure backlog-overflow cause.
+int doomperf_net_softnet_drops = 0;
 int doomperf_net_backlogged = 0;
 int doomperf_net_synrecv = 0;
 int doomperf_net_ring_known[2] = {0, 0};
@@ -457,6 +461,12 @@ EMSCRIPTEN_KEEPALIVE
 void DoomPerf_SetNetSoftnetSqueeze(int permille)
 {
     doomperf_net_softnet_squeeze = DoomPerf_ClampPermille(permille);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_SetNetSoftnetDrops(int permille)
+{
+    doomperf_net_softnet_drops = DoomPerf_ClampPermille(permille);
 }
 
 EMSCRIPTEN_KEEPALIVE

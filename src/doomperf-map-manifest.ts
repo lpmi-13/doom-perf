@@ -157,6 +157,17 @@ export const mapManifest = {
           "by": -520
         }
       ]
+    },
+    {
+      "sign": "network-softnet",
+      "segments": [
+        {
+          "ax": -1696,
+          "ay": -520,
+          "bx": -1888,
+          "by": -520
+        }
+      ]
     }
   ],
   "easterEggs": [
