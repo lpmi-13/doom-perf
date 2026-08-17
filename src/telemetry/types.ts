@@ -247,8 +247,10 @@ export type SimStorageTelemetry = StorageTelemetry &
     | "iops" | "devices"
     | "usedBytes" | "totalBytes" | "availBytes" | "usedRatio">>;
 
-// Read by formatNetwork, formatNetworkSockets, formatNetworkQueues. Applies to
-// the network-sim branch only; the background branch carries live network.
+// Read by formatNetwork, formatNetworkSockets, and the six directional stage
+// terminals (formatNetworkSocket{Rx,Tx}, formatNetworkSoftnet, formatNetworkKernelTx,
+// formatNetworkNic{Rx,Tx}). Applies to the network-sim branch only; the background
+// branch carries live network.
 export type SimNetworkTelemetry = NetworkTelemetry &
   Required<Pick<NetworkTelemetry,
     | "rxBytesPerSecond" | "txBytesPerSecond"
@@ -302,5 +304,9 @@ export type TerminalSign =
   | "storage-await"
   | "network"
   | "network-sockets"
-  | "network-queues"
-  | "network-softnet";
+  | "network-socket-rx"
+  | "network-socket-tx"
+  | "network-softnet"
+  | "network-kernel-tx"
+  | "network-nic-rx"
+  | "network-nic-tx";

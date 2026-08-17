@@ -65,33 +65,41 @@ const tex = (suffix) => wingName("network", suffix);
 const screen = { texture: tex("TERM"), patch: tex("PTRM"), lines: ["NETWORK", "IFACE DEV"] };
 const socketsScreen = { texture: tex("STRM"), patch: tex("PSTR"), lines: ["SS -S", "TCP STATES"] };
 // The softnet terminal that stands between the two Tesla electrodes: the shell view that
-// confirms the saturation the coils crackle (cat /proc/net/softnet_stat).
+// confirms the saturation the coils crackle (cat /proc/net/softnet_stat). This is the
+// kernel-RX cell of the six directional stage terminals below.
 const softnetScreen = { texture: tex("KTRM"), patch: tex("PKTR"), lines: ["SOFTNET", "STAT"] };
 
-// Stage placards: a two-line wall sign naming each switchyard stage's queue, direction-
-// specific (RX bus on the LEFT wall u<0, TX bus on the RIGHT wall u>0), every label a
-// real observable you'd read in a shell. Indexed [level][lane]; lane 0 = RX, 1 = TX.
-//   socket : ss / /proc/net/tcp (sk_rcvbuf / sk_sndbuf)
-//   kernel : /proc/net/softnet_stat, tc -s qdisc
-//   device : ethtool -g, /proc/net/dev fifo
-const levelSigns = [
-  [
-    { texture: tex("SG0R"), patch: tex("PG0R"), l1: "SOCKET", l2: "RECV-Q" },
-    { texture: tex("SG0T"), patch: tex("PG0T"), l1: "SOCKET", l2: "SEND-Q" },
-  ],
-  [
-    // The kernel software-queue tier: generalized from the Linux impl names
-    // (softnet backlog / qdisc) to a KERNEL RX/TX QUEUE abstraction so the three
-    // tiers read as one ladder -- socket (transport) -> kernel (stack) -> NIC
-    // (hardware). Provenance stays in the comment above; the sign stays legible.
-    { texture: tex("SG1R"), patch: tex("PG1R"), l1: "KERNEL RX", l2: "QUEUE" },
-    { texture: tex("SG1T"), patch: tex("PG1T"), l1: "KERNEL TX", l2: "QUEUE" },
-  ],
-  [
-    { texture: tex("SG2R"), patch: tex("PG2R"), l1: "NIC RX", l2: "RING" },
-    { texture: tex("SG2T"), patch: tex("PG2T"), l1: "NIC TX", l2: "RING" },
-  ],
+// The six directional STAGE TERMINALS: one walk-up console per lane per stage
+// (socket -> kernel -> NIC, each split RX/TX), replacing the old passive placards.
+// Each opens a DIFFERENT real Linux command scoped to that stage+lane's saturation
+// (see src/ui/terminalOverlay.ts); the wall SCREEN is command-forward, and the old
+// placard wording drops to a FLOOR label in front of the console (see `stations` +
+// `catwalkSide`). kernel-RX is the coil-bay softnet terminal above, so only five new
+// consoles are laid here. [[terminal-design-principles]]
+const socketRxScreen = { texture: tex("SRXT"), patch: tex("PSRX"), lines: ["SS -TM", "RECV-Q"] };
+const socketTxScreen = { texture: tex("STXT"), patch: tex("PSTX"), lines: ["SS -TO", "SEND-Q"] };
+const kernelTxScreen = { texture: tex("KTXT"), patch: tex("PKTX"), lines: ["TC QDISC", "BACKLOG"] };
+const nicRxScreen = { texture: tex("NRXT"), patch: tex("PNRX"), lines: ["IP -S LINK", "NIC RX"] };
+const nicTxScreen = { texture: tex("NTXT"), patch: tex("PNTX"), lines: ["NET DEV", "NIC TX"] };
+
+// Per station: which stage/side it sits on, its screen + manifest sign, and the two
+// placard lines now inscribed on the catwalk floor in front of it. `lp` is the floor-
+// inscription lump prefix (makeInscription appends the line letter + cell index). RX
+// on the LEFT wall (u<0), TX on the RIGHT (u>0); kernel-RX omitted (= coil bay).
+const stations = [
+  { level: 0, side: "left", screen: socketRxScreen, sign: "network-socket-rx", label: ["SOCKET", "RECV-Q"], lp: "DPNL0" },
+  { level: 0, side: "right", screen: socketTxScreen, sign: "network-socket-tx", label: ["SOCKET", "SEND-Q"], lp: "DPNL1" },
+  { level: 1, side: "right", screen: kernelTxScreen, sign: "network-kernel-tx", label: ["KERNEL TX", "QUEUE"], lp: "DPNL2" },
+  { level: 2, side: "left", screen: nicRxScreen, sign: "network-nic-rx", label: ["NIC RX", "RING"], lp: "DPNL3" },
+  { level: 2, side: "right", screen: nicTxScreen, sign: "network-nic-tx", label: ["NIC TX", "RING"], lp: "DPNL4" },
 ];
+// Two-line floor inscriptions per station (west-facing, matching the CURRENT band):
+// line A over line B, each 2 cells wide along the outer wall. Attached here so both
+// the flat data (flats export) and the placement (catwalkSide) share one source.
+stations.forEach((st) => {
+  st.insA = makeInscription(`${st.lp}A`, st.label[0], "west", 2);
+  st.insB = makeInscription(`${st.lp}B`, st.label[1], "west", 2);
+});
 
 // Kernel-RX softnet decomposition COILS: two upright TESLA electrodes (physical rods) in
 // a bay off the kernel-RX catwalk, each crackling blue lightning around its tip at a rate
@@ -474,12 +482,44 @@ const build = (ctx) => {
 
   // The player CATWALK of a stage: a flat gantry on each side, run the FULL stage
   // [sv1, cv2] (the breaker sill is centre-only, so the catwalk must span past it or the
-  // player hits a dead-end wall there). It meets the next staircase at cv2.
-  const catwalks = (lvl) => {
+  // player hits a dead-end wall there). It meets the next staircase at cv2. Where a
+  // station sits, the catwalk is TILED around a two-line FLOOR LABEL at the outer wall
+  // (the retired placard's wording) -- two 64-cells + an inner fill strip per line, so
+  // no sector overlaps (the builder forbids them). [[map-builder-exact-collinearity]]
+  const uv = (ua, ub, va, vb) => ({ u1: Math.min(ua, ub), u2: Math.max(ua, ub), v1: Math.min(va, vb), v2: Math.max(va, vb) });
+  const catwalkSide = (lvl, side) => {
     const { level, walk, sv1, cv2 } = lvl;
     const ceiling = HALL_CEIL;
-    areaRect(direction, `net${level}-walk-l`, { u1: -EDGEHW, v1: sv1, u2: -POOLHW, v2: cv2 }, { ...hall, kind: "net-walk", floor: walk, ceiling, light: 160 });
-    areaRect(direction, `net${level}-walk-r`, { u1: POOLHW, v1: sv1, u2: EDGEHW, v2: cv2 }, { ...hall, kind: "net-walk", floor: walk, ceiling, light: 160 });
+    const outer = side === "left" ? -EDGEHW : EDGEHW; // outer wall (the terminal wall)
+    const inner = side === "left" ? -POOLHW : POOLHW; // bus-side edge
+    const id = `net${level}-walk-${side[0]}`;
+    const wopt = { ...hall, kind: "net-walk", floor: walk, ceiling, light: 160 };
+    const station = stations.find((s) => s.level === level && s.side === side);
+    if (!station) {
+      areaRect(direction, id, uv(outer, inner, sv1, cv2), wopt);
+      return;
+    }
+    const lopt = (flat) => ({ ...hall, kind: "net-walk", floor: walk, ceiling, light: 176, floorFlat: flat });
+    const vc = Math.round((sv1 + cv2) / 2);
+    const vT = vc - 64, vB = vc + 64;
+    // Label cells hug the outer wall (name0 at the smaller |u| of the pair); the fill
+    // strip carries the plain catwalk between the label and the bus edge.
+    const [c0a, c0b, c1a, c1b, fa, fb] = side === "left"
+      ? [outer, outer + 64, outer + 64, outer + 128, outer + 128, inner]
+      : [outer - 128, outer - 64, outer - 64, outer, inner, outer - 128];
+    areaRect(direction, `${id}-a`, uv(outer, inner, sv1, vT), wopt); // catwalk above the label
+    areaRect(direction, `${id}-b`, uv(outer, inner, vB, cv2), wopt); // catwalk below the label
+    // Line A (nearer the entrance / lower v) over line B, read as the player descends.
+    areaRect(direction, `${id}-la0`, uv(c0a, c0b, vT, vc), lopt(station.insA.names[0]));
+    areaRect(direction, `${id}-la1`, uv(c1a, c1b, vT, vc), lopt(station.insA.names[1]));
+    areaRect(direction, `${id}-laf`, uv(fa, fb, vT, vc), wopt);
+    areaRect(direction, `${id}-lb0`, uv(c0a, c0b, vc, vB), lopt(station.insB.names[0]));
+    areaRect(direction, `${id}-lb1`, uv(c1a, c1b, vc, vB), lopt(station.insB.names[1]));
+    areaRect(direction, `${id}-lbf`, uv(fa, fb, vc, vB), wopt);
+  };
+  const catwalks = (lvl) => {
+    catwalkSide(lvl, "left");
+    catwalkSide(lvl, "right");
   };
 
   // The CATWALK staircase between two stages: constant-grade 24-unit steps on the side
@@ -502,47 +542,43 @@ const build = (ctx) => {
   levels.forEach(catwalks);
   stairs.forEach(gantryStair);
 
-  // ===== Stage placards: a two-line wall sign (direction-specific, real Linux terms) in
-  // a shallow 256-wide x 128-tall niche in each stage's outer wall, naming the queue the
-  // player is descending through -- RX metric on the left (u<0) wall, TX metric on the
-  // right (u>0). The niche is floor-flush with a lowered valance so the 128-tall sign
-  // maps once ([[doom-wall-texture-128-tiling]]); labelWidth=256 centres it
-  // ([[wall-label-centering-width]]). Placed on BOTH outer walls of every stage (the ss
-  // alcove was tucked to the socket-stage entrance to keep this centre clear).
-  const SIGN_W = wallSignSize.width; // 256
-  const placard = (lvl, side) => {
-    const lane = side === "left" ? 0 : 1; // left wall = RX bus, right wall = TX bus
-    const sign = levelSigns[lvl.level][lane];
+  // ===== Stage TERMINALS: a walk-up console in a shallow 256-wide niche in each stage's
+  // outer wall (RX on the left u<0, TX on the right u>0), the command-forward SCREEN over
+  // a control-panel riser. The old placard wording now reads on the catwalk floor in
+  // front of each (catwalkSide). kernel-RX is the coil-bay softnet console, so only the
+  // five `stations` are laid here. [[terminal-design-principles]] [[doom-wall-texture-128-tiling]]
+  const SIGN_W = wallSignSize.width; // 256 (still used by the coil-bay side labels)
+  const stageTerminal = (lvl, side, sc) => {
     const vc = Math.round((lvl.sv1 + lvl.cv2) / 2);
     const uNiche = side === "left"
       ? { u1: -EDGEHW - ALC_RECESS, u2: -EDGEHW }
       : { u1: EDGEHW, u2: EDGEHW + ALC_RECESS };
-    areaRect(direction, `net${lvl.level}-sign-${side}`, { ...uNiche, v1: vc - SIGN_W / 2, v2: vc + SIGN_W / 2 }, {
-      ...hall,
-      kind: "net-sign",
-      floor: lvl.walk,
-      ceiling: lvl.walk + wallSignSize.height, // a 128-tall labelled face (no tiling)
-      light: 208,
+    areaRect(direction, `net${lvl.level}-term-${side}`, { ...uNiche, v1: vc - terminalTextureSize.width / 2, v2: vc + terminalTextureSize.width / 2 }, {
+      ...conduit,
+      kind: "terminal",
+      floor: lvl.walk + terminalPanelFloor,
+      ceiling: lvl.walk + terminalPanelFloor + terminalTextureSize.height,
+      light: 184,
       labelSide: side === "left" ? leftWall : rightWall,
-      labelTexture: sign.texture,
-      labelWidth: SIGN_W,
+      labelTexture: sc.texture,
+      controlPanel: true,
+      riserWall: BUS_HOUSING, // metal base under the panel; keep STEP1 off this recess
     });
   };
-  placard(levels[0], "left"); placard(levels[0], "right"); // socket: RECV-Q / SEND-Q
-  placard(levels[1], "right"); // kernel TX QUEUE; the RX (left) wall carries the softnet coil bay
-  placard(levels[2], "left"); placard(levels[2], "right"); // device: NIC RX / NIC TX
+  stations.forEach((st) => stageTerminal(levels[st.level], st.side, st.screen));
 
-  // ===== ss-census alcove off the socket stage's left catwalk: a walk-in bay whose deep
-  // wall carries a backlog COLUMN (floor rises into a pillar with the half-open count,
-  // tag 730) and the ss census terminal. Sits near the stage ENTRANCE (v 904..1016) so
-  // it leaves the stage centre clear for the RECV-Q placard on this same left wall.
-  areaRect(direction, "syn-bay", { u1: -ALCHW, v1: 904, u2: -EDGEHW, v2: 1016 }, {
+  // ===== ss-census alcove, moved UP into the INTAKE (v 712..824) so the six stage
+  // terminals down the hall are all saturation. A walk-in bay off the intake's left
+  // wall whose deep wall carries the SYN-RECV backlog COLUMN (tag 730) and the `ss -s`
+  // connection census -- connection LOAD, not a stage saturation, hence out front. The
+  // intake left light strip is nudged clear of this bay (below). Floor F0 (== intake).
+  areaRect(direction, "syn-bay", { u1: -ALCHW, v1: 712, u2: -EDGEHW, v2: 824 }, {
     ...conduit, kind: "net-alcove", floor: F0, ceiling: HALL_CEIL, light: 168,
   });
-  areaRect(direction, "syn-column", { u1: -ALCHW - ALC_RECESS, v1: 912, u2: -ALCHW, v2: 960 }, {
+  areaRect(direction, "syn-column", { u1: -ALCHW - ALC_RECESS, v1: 720, u2: -ALCHW, v2: 768 }, {
     ...conduit, kind: "net-instrument", floor: F0, ceiling: F0 + 160, light: 208, tag: ids.sectorTags[0] + 30,
   });
-  areaRect(direction, "syn-term", { u1: -ALCHW - ALC_RECESS, v1: 968, u2: -ALCHW, v2: 1016 }, {
+  areaRect(direction, "syn-term", { u1: -ALCHW - ALC_RECESS, v1: 776, u2: -ALCHW, v2: 824 }, {
     ...conduit,
     kind: "terminal",
     floor: F0 + terminalPanelFloor,
@@ -650,22 +686,22 @@ const build = (ctx) => {
       ...hall, kind: "net-strip", wall: SPINE_WALL, floor, ceiling: HALL_CEIL, light: 216,
     });
   };
-  lightStrip("intake-strip-l", -1, 800, F0);
+  lightStrip("intake-strip-l", -1, 856, F0); // nudged past the relocated ss-census bay (v 712..824)
   lightStrip("intake-strip-r", 1, 800, F0);
   lightStrip("plaza-strip-l", -1, V_PLAZA - 40, F2);
   lightStrip("plaza-strip-r", 1, V_PLAZA - 40, F2);
 };
 
 const textures = [
-  ...[screen, socketsScreen, softnetScreen].map((s) => ({
+  ...[screen, socketsScreen, softnetScreen, socketRxScreen, socketTxScreen, kernelTxScreen, nicRxScreen, nicTxScreen].map((s) => ({
     texture: s.texture,
     patch: s.patch,
     width: terminalTextureSize.width,
     height: terminalTextureSize.height,
     build: () => buildTerminalPatch(s),
   })),
-  // Stage placards + Tesla-electrode side-wall labels, two-line wall signs.
-  ...[...levelSigns.flat(), ...coilWallLabels].map((s) => ({
+  // Tesla-electrode side-wall labels, two-line wall signs.
+  ...coilWallLabels.map((s) => ({
     texture: s.texture,
     patch: s.patch,
     width: wallSignSize.width,
@@ -678,7 +714,12 @@ const textures = [
   { texture: signalScreens.stop, patch: tex("PSST"), width: SIGTEX_W, height: SIGTEX_H, build: () => buildSignalPatch({ redLit: true }) },
 ];
 
-const flats = [...netInscription.flats, ...busFlats, buildCeilingFlat()];
+const flats = [
+  ...netInscription.flats,
+  ...stations.flatMap((st) => [...st.insA.flats, ...st.insB.flats]),
+  ...busFlats,
+  buildCeilingFlat(),
+];
 
 // Packet-orb ramps (core -> rim). The core is a whiter double-spark and the rim stops
 // BRIGHTER than the graphite bus bed it rides on, so the packet reads as a hot electrical
@@ -709,14 +750,25 @@ const terminals = ({ terminalHalfWidth }) => {
     return { ax, ay, bx, by };
   };
   const deep = -(ALCHW + ALC_RECESS);
+  // The five directional stage consoles read from the back face of their niche: the
+  // outer wall pushed out by ALC_RECESS, on the RX (u<0) or TX (u>0) side, centred on
+  // the station's vc (kernel-RX is the softnet console below, not a niche).
+  const stationTerminals = stations.map((st) => {
+    const lvl = levels[st.level];
+    const vc = Math.round((lvl.sv1 + lvl.cv2) / 2);
+    const u = st.side === "left" ? -(EDGEHW + ALC_RECESS) : EDGEHW + ALC_RECESS;
+    return { sign: st.sign, segments: [segment([u, vc - terminalHalfWidth], [u, vc + terminalHalfWidth])] };
+  });
   return [
     {
       sign: "network",
       segments: [segment([-terminalHalfWidth, V_TERM_WALL], [terminalHalfWidth, V_TERM_WALL])],
     },
     {
+      // ss -s connection census, relocated to the intake (v 776..824) so the hall is
+      // saturation-only.
       sign: "network-sockets",
-      segments: [segment([deep, 968], [deep, 1016])],
+      segments: [segment([deep, 776], [deep, 824])],
     },
     {
       // softnet_stat terminal on the kernel-RX Tesla bay deep wall, between the rods
@@ -724,6 +776,7 @@ const terminals = ({ terminalHalfWidth }) => {
       sign: "network-softnet",
       segments: [segment([deep, 1696], [deep, 1888])],
     },
+    ...stationTerminals,
   ];
 };
 

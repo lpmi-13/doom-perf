@@ -151,9 +151,9 @@ export const mapManifest = {
       "sign": "network-sockets",
       "segments": [
         {
-          "ax": -968,
+          "ax": -776,
           "ay": -520,
-          "bx": -1016,
+          "bx": -824,
           "by": -520
         }
       ]
@@ -166,6 +166,61 @@ export const mapManifest = {
           "ay": -520,
           "bx": -1888,
           "by": -520
+        }
+      ]
+    },
+    {
+      "sign": "network-socket-rx",
+      "segments": [
+        {
+          "ax": -1024,
+          "ay": -336,
+          "bx": -1280,
+          "by": -336
+        }
+      ]
+    },
+    {
+      "sign": "network-socket-tx",
+      "segments": [
+        {
+          "ax": -1024,
+          "ay": 336,
+          "bx": -1280,
+          "by": 336
+        }
+      ]
+    },
+    {
+      "sign": "network-kernel-tx",
+      "segments": [
+        {
+          "ax": -1664,
+          "ay": 336,
+          "bx": -1920,
+          "by": 336
+        }
+      ]
+    },
+    {
+      "sign": "network-nic-rx",
+      "segments": [
+        {
+          "ax": -2304,
+          "ay": -336,
+          "bx": -2560,
+          "by": -336
+        }
+      ]
+    },
+    {
+      "sign": "network-nic-tx",
+      "segments": [
+        {
+          "ax": -2304,
+          "ay": 336,
+          "bx": -2560,
+          "by": 336
         }
       ]
     }

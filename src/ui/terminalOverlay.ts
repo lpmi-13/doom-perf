@@ -614,29 +614,69 @@ const formatStorageAwait = (telemetry: TelemetrySnapshot): string => {
   return lines.join("\n");
 };
 
-// NETWORK wing — per-interface throughput (`sar -n DEV`) with the noisiest NIC
-// marked as primary, the input to the wing's packet-grove lanes. USE utilization
-// is throughput vs link speed; saturation is drops.
+// NETWORK wing — per-interface throughput (`sar -n DEV`), the input to the wing's
+// packet-grove lanes. USE utilization is throughput vs link speed; saturation is drops.
 //
-// The interface list is rendered at a FIXED row count (netInterfaceRows), padding
-// with blank lines, so the "primary interface" line and the bars below never
-// reflow as interfaces enter or leave the (collector-filtered) list. Columns:
-// a 2-wide primary marker, the interface name LEFT-aligned in a fixed field, then
-// rxkB/s and txkB/s RIGHT-aligned — so names of any length stay aligned and the
-// numbers line up under their headers.
-const netInterfaceRows = 6; // most interfaces ever listed; also the pinned height
+// The interface list is a STICKY RANKING (updateNetIfaceRank). The collector adds and
+// drops interfaces each sample as they cross an activity threshold, which made the raw
+// list flicker (interfaces popping in and out and re-sorting by instantaneous rate).
+// Instead we REMEMBER every interface once observed and rank by TOTAL bytes seen
+// (descending): the order is stable, an interface that goes quiet just shows 0 B/s
+// rather than vanishing, and one is only bumped off the shown rows when another accrues
+// more overall traffic. Rendered at a FIXED row count so the bars below never reflow.
+// Columns: a 2-wide primary marker, the name LEFT-aligned in a fixed field, then
+// rxkB/s and txkB/s RIGHT-aligned.
+const netInterfaceRows = 6; // rows shown; the ranking tracks up to NET_RANK_TRACK_MAX
 const netRow = (marker: string, name: string, rx: string, tx: string): string =>
   `${marker.padStart(2)}${name.slice(0, 15).padEnd(16)}${rx.padStart(9)}${tx.padStart(9)}`;
+
+// Persistent per-interface ranking state for the sar terminal. Keyed to the telemetry
+// source, so switching live<->demo (or between sim scenarios) starts a fresh ranking.
+// Folded once per snapshot (open + the periodic refresh both call render()); `total`
+// accumulates observed traffic (rx+tx per sample, ~bytes at the ~1s cadence) and is the
+// sole ranking key. Accumulation advances while the terminal is being viewed and the
+// pool persists across opens, so a previously-busiest interface stays on top.
+type NetIfaceRank = { name: string; total: number; rx: number; tx: number };
+const netIfaceRank = new Map<string, NetIfaceRank>();
+let netRankTs = -1;
+let netRankSource = "";
+const NET_RANK_TRACK_MAX = 32; // bound the remembered pool (well above the rows shown)
+const updateNetIfaceRank = (telemetry: TelemetrySnapshot): NetIfaceRank[] => {
+  if (telemetry.source !== netRankSource) {
+    netIfaceRank.clear();
+    netRankSource = telemetry.source;
+    netRankTs = -1;
+  }
+  if (telemetry.updatedAt !== netRankTs) {
+    netRankTs = telemetry.updatedAt;
+    netIfaceRank.forEach((s) => { s.rx = 0; s.tx = 0; }); // absent from this sample => idle
+    (telemetry.network.interfaces ?? []).forEach((iface) => {
+      const rx = Math.max(0, rate(iface.rxBytesPerSecond));
+      const tx = Math.max(0, rate(iface.txBytesPerSecond));
+      const s = netIfaceRank.get(iface.name) ?? { name: iface.name, total: 0, rx: 0, tx: 0 };
+      s.rx = rx;
+      s.tx = tx;
+      s.total += rx + tx;
+      netIfaceRank.set(iface.name, s);
+    });
+    if (netIfaceRank.size > NET_RANK_TRACK_MAX) {
+      const keep = [...netIfaceRank.values()].sort((a, b) => b.total - a.total).slice(0, NET_RANK_TRACK_MAX);
+      netIfaceRank.clear();
+      keep.forEach((s) => netIfaceRank.set(s.name, s));
+    }
+  }
+  return [...netIfaceRank.values()].sort((a, b) => b.total - a.total);
+};
 const formatNetwork = (telemetry: TelemetrySnapshot): string => {
   const n = telemetry.network;
-  const interfaces = n.interfaces ?? [];
-  const rows = interfaces.length > 0
-    ? interfaces.slice(0, netInterfaceRows).map((iface) =>
+  const ranked = updateNetIfaceRank(telemetry);
+  const rows = ranked.length > 0
+    ? ranked.slice(0, netInterfaceRows).map((s) =>
         netRow(
-          iface.name === n.primaryInterface ? "*" : "",
-          iface.name,
-          String(kib(iface.rxBytesPerSecond)),
-          String(kib(iface.txBytesPerSecond))
+          s.name === n.primaryInterface ? "*" : "",
+          s.name,
+          String(kib(s.rx)),
+          String(kib(s.tx))
         )
       )
     : [netRow("", "aggregate", String(kib(n.rxBytesPerSecond)), String(kib(n.txBytesPerSecond)))];
@@ -647,7 +687,7 @@ const formatNetwork = (telemetry: TelemetrySnapshot): string => {
   lines.push(netRow("", "IFACE", "rxkB/s", "txkB/s"));
   lines.push(...rows);
   lines.push("");
-  lines.push(`primary interface: ${n.primaryInterface ?? "-"}   (* = noisiest; grove shows all)`);
+  lines.push(`primary interface: ${n.primaryInterface ?? "-"}   (* = busiest now; ranked by total seen)`);
   lines.push("");
   lines.push(`utilization  ${bar(n.utilization)} ${pctText(n.utilization)}%   (throughput vs link speed)`);
   lines.push(`saturation   ${bar(n.saturation)} ${pctText(n.saturation)}%   (queue backup + drops)`);
@@ -712,34 +752,157 @@ const formatNetworkSockets = (telemetry: TelemetrySnapshot): string => {
   return lines.join("\n");
 };
 
-// NETWORK wing — TCP send/recv-queue backlog (`ss -tmn`), the input to the twin
-// SendQ / RecvQ standpipe gauges. USE read is saturation/backpressure: Recv-Q
-// bytes = the app isn't reading fast enough; Send-Q bytes = the peer/network
-// isn't draining. Queue bars are scaled against a 1 MiB socket-buffer full scale.
-const formatNetworkQueues = (telemetry: TelemetrySnapshot): string => {
+// NETWORK wing — the six directional stage terminals. Each stage of the descending
+// hall (socket -> kernel -> NIC) has an RX (left) and TX (right) walk-up terminal,
+// and each opens a DIFFERENT real Linux command scoped to that stage+lane's
+// saturation. All read the collector snapshot, whose network sources are every one
+// world-readable /proc or a no-root netlink dump — so each renders honest output
+// with no root and inside container quirks (idle => 0/s, gated => an explicit
+// "unavailable/unknown" line, never a blank). See the plan (mighty-petting-unicorn)
+// and [[terminal-design-principles]].
+
+const SOCK_FULL = 1024 * 1024; // 1 MiB per-queue full scale for the socket bars
+
+// socket-RX — `ss -tm state established`: the Recv-Q column (bytes received but not
+// yet read by the app) plus the socket receive-buffer view `-m` selects. Recv-Q
+// backlog = app read lag, the receive-side transport saturation.
+const formatNetworkSocketRx = (telemetry: TelemetrySnapshot): string => {
   const n = telemetry.network;
-  const lines: string[] = [];
-  const fullScale = 1024 * 1024; // 1 MiB per-queue full scale for the bars
   const recvBytes = Math.max(0, rate(n.recvQueueBytes));
-  const sendBytes = Math.max(0, rate(n.sendQueueBytes));
-  lines.push("$ ss -tmn   (send-q / recv-q backlog)");
-  lines.push(`aggregate Recv-Q  ${kib(recvBytes)} KiB`);
-  lines.push(`aggregate Send-Q  ${kib(sendBytes)} KiB`);
-  lines.push(`backlogged sockets  ${Math.max(0, Math.round(rate(n.backloggedSockets)))}`);
-  lines.push("");
-  lines.push(`Recv-Q  ${bar(clamp(recvBytes / fullScale))} ${padStart(String(kib(recvBytes)), 7)} KiB   inbound (app read lag)`);
-  lines.push(`Send-Q  ${bar(clamp(sendBytes / fullScale))} ${padStart(String(kib(sendBytes)), 7)} KiB   outbound (drain lag)`);
   const top = n.topSockets ?? [];
-  if (top.length > 0) {
-    lines.push("");
-    const columns: [string, number][] = [["Recv-Q", 9], ["Send-Q", 9], ["State", 11], ["Peer", 24]];
-    lines.push(columns.map(([label, width]) => padStart(label, width)).join(""));
+  // The collector only records sockets with a non-zero queue, so an empty `top` on a
+  // healthy host means "nothing backlogged", not "no sockets" — say so from the live
+  // TCP census (established count) rather than implying a restricted /proc.
+  const estab = Math.max(0, Math.round(rate(n.tcp?.established)));
+  const lines: string[] = [];
+  lines.push("$ ss -tm state established");
+  const columns: [string, number][] = [["Recv-Q", 8], ["Send-Q", 8], ["Local Address:Port", 22], ["Peer Address:Port", 22]];
+  lines.push(columns.map(([label, width]) => padStart(label, width)).join(""));
+  if (top.length === 0) {
+    lines.push(estab > 0
+      ? `  ${estab} established, none with Recv-Q backlog (all read promptly)`
+      : "  no established sockets");
+  } else {
     top.slice(0, 6).forEach((socket) => {
-      const peer = socket.remote.length > 23 ? `${socket.remote.slice(0, 20)}...` : socket.remote;
-      const cells = [String(kib(socket.recvQueueBytes)), String(kib(socket.sendQueueBytes)), socket.state, peer];
+      const local = socket.local.length > 21 ? `${socket.local.slice(0, 18)}...` : socket.local;
+      const peer = socket.remote.length > 21 ? `${socket.remote.slice(0, 18)}...` : socket.remote;
+      const cells = [String(Math.round(socket.recvQueueBytes)), String(Math.round(socket.sendQueueBytes)), local, peer];
       lines.push(columns.map(([, width], i) => padStart(cells[i], width)).join(""));
     });
   }
+  lines.push("");
+  lines.push(`aggregate Recv-Q  ${bar(clamp(recvBytes / SOCK_FULL))} ${padStart(String(kib(recvBytes)), 7)} KiB   inbound (app read lag)`);
+  return lines.join("\n");
+};
+
+// socket-TX — `ss -to state established`: the Send-Q column (bytes queued in the
+// kernel socket buffer awaiting ACK/drain) plus the retransmit `timer:` field `-o`
+// selects. Send-Q backlog = drain lag (peer/network not ACKing), the transmit-side
+// transport saturation. Retransmit/cwnd counts aren't sampled, so the timer field
+// is shown as present/absent rather than fabricated.
+const formatNetworkSocketTx = (telemetry: TelemetrySnapshot): string => {
+  const n = telemetry.network;
+  const sendBytes = Math.max(0, rate(n.sendQueueBytes));
+  const backlogged = Math.max(0, Math.round(rate(n.backloggedSockets)));
+  const top = n.topSockets ?? [];
+  // Empty `top` = nothing backlogged (the collector only samples non-zero queues), not
+  // "no sockets": report the live established count instead of implying restricted /proc.
+  const estab = Math.max(0, Math.round(rate(n.tcp?.established)));
+  const lines: string[] = [];
+  lines.push("$ ss -to state established");
+  const columns: [string, number][] = [["Recv-Q", 8], ["Send-Q", 8], ["Peer Address:Port", 22], ["Timer", 16]];
+  lines.push(columns.map(([label, width]) => padStart(label, width)).join(""));
+  if (top.length === 0) {
+    lines.push(estab > 0
+      ? `  ${estab} established, none with Send-Q backlog (all draining)`
+      : "  no established sockets");
+  } else {
+    top.slice(0, 6).forEach((socket) => {
+      const peer = socket.remote.length > 21 ? `${socket.remote.slice(0, 18)}...` : socket.remote;
+      const timer = socket.sendQueueBytes > 0 ? "timer:(on,-,-)" : "-";
+      const cells = [String(Math.round(socket.recvQueueBytes)), String(Math.round(socket.sendQueueBytes)), peer, timer];
+      lines.push(columns.map(([, width], i) => padStart(cells[i], width)).join(""));
+    });
+  }
+  lines.push("");
+  lines.push(`aggregate Send-Q  ${bar(clamp(sendBytes / SOCK_FULL))} ${padStart(String(kib(sendBytes)), 7)} KiB   outbound (drain lag)`);
+  lines.push(`backlogged sockets  ${backlogged}   (retransmit/cwnd detail not sampled)`);
+  return lines.join("\n");
+};
+
+// kernel-TX — `tc -s qdisc show dev <if>`: the root qdisc's backlog (bytes the link
+// can't drain yet) via the same netlink source tc uses. qdiscBacklogBytes is a gated
+// enrichment: undefined when netlink is unavailable (restricted container), so it
+// falls back to the /proc/net/dev tx-drops proxy rather than a fake empty queue.
+const QDISC_FULL = 512 * 1024; // netQdiscSatFull (collector)
+const formatNetworkKernelTx = (telemetry: TelemetrySnapshot): string => {
+  const n = telemetry.network;
+  const iface = n.primaryInterface ?? "eth0";
+  const txDrops = Math.max(0, Math.round(rate(n.txDropsPerSecond)));
+  const lines: string[] = [];
+  lines.push(`$ tc -s qdisc show dev ${iface}`);
+  if (n.qdiscBacklogBytes === undefined) {
+    lines.push("qdisc stats unavailable (netlink) — using /proc/net/dev tx-drops as the proxy.");
+    lines.push("");
+    lines.push(`tx drops     ${bar(clamp(txDrops / 100))} ${padStart(String(txDrops), 6)} /s   (transmit-side loss)`);
+    return lines.join("\n");
+  }
+  const backlog = Math.max(0, Math.round(n.qdiscBacklogBytes)); // whole bytes, like real tc
+  lines.push("qdisc fq_codel 0: root refcnt 2 limit 10240p");
+  lines.push(` backlog ${backlog}b (dropped ${txDrops}/s, requeues 0)`);
+  lines.push("");
+  lines.push(`qdisc backlog  ${bar(clamp(backlog / QDISC_FULL))} ${padStart(String(kib(backlog)), 6)} KiB / 512 KiB`);
+  lines.push(`tx drops       ${padStart(String(txDrops), 6)} /s`);
+  return lines.join("\n");
+};
+
+// NIC-RX — `ip -s link show <if>`: the receive-side error columns (dropped, overrun).
+// overrun = the NIC's RX ring overflowed (the hardware couldn't hand packets to the
+// kernel fast enough), the receive-side device saturation. Ring depth is a gated
+// ethtool enrichment (not probed yet); shown as unknown until it lands. Values are
+// the collector's per-second rates (real ip prints cumulative counters).
+const formatNetworkNicRx = (telemetry: TelemetrySnapshot): string => {
+  const n = telemetry.network;
+  const iface = n.primaryInterface ?? "eth0";
+  const rxFifo = Math.max(0, Math.round(rate(n.rxFifoPerSecond)));
+  const rxDrops = Math.max(0, Math.round(rate(n.rxDropsPerSecond)));
+  const ring = n.ringDepthRx === undefined ? "unknown (needs ethtool -g / CAP_NET_ADMIN)" : `${n.ringDepthRx} slots`;
+  const lines: string[] = [];
+  lines.push(`$ ip -s link show ${iface}`);
+  lines.push(`2: ${iface}: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500`);
+  // Aligned RX block: the prefix ("    RX:" / seven spaces) is the same width on both
+  // rows so the value row lines up under the header labels (rates /s).
+  lines.push("    RX:" + padStart("errors", 10) + padStart("dropped", 10) + padStart("overrun", 10) + "   (rates /s)");
+  lines.push("       " + padStart("0", 10) + padStart(String(rxDrops), 10) + padStart(String(rxFifo), 10));
+  lines.push("");
+  lines.push(`rx overruns  ${bar(clamp(rxFifo / 100))} ${padStart(String(rxFifo), 6)} /s   ring overflow (receive)`);
+  lines.push(`rx drops     ${padStart(String(rxDrops), 6)} /s`);
+  lines.push(`rx ring depth: ${ring}`);
+  return lines.join("\n");
+};
+
+// NIC-TX — `cat /proc/net/dev`: the transmit error columns (drop, fifo). tx fifo =
+// the NIC's TX ring overflowed on the way out, the transmit-side device saturation.
+// /proc/net/dev is world-readable and present in every container netns, so this one
+// is always populated (idle => 0/s). Values shown as per-second rates.
+const formatNetworkNicTx = (telemetry: TelemetrySnapshot): string => {
+  const n = telemetry.network;
+  const iface = n.primaryInterface ?? "eth0";
+  const txFifo = Math.max(0, Math.round(rate(n.txFifoPerSecond)));
+  const txDrops = Math.max(0, Math.round(rate(n.txDropsPerSecond)));
+  const lines: string[] = [];
+  lines.push("$ cat /proc/net/dev   (transmit columns, rates /s)");
+  // A clean aligned table: header labels and the value row share one column spec so
+  // each number sits under its header. errs/colls/carrier aren't sampled per-direction
+  // (0 on a healthy link); drop and fifo are the live saturation signals.
+  const columns: [string, number][] = [["Iface", 10], ["errs", 8], ["drop", 8], ["fifo", 8], ["colls", 8], ["carrier", 9]];
+  const cells = [iface, "0", String(txDrops), String(txFifo), "0", "0"];
+  lines.push(columns.map(([label, width]) => padStart(label, width)).join(""));
+  lines.push(columns.map(([, width], i) => padStart(cells[i], width)).join(""));
+  lines.push("");
+  lines.push(`tx fifo overruns  ${bar(clamp(txFifo / 100))} ${padStart(String(txFifo), 6)} /s   ring overflow (transmit)`);
+  lines.push(`tx drops          ${padStart(String(txDrops), 6)} /s`);
+  if (n.ringDepthTx !== undefined) lines.push(`tx ring depth: ${n.ringDepthTx} slots`);
   return lines.join("\n");
 };
 
@@ -784,8 +947,12 @@ const terminals: Record<TerminalSign, { title: string; render: (telemetry: Telem
   "storage-await": { title: "STORAGE — latency causeway (r/w await)", render: formatStorageAwait },
   network: { title: "NETWORK — per-interface throughput", render: formatNetwork },
   "network-sockets": { title: "NETWORK — TCP socket state census", render: formatNetworkSockets },
-  "network-queues": { title: "NETWORK — SendQ / RecvQ backlog", render: formatNetworkQueues },
-  "network-softnet": { title: "NETWORK — softnet backlog (squeeze / drop)", render: formatNetworkSoftnet },
+  "network-socket-rx": { title: "NETWORK — socket Recv-Q (RX backpressure)", render: formatNetworkSocketRx },
+  "network-socket-tx": { title: "NETWORK — socket Send-Q (TX drain lag)", render: formatNetworkSocketTx },
+  "network-softnet": { title: "NETWORK — softnet backlog (kernel RX)", render: formatNetworkSoftnet },
+  "network-kernel-tx": { title: "NETWORK — qdisc backlog (kernel TX)", render: formatNetworkKernelTx },
+  "network-nic-rx": { title: "NETWORK — NIC RX ring / overrun", render: formatNetworkNicRx },
+  "network-nic-tx": { title: "NETWORK — NIC TX fifo / drops", render: formatNetworkNicTx },
 };
 
 const renderTerminal = (sign: TerminalSign, telemetry: TelemetrySnapshot): string =>
