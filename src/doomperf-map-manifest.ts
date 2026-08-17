@@ -140,10 +140,10 @@ export const mapManifest = {
       "sign": "network",
       "segments": [
         {
-          "ax": -2816,
-          "ay": -128,
-          "bx": -2816,
-          "by": 128
+          "ax": -790,
+          "ay": 152,
+          "bx": -566,
+          "by": 280
         }
       ]
     },
@@ -151,10 +151,10 @@ export const mapManifest = {
       "sign": "network-sockets",
       "segments": [
         {
-          "ax": -776,
-          "ay": -520,
-          "bx": -824,
-          "by": -520
+          "ax": -566,
+          "ay": -280,
+          "bx": -790,
+          "by": -152
         }
       ]
     },

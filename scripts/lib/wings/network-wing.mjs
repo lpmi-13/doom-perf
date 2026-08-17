@@ -62,8 +62,12 @@ const rotatePoint = ([u, v], direction) => {
 const ids = reserved.network;
 const tex = (suffix) => wingName("network", suffix);
 
-const screen = { texture: tex("TERM"), patch: tex("PTRM"), lines: ["NETWORK", "IFACE DEV"] };
-const socketsScreen = { texture: tex("STRM"), patch: tex("PSTR"), lines: ["SS -S", "TCP STATES"] };
+// The two OVERVIEW terminals both live on the funnel entrance's angled walls (see
+// build): TRAFFIC PER INTERFACE (sar -n DEV, sign "network") on the right, CONNECTIONS
+// (ss -s census, sign "network-sockets") on the left. Their screens are the physical
+// labels the player reads walking in.
+const screen = { texture: tex("TERM"), patch: tex("PTRM"), lines: ["TRAFFIC PER", "INTERFACE"] };
+const socketsScreen = { texture: tex("STRM"), patch: tex("PSTR"), lines: ["CONNECTIONS", "SS -S"] };
 // The softnet terminal that stands between the two Tesla electrodes: the shell view that
 // confirms the saturation the coils crackle (cat /proc/net/softnet_stat). This is the
 // kernel-RX cell of the six directional stage terminals below.
@@ -218,7 +222,6 @@ const buildSignalPatch = ({ redLit }) => {
   return buildPatch(px, SIGTEX_W, SIGTEX_H);
 };
 
-const netInscription = makeInscription(tex("FN"), "CURRENT", "west", 2);
 
 // Bus-bar bed flats: a DEEP BLUE conductor bed with lane identity kept in a single
 // bright ENERGISED RAIL stripe (RX cyan, TX violet). The engine tempers the BED colour
@@ -393,7 +396,7 @@ export const networkFeeder = {
 };
 
 const build = (ctx) => {
-  const { areaRect, direction, base, accent, terminalPanelFloor } = ctx;
+  const { areaRect, areaPoly, direction, base, accent, terminalPanelFloor } = ctx;
 
   addWingEntrance(ctx);
 
@@ -406,16 +409,39 @@ const build = (ctx) => {
   const conduit = { ...accent, kind: "net-conduit" };
   const intake = { ...base, kind: "net-intake", light: 176 };
 
-  // ===== Service intake, split so "CURRENT" inscribes flush into the threshold floor.
-  areaRect(direction, "intake-left", { u1: -EDGEHW, v1: V_ENTRY, u2: -64, v2: V_FOYER }, { ...intake, ceiling: HALL_CEIL, light: 176 });
-  areaRect(direction, "intake-right", { u1: 64, v1: V_ENTRY, u2: EDGEHW, v2: V_FOYER }, { ...intake, ceiling: HALL_CEIL, light: 176 });
-  areaRect(direction, "intake-front", { u1: -64, v1: V_ENTRY, u2: 64, v2: 832 }, { ...intake, ceiling: HALL_CEIL, light: 176 });
-  netInscription.names.forEach((flatName, k) => {
-    const u1 = -64 + k * 64;
-    areaRect(direction, `net-inscription-${k}`, { u1, v1: 832, u2: u1 + 64, v2: V_FOYER }, {
-      ...intake, ceiling: HALL_CEIL, floorFlat: flatName, light: 192,
-    });
+  // ===== FUNNEL entrance: two 45deg angled walls flank the shared entry throat and
+  // flare out to the front corners, so the narrow doorway opens into a funnel whose
+  // walls angle IN toward the throat pinch as the player enters. The wing's two OVERVIEW
+  // terminals ride the angled walls -- CONNECTIONS (ss -s) on the left, TRAFFIC PER
+  // INTERFACE (sar -n DEV) on the right -- obvious the moment you walk in and well clear
+  // of the six saturation terminals down the hall. Flat (F0, the user's choice); the
+  // ceiling drops to 128 over the funnel so each 256-wide screen maps ONCE on its angled
+  // wall ([[doom-wall-texture-128-tiling]]). The screens are one-sided labelled walls via
+  // labelEdge (angled edges carry no axis side-name); USE is driven by the terminals()
+  // segments below. Purely visual -- v < the stage/orb region (>=960), no engine coord
+  // touched. [[builder-full-switch-polygon-bsp]]
+  const FUNNEL_CEIL = F0 + terminalTextureSize.height; // 128: a one-map-high screen wall
+  const FN_STRAIGHT_V = 496; // the entrance side walls run STRAIGHT (u=+/-320) to here,
+  const FN_THROAT_V = 860; //   then ANGLE IN (7:4 slope) to the throat edge (u=+/-112).
+  // Each LONG angled wall is split filler | screen | filler by two collinear vertices so
+  // the 256-wide overview screen sits CENTRED on it (labelEdge = the middle sub-edge 2).
+  // The split points (-280,566),(-152,790) lie exactly on (-320,496)->(-112,860) (a 7:4
+  // slope keeps them integer & collinear -- rounding a shallower slope broke convexity).
+  // Left wall carries CONNECTIONS (ss -s); right carries TRAFFIC PER INTERFACE (sar -n DEV).
+  areaPoly(direction, "funnel-left",
+    [[-EDGEHW, 448], [-EDGEHW, FN_STRAIGHT_V], [-280, 566], [-152, 790], [-112, FN_THROAT_V], [-112, 448]], {
+    ...intake, floor: F0, ceiling: FUNNEL_CEIL, light: 200,
+    labelEdge: 2, labelTexture: socketsScreen.texture,
   });
+  areaPoly(direction, "funnel-right",
+    [[112, 448], [112, FN_THROAT_V], [152, 790], [280, 566], [EDGEHW, FN_STRAIGHT_V], [EDGEHW, 448]], {
+    ...intake, floor: F0, ceiling: FUNNEL_CEIL, light: 200,
+    labelEdge: 2, labelTexture: screen.texture,
+  });
+  // Central approach behind the common throat, then a FULL-WIDTH landing that reopens to
+  // the stage-0 catwalks (the throat edge u=+/-112 is the bus boundary, impassable).
+  areaRect(direction, "funnel-center", { u1: -112, v1: V_ENTRY, u2: 112, v2: FN_THROAT_V }, { ...intake, floor: F0, ceiling: FUNNEL_CEIL, light: 184 });
+  areaRect(direction, "funnel-landing", { u1: -EDGEHW, v1: FN_THROAT_V, u2: EDGEHW, v2: V_FOYER }, { ...intake, ceiling: HALL_CEIL, light: 176 });
 
   // ===== The central CURRENT PATH, per stage: a raised INSULATOR SPINE divider and two
   // deep BUS BARS (RX/TX) either side of it, floor rising with the stage's charge level.
@@ -567,29 +593,6 @@ const build = (ctx) => {
   };
   stations.forEach((st) => stageTerminal(levels[st.level], st.side, st.screen));
 
-  // ===== ss-census alcove, moved UP into the INTAKE (v 712..824) so the six stage
-  // terminals down the hall are all saturation. A walk-in bay off the intake's left
-  // wall whose deep wall carries the SYN-RECV backlog COLUMN (tag 730) and the `ss -s`
-  // connection census -- connection LOAD, not a stage saturation, hence out front. The
-  // intake left light strip is nudged clear of this bay (below). Floor F0 (== intake).
-  areaRect(direction, "syn-bay", { u1: -ALCHW, v1: 712, u2: -EDGEHW, v2: 824 }, {
-    ...conduit, kind: "net-alcove", floor: F0, ceiling: HALL_CEIL, light: 168,
-  });
-  areaRect(direction, "syn-column", { u1: -ALCHW - ALC_RECESS, v1: 720, u2: -ALCHW, v2: 768 }, {
-    ...conduit, kind: "net-instrument", floor: F0, ceiling: F0 + 160, light: 208, tag: ids.sectorTags[0] + 30,
-  });
-  areaRect(direction, "syn-term", { u1: -ALCHW - ALC_RECESS, v1: 776, u2: -ALCHW, v2: 824 }, {
-    ...conduit,
-    kind: "terminal",
-    floor: F0 + terminalPanelFloor,
-    ceiling: F0 + terminalPanelFloor + terminalTextureSize.height,
-    light: 184,
-    labelSide: leftWall,
-    labelTexture: socketsScreen.texture,
-    controlPanel: true,
-    riserWall: BUS_HOUSING, // metal base under the panel; keep STEP1 off this recess
-  });
-
   // ===== Kernel-RX softnet TESLA-COIL BAY off the kernel stage's LEFT (RX) catwalk. The
   // combined kernel-RX bus bed reads "receive is hot"; this bay DECOMPOSES that into its
   // two real /proc/net/softnet_stat causes -- NAPI time_squeeze vs per-CPU BACKLOG DROP --
@@ -658,16 +661,10 @@ const build = (ctx) => {
   areaRect(direction, "plaza-back-right", { u1: 128, v1: V_PLAZA, u2: EDGEHW, v2: V_TERM_WALL }, {
     ...hall, kind: "net-plaza", floor: F2, ceiling: HALL_CEIL, light: 146,
   });
-  areaRect(direction, "network-terminal", { u1: -128, v1: V_PLAZA, u2: 128, v2: V_TERM_WALL }, {
-    ...hall,
-    kind: "terminal",
-    floor: F2 + terminalPanelFloor,
-    ceiling: F2 + terminalPanelFloor + terminalTextureSize.height,
-    light: 192,
-    labelSide: backWall,
-    labelTexture: screen.texture,
-    controlPanel: true,
-    riserWall: BUS_HOUSING, // metal base under the panel; keep STEP1 off this recess
+  // The per-interface (sar -n DEV) terminal moved to the funnel entrance, so the
+  // switchyard-head back wall is now plain plaza (no read-point here).
+  areaRect(direction, "plaza-back-center", { u1: -128, v1: V_PLAZA, u2: 128, v2: V_TERM_WALL }, {
+    ...hall, kind: "net-plaza", floor: F2, ceiling: HALL_CEIL, light: 146,
   });
 
   // ===== Wall-mounted BUS LIGHT STRIPS: narrow full-height LITEBLU pilasters recessed
@@ -686,8 +683,6 @@ const build = (ctx) => {
       ...hall, kind: "net-strip", wall: SPINE_WALL, floor, ceiling: HALL_CEIL, light: 216,
     });
   };
-  lightStrip("intake-strip-l", -1, 856, F0); // nudged past the relocated ss-census bay (v 712..824)
-  lightStrip("intake-strip-r", 1, 800, F0);
   lightStrip("plaza-strip-l", -1, V_PLAZA - 40, F2);
   lightStrip("plaza-strip-r", 1, V_PLAZA - 40, F2);
 };
@@ -715,7 +710,6 @@ const textures = [
 ];
 
 const flats = [
-  ...netInscription.flats,
   ...stations.flatMap((st) => [...st.insA.flats, ...st.insB.flats]),
   ...busFlats,
   buildCeilingFlat(),
@@ -761,14 +755,16 @@ const terminals = ({ terminalHalfWidth }) => {
   });
   return [
     {
+      // TRAFFIC PER INTERFACE (sar -n DEV) centred on the funnel's RIGHT angled wall
+      // (the middle sub-edge (152,790)->(280,566)).
       sign: "network",
-      segments: [segment([-terminalHalfWidth, V_TERM_WALL], [terminalHalfWidth, V_TERM_WALL])],
+      segments: [segment([152, 790], [280, 566])],
     },
     {
-      // ss -s connection census, relocated to the intake (v 776..824) so the hall is
-      // saturation-only.
+      // CONNECTIONS (ss -s census) centred on the funnel's LEFT angled wall
+      // (the middle sub-edge (-280,566)->(-152,790)).
       sign: "network-sockets",
-      segments: [segment([deep, 776], [deep, 824])],
+      segments: [segment([-280, 566], [-152, 790])],
     },
     {
       // softnet_stat terminal on the kernel-RX Tesla bay deep wall, between the rods
