@@ -364,6 +364,11 @@ const doorTextureOffsetFor = (edge, sector, other) => {
 };
 
 const overrideTextureOffsetFor = (edge, sector) => {
+  // ANGLED labelled wall (e.g. the network funnel screens): the pad/dist math below is
+  // axis-aligned only (it keys on a[1]===b[1]); on a diagonal edge it yields a bogus
+  // offset that wraps the texture ("inal|term"). The labelled sub-edge is already the
+  // exact screen width, centred by construction, so map straight from the wall's start.
+  if (edge.a[0] !== edge.b[0] && edge.a[1] !== edge.b[1]) return 0;
   // Sectors whose label is not a door-sized plate declare their own `labelWidth`.
   // Assuming the door width here pads a narrower plate by half its own width, which
   // shifts the word so it renders wrapped across the wall's grid-cut segments.
@@ -382,6 +387,8 @@ const overrideTextureOffsetFor = (edge, sector) => {
 // Distance of this segment's start from the wall's start, so a tiling texture
 // continues seamlessly across grid-cut segments instead of restarting at each.
 const flowOffsetFor = (edge, sector) => {
+  // Angled step (e.g. the funnel screen's control-panel riser): tile from the start.
+  if (edge.a[0] !== edge.b[0] && edge.a[1] !== edge.b[1]) return 0;
   const horizontal = edge.a[1] === edge.b[1];
   if (horizontal) return Math.floor(edge.b[0] >= edge.a[0] ? edge.a[0] - sector.x1 : sector.x2 - edge.a[0]);
   return Math.floor(edge.b[1] >= edge.a[1] ? edge.a[1] - sector.y1 : sector.y2 - edge.a[1]);

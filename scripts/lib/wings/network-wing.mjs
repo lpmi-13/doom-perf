@@ -35,6 +35,7 @@ import {
   buildOrbPatch,
   buildFxPatch,
   makeInscription,
+  FLAT_DIM,
 } from "../textures.mjs";
 import { lump, buildPatch } from "../wad-bytes.mjs";
 
@@ -62,12 +63,41 @@ const rotatePoint = ([u, v], direction) => {
 const ids = reserved.network;
 const tex = (suffix) => wingName("network", suffix);
 
-// The two OVERVIEW terminals both live on the funnel entrance's angled walls (see
-// build): TRAFFIC PER INTERFACE (sar -n DEV, sign "network") on the right, CONNECTIONS
-// (ss -s census, sign "network-sockets") on the left. Their screens are the physical
-// labels the player reads walking in.
+// The two OVERVIEW terminals live in recessed control-panel niches on the entry BOX's FAR
+// wall, one either side of the central doorway, each FACING the entering player so it reads
+// head-on with no turn (see build): TRAFFIC PER INTERFACE (sar -n DEV, sign "network") RIGHT
+// of the doorway, CONNECTIONS (ss -s census, sign "network-sockets") LEFT -- the wall you
+// look at the moment you walk in, well clear of the six saturation terminals down the hall.
+// The far-wall geometry (below, used by build() and terminals()) fixes both.
 const screen = { texture: tex("TERM"), patch: tex("PTRM"), lines: ["TRAFFIC PER", "INTERFACE"] };
 const socketsScreen = { texture: tex("STRM"), patch: tex("PSTR"), lines: ["CONNECTIONS", "SS -S"] };
+// Entry-box far-wall terminal placement, shared by build() (geometry) + terminals() (read
+// segments). The box is a WIDE, shallow antechamber; the two 256-wide screens flank the
+// central doorway. The screen sits on the recess BACK (V_TERM_BACK), which must back onto
+// SOLID rock to render -- so the doorway is a THICK CORRIDOR (V_FARWALL..V_LAND) and the far
+// wall is the corridor's length, leaving solid fill (V_TERM_BACK..V_LAND) behind each recess.
+// (A too-thin far wall made the recess back a two-sided wall onto the landing -> the screen
+// rendered see-through.) BOX_WALK_HW is the doorway/corridor half-width (== the bus boundary).
+const BOX_WALK_HW = 112;
+const TERM_W = terminalTextureSize.width; // 256: screen width (each recess is exactly one screen)
+const BOX_OUTER = BOX_WALK_HW + 2 * TERM_W; // 624: each far-wall segment (corridor edge..box wall)
+//   holds one screen CENTRED, with TERM_W/2 (128 = 50% of the screen) of bare wall on each side
+const TERM_INNER = BOX_WALK_HW + TERM_W / 2; // 240: screen inner edge (128 of wall past the corridor)
+const TERM_OUTER = TERM_INNER + TERM_W; //     496: screen outer edge (128 of wall before BOX_OUTER)
+// The far end is pulled FORWARD (was 800/816/848) so the full-width LANDING between the corridor
+// and the hall is ~3x deeper (V_FOYER 896 - V_LAND 752 = 144, was 48): the player exits the
+// centred corridor and now has real room to fan onto the catwalks either side of the bus lanes
+// before the buses begin. Keeps V_FOYER (and every engine coord) put -- only the box shrinks.
+const V_FARWALL = 720;      // box far wall = terminal recess opening (into the box)
+const V_TERM_BACK = 736;    // recess back = the SCREEN plane; solid rock behind it -> it renders
+const V_LAND = 752;         // doorway corridor ends / the deep full-width landing begins
+// FLOOR LABELS naming each far-wall terminal, inscribed on the box floor just in front of it
+// so the player reads it walking up: CONNECTIONS under the ss -s screen (left), TX/RX PER
+// INTERFACE under the sar -n DEV screen (right). One line, 4 cells (256) wide, facing "west"
+// like the stage-terminal labels; the cells are laid on the 64-grid in build(). Unique lump
+// prefixes (DPNBC/DPNBT). [[angled-floor-label-technique]] [[riser-texture-and-light-rules]]
+const connLabel = makeInscription("DPNBC", "CONNECTIONS", "west", 4);
+const trafLabel = makeInscription("DPNBT", "TX/RX PER INTERFACE", "west", 4);
 // The softnet terminal that stands between the two Tesla electrodes: the shell view that
 // confirms the saturation the coils crackle (cat /proc/net/softnet_stat). This is the
 // kernel-RX cell of the six directional stage terminals below.
@@ -396,7 +426,7 @@ export const networkFeeder = {
 };
 
 const build = (ctx) => {
-  const { areaRect, areaPoly, direction, base, accent, terminalPanelFloor } = ctx;
+  const { areaRect, direction, base, accent, terminalPanelFloor } = ctx;
 
   addWingEntrance(ctx);
 
@@ -409,39 +439,74 @@ const build = (ctx) => {
   const conduit = { ...accent, kind: "net-conduit" };
   const intake = { ...base, kind: "net-intake", light: 176 };
 
-  // ===== FUNNEL entrance: two 45deg angled walls flank the shared entry throat and
-  // flare out to the front corners, so the narrow doorway opens into a funnel whose
-  // walls angle IN toward the throat pinch as the player enters. The wing's two OVERVIEW
-  // terminals ride the angled walls -- CONNECTIONS (ss -s) on the left, TRAFFIC PER
-  // INTERFACE (sar -n DEV) on the right -- obvious the moment you walk in and well clear
-  // of the six saturation terminals down the hall. Flat (F0, the user's choice); the
-  // ceiling drops to 128 over the funnel so each 256-wide screen maps ONCE on its angled
-  // wall ([[doom-wall-texture-128-tiling]]). The screens are one-sided labelled walls via
-  // labelEdge (angled edges carry no axis side-name); USE is driven by the terminals()
-  // segments below. Purely visual -- v < the stage/orb region (>=960), no engine coord
-  // touched. [[builder-full-switch-polygon-bsp]]
-  const FUNNEL_CEIL = F0 + terminalTextureSize.height; // 128: a one-map-high screen wall
-  const FN_STRAIGHT_V = 496; // the entrance side walls run STRAIGHT (u=+/-320) to here,
-  const FN_THROAT_V = 860; //   then ANGLE IN (7:4 slope) to the throat edge (u=+/-112).
-  // Each LONG angled wall is split filler | screen | filler by two collinear vertices so
-  // the 256-wide overview screen sits CENTRED on it (labelEdge = the middle sub-edge 2).
-  // The split points (-280,566),(-152,790) lie exactly on (-320,496)->(-112,860) (a 7:4
-  // slope keeps them integer & collinear -- rounding a shallower slope broke convexity).
-  // Left wall carries CONNECTIONS (ss -s); right carries TRAFFIC PER INTERFACE (sar -n DEV).
-  areaPoly(direction, "funnel-left",
-    [[-EDGEHW, 448], [-EDGEHW, FN_STRAIGHT_V], [-280, 566], [-152, 790], [-112, FN_THROAT_V], [-112, 448]], {
-    ...intake, floor: F0, ceiling: FUNNEL_CEIL, light: 200,
-    labelEdge: 2, labelTexture: socketsScreen.texture,
-  });
-  areaPoly(direction, "funnel-right",
-    [[112, 448], [112, FN_THROAT_V], [152, 790], [280, 566], [EDGEHW, FN_STRAIGHT_V], [EDGEHW, 448]], {
-    ...intake, floor: F0, ceiling: FUNNEL_CEIL, light: 200,
-    labelEdge: 2, labelTexture: screen.texture,
-  });
-  // Central approach behind the common throat, then a FULL-WIDTH landing that reopens to
-  // the stage-0 catwalks (the throat edge u=+/-112 is the bus boundary, impassable).
-  areaRect(direction, "funnel-center", { u1: -112, v1: V_ENTRY, u2: 112, v2: FN_THROAT_V }, { ...intake, floor: F0, ceiling: FUNNEL_CEIL, light: 184 });
-  areaRect(direction, "funnel-landing", { u1: -EDGEHW, v1: FN_THROAT_V, u2: EDGEHW, v2: V_FOYER }, { ...intake, ceiling: HALL_CEIL, light: 176 });
+  // ===== ENTRY BOX: a WIDE, shallow antechamber right inside the door (right angles only). The
+  // player steps through the shared entry throat straight into it. Both OVERVIEW terminals sit
+  // on the FAR wall the player faces on entry -- one either side of the central doorway, each
+  // turned to FACE the entrance so it reads head-on with NO turn: CONNECTIONS (ss -s) LEFT of
+  // the doorway, TRAFFIC PER INTERFACE (sar -n DEV) RIGHT. Each screen sits on the BACK of a
+  // shallow recess, which must back onto SOLID rock to render -- so the doorway is a THICK
+  // CORRIDOR (V_FARWALL..V_LAND) and the far wall is that corridor's whole length, leaving solid
+  // fill (V_TERM_BACK..V_LAND) behind each recess. (When the far wall was thin, the recess back
+  // was a two-sided wall straight onto the landing and the screen rendered see-through.) Floor F0
+  // throughout; the box ceiling matches the throat (192) so door + throat + box read as one room,
+  // the corridor drops to a lower header. Purely visual -- everything stays v < the stage/orb
+  // region (V_FOYER 896), so no engine coord is touched.
+  const BOX_CEIL = 192; //     antechamber ceiling (matches the entry throat -> seamless)
+  const WALK_CEIL = 152; //    lower corridor header, so the far opening reads as a passage
+  const boxOpts = { ...intake, floor: F0, ceiling: BOX_CEIL, light: 184 };
+  // Box floor: two WIDE side ARMS flanking the throat (the shared entrance already laid the
+  // throat from the door to V_ENTRY) plus the CENTRE behind it -- same floor + ceiling as the
+  // throat, so door + throat + box read as one room. Each arm is tiled around a 4-cell FLOOR
+  // LABEL band (V_LABEL1..V_LABEL2, on the 64-grid) just in front of its terminal, naming it.
+  const V_LABEL1 = 640, V_LABEL2 = 704; // 64-aligned label band a little in front of the far wall
+  const boxArm = (side, names) => {
+    const uLo = side === "left" ? -BOX_OUTER : BOX_WALK_HW; // arm inner (min u)
+    const uHi = side === "left" ? -BOX_WALK_HW : BOX_OUTER; // arm outer (max u)
+    const bandLo = side === "left" ? -512 : 256; // 64-aligned 4-cell band, ~centred under the screen
+    const bandHi = bandLo + 4 * FLAT_DIM; //       (256 wide; 16u off the screen centre to stay on-grid)
+    const id = `box-arm-${side}`;
+    areaRect(direction, `${id}-front`, { u1: uLo, v1: 448, u2: uHi, v2: V_LABEL1 }, boxOpts);
+    areaRect(direction, `${id}-back`, { u1: uLo, v1: V_LABEL2, u2: uHi, v2: V_FARWALL }, boxOpts);
+    areaRect(direction, `${id}-bandL`, { u1: uLo, v1: V_LABEL1, u2: bandLo, v2: V_LABEL2 }, boxOpts);
+    areaRect(direction, `${id}-bandR`, { u1: bandHi, v1: V_LABEL1, u2: uHi, v2: V_LABEL2 }, boxOpts);
+    for (let k = 0; k < 4; k += 1) {
+      areaRect(direction, `${id}-lab${k}`, { u1: bandLo + k * FLAT_DIM, v1: V_LABEL1, u2: bandLo + (k + 1) * FLAT_DIM, v2: V_LABEL2 }, { ...boxOpts, floorFlat: names[k] });
+    }
+  };
+  boxArm("left", connLabel.names); //  CONNECTIONS under the ss -s screen
+  boxArm("right", trafLabel.names); // TX/RX PER INTERFACE under the sar screen
+  areaRect(direction, "box-center", { u1: -BOX_WALK_HW, v1: V_ENTRY, u2: BOX_WALK_HW, v2: V_FARWALL }, boxOpts);
+  // The elongated DOORWAY CORRIDOR out of the box (the only way on): a narrow low-header passage
+  // through the thick far wall. Its length is what gives the flanking terminal recesses their
+  // solid backing (the fill either side of it), so the screens render instead of showing through.
+  areaRect(direction, "box-corridor", { u1: -BOX_WALK_HW, v1: V_FARWALL, u2: BOX_WALK_HW, v2: V_LAND }, { ...intake, floor: F0, ceiling: WALK_CEIL, light: 184 });
+  // Full-width landing: the corridor opens out here and the player fans onto the stage-0
+  // catwalks (the centre becomes the impassable buses at V_FOYER).
+  areaRect(direction, "box-landing", { u1: -EDGEHW, v1: V_LAND, u2: EDGEHW, v2: V_FOYER }, { ...intake, ceiling: HALL_CEIL, light: 176 });
+
+  // The two OVERVIEW terminals: a 256-wide control-panel recess on either side of the corridor,
+  // its SCREEN on the recess BACK (V_TERM_BACK, labelSide = backWall) which backs onto the solid
+  // fill beside the corridor -> the screen renders. Each recess is CENTRED on its far-wall
+  // segment (corridor edge BOX_WALK_HW .. box wall BOX_OUTER), leaving TERM_W/2 (128) of bare wall
+  // on each side. CONNECTIONS (ss -s) left, TRAFFIC PER INTERFACE (sar -n DEV) right.
+  const boxTerminal = (side, sc) => {
+    const uSeg = side === "left"
+      ? { u1: -TERM_OUTER, u2: -TERM_INNER }
+      : { u1: TERM_INNER, u2: TERM_OUTER };
+    areaRect(direction, `box-term-${side}`, { ...uSeg, v1: V_FARWALL, v2: V_TERM_BACK }, {
+      ...conduit,
+      kind: "terminal",
+      floor: F0 + terminalPanelFloor,
+      ceiling: F0 + terminalPanelFloor + terminalTextureSize.height,
+      light: 184,
+      labelSide: backWall,
+      labelTexture: sc.texture,
+      controlPanel: true,
+      riserWall: BUS_HOUSING,
+    });
+  };
+  boxTerminal("left", socketsScreen);
+  boxTerminal("right", screen);
 
   // ===== The central CURRENT PATH, per stage: a raised INSULATOR SPINE divider and two
   // deep BUS BARS (RX/TX) either side of it, floor rising with the stage's charge level.
@@ -661,7 +726,7 @@ const build = (ctx) => {
   areaRect(direction, "plaza-back-right", { u1: 128, v1: V_PLAZA, u2: EDGEHW, v2: V_TERM_WALL }, {
     ...hall, kind: "net-plaza", floor: F2, ceiling: HALL_CEIL, light: 146,
   });
-  // The per-interface (sar -n DEV) terminal moved to the funnel entrance, so the
+  // The per-interface (sar -n DEV) terminal lives in the entry box, so the
   // switchyard-head back wall is now plain plaza (no read-point here).
   areaRect(direction, "plaza-back-center", { u1: -128, v1: V_PLAZA, u2: 128, v2: V_TERM_WALL }, {
     ...hall, kind: "net-plaza", floor: F2, ceiling: HALL_CEIL, light: 146,
@@ -711,6 +776,8 @@ const textures = [
 
 const flats = [
   ...stations.flatMap((st) => [...st.insA.flats, ...st.insB.flats]),
+  ...connLabel.flats,
+  ...trafLabel.flats,
   ...busFlats,
   buildCeilingFlat(),
 ];
@@ -755,16 +822,16 @@ const terminals = ({ terminalHalfWidth }) => {
   });
   return [
     {
-      // TRAFFIC PER INTERFACE (sar -n DEV) centred on the funnel's RIGHT angled wall
-      // (the middle sub-edge (152,790)->(280,566)).
+      // TRAFFIC PER INTERFACE (sar -n DEV): the far-wall screen RIGHT of the corridor,
+      // read head-on from the box (== the box-term-right recess back, the screen plane).
       sign: "network",
-      segments: [segment([152, 790], [280, 566])],
+      segments: [segment([TERM_INNER, V_TERM_BACK], [TERM_OUTER, V_TERM_BACK])],
     },
     {
-      // CONNECTIONS (ss -s census) centred on the funnel's LEFT angled wall
-      // (the middle sub-edge (-280,566)->(-152,790)).
+      // CONNECTIONS (ss -s census): the far-wall screen LEFT of the corridor
+      // (== the box-term-left recess back, the screen plane).
       sign: "network-sockets",
-      segments: [segment([-280, 566], [-152, 790])],
+      segments: [segment([-TERM_OUTER, V_TERM_BACK], [-TERM_INNER, V_TERM_BACK])],
     },
     {
       // softnet_stat terminal on the kernel-RX Tesla bay deep wall, between the rods

@@ -277,10 +277,68 @@ export const buildWallSign2Patch = (line1, line2, color = signTextColor) => {
   return buildPatch(pixels, width, height);
 };
 
-export const buildTerminalPatch = ({ lines }) => {
+// Standard rack CONTROL PANEL (grey metal, mini-screens, LED bars, key labels, vent
+// grille) drawn into `px` (buffer W x H) across rows [yBase, yBase + 32). Shared by the
+// standalone DPCTRL panel texture (buildControlPanelPatch) and the baked-in bottom panel
+// on the funnel screens, so both read IDENTICALLY to the rest of the wing's terminals.
+const CONTROL_PANEL_H = controlPanelTextureSize.height; // 32
+const drawControlPanelInto = (px, W, H, yBase) => {
+  const R = (x, y, w, h, c) => drawRect(px, W, H, x, yBase + y, x + w, yBase + y + h, c);
+  R(0, 0, W, CONTROL_PANEL_H, 96); // grey rack metal
+  let a = 0x1a2b3c4d | 0;
+  const rnd = () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const pick = (arr) => arr[Math.floor(rnd() * arr.length)];
+  const screen = (x, w, y0, y1) => {                 // black mini-screen, green data
+    R(x, y0, w, y1 - y0, 8); R(x + 1, y0 + 1, w - 2, y1 - y0 - 2, 0);
+    for (let gx = x + 2; gx < x + w - 2;) {
+      const bw = 1 + Math.floor(rnd() * 3);
+      if (rnd() > 0.25) { const bh = 1 + Math.floor(rnd() * (y1 - y0 - 4)); R(gx, y1 - 2 - bh, bw, bh, rnd() > 0.4 ? 112 : 118); }
+      gx += bw + 1;
+    }
+  };
+  const leds = (x, w, y0, y1) => {                   // recessed bar of small lamps
+    const my = y0 + Math.max(0, Math.floor((y1 - y0 - 4) / 2));
+    R(x, my, w, 4, 8);
+    for (let lx = x + 2; lx < x + w - 2; lx += 4) if (rnd() > 0.3) R(lx, my + 1, 2, 2, pick([231, 231, 112, 176]));
+  };
+  const vent = (x, w, y0, y1) => { for (let yy = y0 + 1; yy < y1 - 1; yy += 2) R(x, yy, w, 1, 0); };
+  const label = (x, w, y0, y1) => { R(x, y0, w, y1 - y0, 8); R(x, y0, w, 1, 96); R(x + 2, y0 + 3, w - 5, 1, 5); R(x + 2, y0 + 5, Math.floor((w - 4) / 2), 1, 5); };
+  const fillRow = (y0, y1) => {
+    let x = 2 + Math.floor(rnd() * 8);
+    while (x < W - 10) {
+      const type = pick(["screen", "screen", "leds", "leds", "vent", "label", "blank", "screen"]);
+      const w = Math.min(12 + Math.floor(rnd() * 38), W - 4 - x);
+      if (w < 8) break;
+      if (type === "screen") screen(x, w, y0, y1);
+      else if (type === "leds") leds(x, w, y0, y1);
+      else if (type === "vent") vent(x, w, y0, y1);
+      else if (type === "label") label(x, w, y0, y1);
+      else { R(x + 1, y0, 1, 1, 8); R(x + w - 2, y1 - 1, 1, 1, 8); } // bare metal + screws
+      x += w + 3 + Math.floor(rnd() * 10);
+    }
+  };
+  fillRow(2, 13);
+  fillRow(16, 27);
+  R(0, 0, W, 1, 0); R(0, 1, W, 1, 8);
+  R(0, 13, W, 1, 8); R(0, 14, W, 1, 0); R(0, 15, W, 1, 8);
+  R(0, 27, W, 1, 8);
+  for (let yy = 28; yy < CONTROL_PANEL_H; yy += 2) { R(0, yy, W, 1, 0); R(0, yy + 1, W, 1, 8); }
+};
+
+export const buildTerminalPatch = ({ lines, panel = false }) => {
   const { width, height } = terminalTextureSize;
+  // `panel` reserves the bottom strip for the standard terminal control panel, baked
+  // INTO the screen texture (used where the console can't afford a separate step-riser
+  // panel -- e.g. the network funnel's flush angled walls). The gibberish screen shrinks
+  // to sit above the SAME control panel the other wing terminals show.
+  const PANEL_H = panel ? CONTROL_PANEL_H : 0;
   const screenTop = 8;
-  const screenBottom = height - 8;
+  const screenBottom = height - 8 - PANEL_H;
   const pixels = new Uint8Array(width * height);
   pixels.fill(5);
   // Bezel + dark screen.
@@ -385,6 +443,7 @@ export const buildTerminalPatch = ({ lines }) => {
         pixels[y * width + x] = Math.min(124, 112 + Math.round((1 - v) * 13));
       }
   }
+  if (panel) drawControlPanelInto(pixels, width, height, height - CONTROL_PANEL_H);
   return buildPatch(pixels, width, height);
 };
 
@@ -529,52 +588,7 @@ export const buildFxPatch = ({ size, ramp, innerFrac = 0, outerFrac = 1 }) => {
 export const buildControlPanelPatch = () => {
   const { width: W, height: H } = controlPanelTextureSize; // 256 x 32
   const px = new Uint8Array(W * H);
-  px.fill(96); // gray rack metal
-  const R = (x, y, w, h, c) => drawRect(px, W, H, x, y, x + w, y + h, c);
-  let a = 0x1a2b3c4d | 0;
-  const rnd = () => {
-    a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-  const pick = (arr) => arr[Math.floor(rnd() * arr.length)];
-  const screen = (x, w, y0, y1) => {                 // black mini-screen, green data
-    R(x, y0, w, y1 - y0, 8); R(x + 1, y0 + 1, w - 2, y1 - y0 - 2, 0);
-    for (let gx = x + 2; gx < x + w - 2;) {
-      const bw = 1 + Math.floor(rnd() * 3);
-      if (rnd() > 0.25) { const bh = 1 + Math.floor(rnd() * (y1 - y0 - 4)); R(gx, y1 - 2 - bh, bw, bh, rnd() > 0.4 ? 112 : 118); }
-      gx += bw + 1;
-    }
-  };
-  const leds = (x, w, y0, y1) => {                   // recessed bar of small lamps
-    const my = y0 + Math.max(0, Math.floor((y1 - y0 - 4) / 2));
-    R(x, my, w, 4, 8);
-    for (let lx = x + 2; lx < x + w - 2; lx += 4) if (rnd() > 0.3) R(lx, my + 1, 2, 2, pick([231, 231, 112, 176]));
-  };
-  const vent = (x, w, y0, y1) => { for (let yy = y0 + 1; yy < y1 - 1; yy += 2) R(x, yy, w, 1, 0); };
-  const label = (x, w, y0, y1) => { R(x, y0, w, y1 - y0, 8); R(x, y0, w, 1, 96); R(x + 2, y0 + 3, w - 5, 1, 5); R(x + 2, y0 + 5, Math.floor((w - 4) / 2), 1, 5); };
-  const fillRow = (y0, y1) => {
-    let x = 2 + Math.floor(rnd() * 8);
-    while (x < W - 10) {
-      const type = pick(["screen", "screen", "leds", "leds", "vent", "label", "blank", "screen"]);
-      const w = Math.min(12 + Math.floor(rnd() * 38), W - 4 - x);
-      if (w < 8) break;
-      if (type === "screen") screen(x, w, y0, y1);
-      else if (type === "leds") leds(x, w, y0, y1);
-      else if (type === "vent") vent(x, w, y0, y1);
-      else if (type === "label") label(x, w, y0, y1);
-      else { R(x + 1, y0, 1, 1, 8); R(x + w - 2, y1 - 1, 1, 1, 8); } // bare metal + screws
-      x += w + 3 + Math.floor(rnd() * 10);
-    }
-  };
-  fillRow(2, 13);
-  fillRow(16, 27);
-  // Rack seams: top edge, the unit divider, and a ventilation grille along the base.
-  R(0, 0, W, 1, 0); R(0, 1, W, 1, 8);
-  R(0, 13, W, 1, 8); R(0, 14, W, 1, 0); R(0, 15, W, 1, 8);
-  R(0, 27, W, 1, 8);
-  for (let yy = 28; yy < H; yy += 2) { R(0, yy, W, 1, 0); R(0, yy + 1, W, 1, 8); }
+  drawControlPanelInto(px, W, H, 0); // shared with the funnel screens' baked-in panel
   return buildPatch(px, W, H);
 };
 
@@ -891,4 +905,97 @@ export const makeInscription = (prefix, text, facing, cells, color = signTextCol
     names.push(name);
   }
   return { flats, names };
+};
+
+// Local (u,v) -> world (wx,wy) for a wing's cardinal, matching the map builder's
+// rotatePoint so floor flats (sampled by WORLD position) line up. Kept here so the
+// angled-inscription generator can bake the world orientation itself.
+const rotateLocalToWorld = ([u, v], direction) => {
+  switch (direction) {
+    case "north": return [u, v];
+    case "east": return [v, -u];
+    case "south": return [-u, -v];
+    case "west": return [-v, u];
+    default: throw new Error(`makeAngledInscription: unknown direction ${direction}`);
+  }
+};
+
+// General ANGLED floor inscription. Unlike makeInscription (four cardinal facings), the
+// reading direction can be ANY angle, so a label can lie parallel to an angled wall.
+// Returns 64x64 flats plus the LOCAL 64-aligned tile origins to place them at (each on its
+// own floor sector via areaRect with floorFlat = cell.name). `direction` is the wing's
+// cardinal (so the negated-Y floor sampling + local->world rotation are handled for you);
+// `angleDeg` is the reading direction in the LOCAL (u,v) frame (0 = +u, CCW). The text is
+// centred on (originU, originV) by default. Only tiles the text actually touches are
+// returned (a ragged diagonal band), so the caller floors the rest of the area plainly.
+export const makeAngledInscription = (prefix, text, {
+  direction, originU, originV, angleDeg, scale = 2, color = signTextColor, anchor = "center",
+}) => {
+  // 1. Rasterise the text into a tight ink map (glyph 5x7, 6px advance).
+  const glyphW = 5, glyphH = 7, advance = 6;
+  const textW = Math.max(1, text.length * advance * scale - scale);
+  const textH = glyphH * scale;
+  const ink = new Uint8Array(textW * textH);
+  [...text].forEach((ch, ci) => {
+    const g = glyphs[ch];
+    if (!g) throw new Error(`makeAngledInscription: missing glyph for ${ch}`);
+    g.forEach((row, ry) => {
+      for (let gx = 0; gx < glyphW; gx += 1) {
+        if (row[gx] !== "1") continue;
+        for (let sy = 0; sy < scale; sy += 1)
+          for (let sx = 0; sx < scale; sx += 1) {
+            const x = (ci * advance + gx) * scale + sx;
+            const y = ry * scale + sy;
+            if (x < textW && y < textH) ink[y * textW + x] = 1;
+          }
+      }
+    });
+  });
+  // 2. Reading basis (local): along = (cos,sin), across = (-sin,cos). Anchor at centre so
+  //    (originU,originV) is the middle of the text block.
+  const phi = (angleDeg * Math.PI) / 180;
+  const cos = Math.cos(phi), sin = Math.sin(phi);
+  const ax = anchor === "center" ? textW / 2 : 0;
+  const ay = anchor === "center" ? textH / 2 : 0;
+  // 3. Local bounding box of the rotated text rectangle -> 64-aligned tiles covering it.
+  let uMin = Infinity, uMax = -Infinity, vMin = Infinity, vMax = -Infinity;
+  for (const tx of [0, textW]) for (const ty of [0, textH]) {
+    const lu = originU + (tx - ax) * cos - (ty - ay) * sin;
+    const lv = originV + (tx - ax) * sin + (ty - ay) * cos;
+    uMin = Math.min(uMin, lu); uMax = Math.max(uMax, lu);
+    vMin = Math.min(vMin, lv); vMax = Math.max(vMax, lv);
+  }
+  const floor64 = (n) => Math.floor(n / FLAT_DIM) * FLAT_DIM;
+  const mod = (n) => ((n % FLAT_DIM) + FLAT_DIM) % FLAT_DIM;
+  const flats = [], cells = [];
+  let idx = 0;
+  for (let vT = floor64(vMin); vT < vMax; vT += FLAT_DIM) {
+    for (let uT = floor64(uMin); uT < uMax; uT += FLAT_DIM) {
+      const flat = new Uint8Array(FLAT_DIM * FLAT_DIM);
+      let hasInk = false;
+      for (let du = 0; du < FLAT_DIM; du += 1)
+        for (let dv = 0; dv < FLAT_DIM; dv += 1) {
+          const u = uT + du, v = vT + dv;
+          // Local->text is a REFLECTION (det -1, an involution), not a plain rotation:
+          // Doom floor sampling negates world Y, so the label needs one mirror to read
+          // upright. This is correct at EVERY angle (a v-flip only works at angle 0 and
+          // mirrors angled text). Matches makeInscription's cardinal orientation.
+          const d0 = u - originU, d1 = v - originV;
+          const tx = d0 * cos + d1 * sin + ax;   // position along the text
+          const ty = d0 * sin - d1 * cos + ay;   // position across the text (reflected)
+          if (tx < 0 || tx >= textW || ty < 0 || ty >= textH) continue;
+          if (!ink[Math.floor(ty) * textW + Math.floor(tx)]) continue;
+          const [wx, wy] = rotateLocalToWorld([u, v], direction);
+          flat[mod(-wy) * FLAT_DIM + mod(wx)] = color; // Doom floor sampling (negated Y)
+          hasInk = true;
+        }
+      if (hasInk) {
+        const name = `${prefix}${idx}`;
+        flats.push(lump(name, Buffer.from(flat)));
+        cells.push({ name, u: uT, v: vT });
+        idx += 1;
+      }
+    }
+  }
+  return { flats, cells };
 };

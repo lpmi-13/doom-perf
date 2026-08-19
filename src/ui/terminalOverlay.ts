@@ -727,25 +727,24 @@ const formatNetworkSockets = (telemetry: TelemetrySnapshot): string => {
   lines.push(`TCP:   estab ${estab}, timewait ${val(tcp.timeWait)}, listen ${val(tcp.listen)}, closewait ${val(tcp.closeWait)}`);
   lines.push("");
   lines.push("$ ss -tan | awk 'NR>1{print $1}' | sort | uniq -c");
-  // Canonical order; show ESTABLISHED and LISTEN always, other states only when
-  // present, so the panel stays focused on what's actually live.
-  const rows: [string, number, boolean][] = [
-    ["ESTABLISHED", estab, true],
-    ["SYN-SENT", val(tcp.synSent), false],
-    ["SYN-RECV", val(tcp.synRecv), false],
-    ["FIN-WAIT1", val(tcp.finWait1), false],
-    ["FIN-WAIT2", val(tcp.finWait2), false],
-    ["TIME-WAIT", val(tcp.timeWait), false],
-    ["CLOSE-WAIT", val(tcp.closeWait), false],
-    ["LAST-ACK", val(tcp.lastAck), false],
-    ["LISTEN", val(tcp.listen), true],
-    ["CLOSING", val(tcp.closing), false],
+  // ALL states, always, in canonical order (0 where none) -- a fixed 10-row block, so a
+  // transient state (e.g. a brief SYN-RECV) can't pop the list in and out and snap-reflow
+  // everything below it. [[prefer-everpresent-over-flicker]]
+  const rows: [string, number][] = [
+    ["ESTABLISHED", estab],
+    ["SYN-SENT", val(tcp.synSent)],
+    ["SYN-RECV", val(tcp.synRecv)],
+    ["FIN-WAIT1", val(tcp.finWait1)],
+    ["FIN-WAIT2", val(tcp.finWait2)],
+    ["TIME-WAIT", val(tcp.timeWait)],
+    ["CLOSE-WAIT", val(tcp.closeWait)],
+    ["LAST-ACK", val(tcp.lastAck)],
+    ["LISTEN", val(tcp.listen)],
+    ["CLOSING", val(tcp.closing)],
   ];
   const scale = Math.max(1, total, ...rows.map(([, count]) => count));
-  rows.forEach(([label, count, always]) => {
-    if (count > 0 || always) {
-      lines.push(`${padStart(label, 12)}  ${bar(count / scale)} ${padStart(String(count), 6)}`);
-    }
+  rows.forEach(([label, count]) => {
+    lines.push(`${padStart(label, 12)}  ${bar(count / scale)} ${padStart(String(count), 6)}`);
   });
   lines.push("");
   lines.push("established = active connection load; time-wait/close-wait piles = churn or leak.");
