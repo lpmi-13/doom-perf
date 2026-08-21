@@ -71,6 +71,16 @@ int doomperf_net_softnet_drops = 0;
 int doomperf_net_backlogged = 0;
 int doomperf_net_synrecv = 0;
 int doomperf_net_ring_known[2] = {0, 0};
+// Kernel-TX QDISC floor instrument (NETWORK_QDISC_DISC_PLAN.md). fill = the real qdisc
+// backlog occupancy (permille, 0 when unknown); known = whether tc's netlink backlog is
+// readable (drives the disc's known/unknown mode + the DPNQDG<->DPNQDX placard swap). Both
+// are browser-pushed. flow + sat are NOT browser-set: p_tick.c publishes them each tick and
+// the r_draw floor shaders read them -- flow = TX throughput (drain-pulse cadence),
+// sat = max(TX drop, qdisc fill) (trips the inflow line solid red at enqueue loss).
+int doomperf_net_qdisc_fill = 0;
+int doomperf_net_qdisc_known = 0;
+int doomperf_net_qdisc_flow = 0;
+int doomperf_net_qdisc_sat = 0;
 int doomperf_sim_mode = 0;
 
 // Doom Perf: title wordmark "oo" live-load pulse (see doom_emscripten_compat.h).
@@ -467,6 +477,23 @@ EMSCRIPTEN_KEEPALIVE
 void DoomPerf_SetNetSoftnetDrops(int permille)
 {
     doomperf_net_softnet_drops = DoomPerf_ClampPermille(permille);
+}
+
+// Kernel-TX qdisc backlog occupancy (permille). 0 when unknown -- the disc then draws its
+// indeterminate "scanning" state, driven by doomperf_net_qdisc_known below.
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_SetNetQdiscFill(int permille)
+{
+    doomperf_net_qdisc_fill = DoomPerf_ClampPermille(permille);
+}
+
+// 1 when tc's qdisc backlog is readable (netlink), 0 when it is not (?qdisc=off or a
+// restricted container). Selects the disc's known-fill vs unknown-sweep mode and the
+// DPNQDG (DEPTH) <-> DPNQDX (UNKNOWN) placard the engine shows.
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_SetNetQdiscKnown(int known)
+{
+    doomperf_net_qdisc_known = known ? 1 : 0;
 }
 
 EMSCRIPTEN_KEEPALIVE

@@ -40,7 +40,7 @@
      {SPR_SMBT,32768,4,{NULL},S_BTORCHSHRT2,0,0},	// S_BTORCHSHRT
      {SPR_SMBT,32769,4,{NULL},S_BTORCHSHRT3,0,0},	// S_BTORCHSHRT2
      {SPR_SMBT,32770,4,{NULL},S_BTORCHSHRT4,0,0},	// S_BTORCHSHRT3
-@@ -1099,7 +1110,154 @@
+@@ -1099,7 +1110,176 @@
      {SPR_TLP2,32768,4,{NULL},S_TECH2LAMP2,0,0},	// S_TECH2LAMP
      {SPR_TLP2,32769,4,{NULL},S_TECH2LAMP3,0,0},	// S_TECH2LAMP2
      {SPR_TLP2,32770,4,{NULL},S_TECH2LAMP4,0,0},	// S_TECH2LAMP3
@@ -192,11 +192,33 @@
 +    {SPR_BLUD,32769,3,{NULL},S_NULL,0,0},	// S_DP_NETARC2 (bolt frame B, fullbright)
 +    // The tall branchy bolt fired at very high saturation: one big frame, a touch longer
 +    // lived so the escalation reads (BLUD C, fullbright), then gone.
-+    {SPR_BLUD,32770,5,{NULL},S_NULL,0,0}	// S_DP_NETARC_BIG (bolt frame C, fullbright)
++    {SPR_BLUD,32770,5,{NULL},S_NULL,0,0},	// S_DP_NETARC_BIG (bolt frame C, fullbright)
++    // Socket-lock capacitor bank: the travelling BUS-CURRENT bead (SPR_BFE1 D/E round mote,
++    // fullbright, ~50 tics so it crosses tower-to-tower then self-removes) and the static
++    // capacitor TOWER prop (SPR_COLU A, NOT fullbright so the bay-floor charge glow lights it).
++    // BFE1 A/B/C are the memory-fault SPRK spray; D/E free. The tower rides SPR_COL2 (thing 31,
++    // never placed) -- NOT SPR_COLU, which is the floor-lamp thing 2028 the hub + memory wing place.
++    {SPR_BFE1,32771,25,{NULL},S_DP_NETCUR2,0,0},	// S_DP_NETCUR1 (bead D, fullbright)
++    {SPR_BFE1,32772,25,{NULL},S_NULL,0,0},	// S_DP_NETCUR2 (bead E) -> gone at the far tower
++    {SPR_COL2,0,-1,{NULL},S_NULL,0,0},	// S_DP_NETCAPTWR (capacitor tower, static, sector-lit)
++    // Ring-buffer + send-q machine props: static, NOT fullbright, so the bay-floor glow (which
++    // ramps with throughput / send-q) lights them. SMIT/SMT2/COL1 frame A are UNUSED IWAD frames
++    // (their stock things 47/-/30 are never placed), art-overridden to the turbine / dynamo /
++    // battery. (Do NOT use ELEC=48 or COLU=2028 -- those things ARE placed, so overriding their
++    // sprite repaints the hub / other-wing decorations.)
++    {SPR_SMIT,0,-1,{NULL},S_NULL,0,0},	// S_DP_NETTURB (turbine wheel, static, sector-lit)
++    {SPR_SMT2,0,-1,{NULL},S_NULL,0,0},	// S_DP_NETDYN  (dynamo drum, static, sector-lit)
++    {SPR_COL1,0,-1,{NULL},S_NULL,0,0},	// S_DP_NETBATT (battery bank, static, sector-lit)
++    // Hand-positioned motes (tics -1: the engine owns their motion). BFE1 D = electric-blue
++    // orbiting spin / rising charge mote; PMAP B = its violet twin for the dynamo output ring.
++    {SPR_BFE1,32771,-1,{NULL},S_NULL,0,0},	// S_DP_NETSPIN   (blue mote, fullbright, static)
++    {SPR_PMAP,32769,-1,{NULL},S_NULL,0,0},	// S_DP_NETSPIN_V (violet mote, fullbright, static)
++    // Overcharge boil-off: a blue mote that rises briefly off a full battery, then self-removes.
++    {SPR_BFE1,32771,16,{NULL},S_NULL,0,0}	// S_DP_NETVENT (blue mote, fullbright, ~16 tics)
  };
  
  
-@@ -4665,6 +4823,382 @@
+@@ -4665,6 +4845,538 @@
  	sfx_None,		// activesound
  	MF_NOBLOCKMAP,		// flags
  	S_NULL		// raisestate
@@ -555,6 +577,162 @@
 +    {		// MT_DP_NETARC -- a Tesla-coil lightning bolt (no collision, self-removes)
 +	-1,		// doomednum (runtime-spawned only)
 +	S_DP_NETARC1,		// spawnstate
++	1000,		// spawnhealth
++	S_NULL,		// seestate
++	sfx_None,		// seesound
++	8,		// reactiontime
++	sfx_None,		// attacksound
++	S_NULL,		// painstate
++	0,		// painchance
++	sfx_None,		// painsound
++	S_NULL,		// meleestate
++	S_NULL,		// missilestate
++	S_NULL,		// deathstate
++	S_NULL,		// xdeathstate
++	sfx_None,		// deathsound
++	0,		// speed
++	2*FRACUNIT,		// radius
++	2*FRACUNIT,		// height
++	100,		// mass
++	0,		// damage
++	sfx_None,		// activesound
++	MF_NOGRAVITY|MF_NOBLOCKMAP|MF_NOCLIP,		// flags
++	S_NULL		// raisestate
++    },
++
++    {		// MT_DP_NETCAP -- the socket-lock travelling bus-current bead (no collision)
++	-1,		// doomednum (runtime-spawned only)
++	S_DP_NETCUR1,		// spawnstate
++	1000,		// spawnhealth
++	S_NULL,		// seestate
++	sfx_None,		// seesound
++	8,		// reactiontime
++	sfx_None,		// attacksound
++	S_NULL,		// painstate
++	0,		// painchance
++	sfx_None,		// painsound
++	S_NULL,		// meleestate
++	S_NULL,		// missilestate
++	S_NULL,		// deathstate
++	S_NULL,		// xdeathstate
++	sfx_None,		// deathsound
++	0,		// speed
++	2*FRACUNIT,		// radius
++	2*FRACUNIT,		// height
++	100,		// mass
++	0,		// damage
++	sfx_None,		// activesound
++	MF_NOGRAVITY|MF_NOBLOCKMAP|MF_NOCLIP,		// flags
++	S_NULL		// raisestate
++    },
++
++    {		// MT_DP_NETCAPTWR -- authored substation capacitor tower (solid static prop)
++	3011,		// doomednum (placed by the map builder, one pair per socket bay)
++	S_DP_NETCAPTWR,		// spawnstate (static COL2 frame A, tics -1)
++	1000,		// spawnhealth
++	S_NULL,		// seestate
++	sfx_None,		// seesound
++	8,		// reactiontime
++	sfx_None,		// attacksound
++	S_NULL,		// painstate
++	0,		// painchance
++	sfx_None,		// painsound
++	S_NULL,		// meleestate
++	S_NULL,		// missilestate
++	S_NULL,		// deathstate
++	S_NULL,		// xdeathstate
++	sfx_None,		// deathsound
++	0,		// speed
++	24*FRACUNIT,		// radius (solid; the walkway between the two towers stays open)
++	152*FRACUNIT,		// height (matches the authored sprite)
++	1000,		// mass
++	0,		// damage
++	sfx_None,		// activesound
++	MF_SOLID,		// flags: a solid decoration the player walks around
++	S_NULL		// raisestate
++    },
++
++    {		// MT_DP_NETTURB -- NIC RX ring turbine wheel (solid static prop)
++	3012,		// doomednum (map builder places two per RX ring bay)
++	S_DP_NETTURB,		// spawnstate (static SMIT frame A, tics -1)
++	1000,		// spawnhealth
++	S_NULL,		// seestate
++	sfx_None,		// seesound
++	8,		// reactiontime
++	sfx_None,		// attacksound
++	S_NULL,		// painstate
++	0,		// painchance
++	sfx_None,		// painsound
++	S_NULL,		// meleestate
++	S_NULL,		// missilestate
++	S_NULL,		// deathstate
++	S_NULL,		// xdeathstate
++	sfx_None,		// deathsound
++	0,		// speed
++	28*FRACUNIT,		// radius (solid; the walkway between the two wheels stays open)
++	144*FRACUNIT,		// height (matches the authored sprite)
++	1000,		// mass
++	0,		// damage
++	sfx_None,		// activesound
++	MF_SOLID,		// flags
++	S_NULL		// raisestate
++    },
++
++    {		// MT_DP_NETDYN -- NIC TX ring dynamo drum (solid static prop)
++	3013,		// doomednum (map builder places two per TX ring bay)
++	S_DP_NETDYN,		// spawnstate (static SMT2 frame A, tics -1)
++	1000,		// spawnhealth
++	S_NULL,		// seestate
++	sfx_None,		// seesound
++	8,		// reactiontime
++	sfx_None,		// attacksound
++	S_NULL,		// painstate
++	0,		// painchance
++	sfx_None,		// painsound
++	S_NULL,		// meleestate
++	S_NULL,		// missilestate
++	S_NULL,		// deathstate
++	S_NULL,		// xdeathstate
++	sfx_None,		// deathsound
++	0,		// speed
++	32*FRACUNIT,		// radius (solid)
++	128*FRACUNIT,		// height (matches the authored sprite)
++	1000,		// mass
++	0,		// damage
++	sfx_None,		// activesound
++	MF_SOLID,		// flags
++	S_NULL		// raisestate
++    },
++
++    {		// MT_DP_NETBATT -- send-q battery bank (solid static prop)
++	3014,		// doomednum (map builder places two in the send-q bay)
++	S_DP_NETBATT,		// spawnstate (static COL1 frame A, tics -1)
++	1000,		// spawnhealth
++	S_NULL,		// seestate
++	sfx_None,		// seesound
++	8,		// reactiontime
++	sfx_None,		// attacksound
++	S_NULL,		// painstate
++	0,		// painchance
++	sfx_None,		// painsound
++	S_NULL,		// meleestate
++	S_NULL,		// missilestate
++	S_NULL,		// deathstate
++	S_NULL,		// xdeathstate
++	sfx_None,		// deathsound
++	0,		// speed
++	28*FRACUNIT,		// radius (solid)
++	120*FRACUNIT,		// height (matches the authored sprite)
++	1000,		// mass
++	0,		// damage
++	sfx_None,		// activesound
++	MF_SOLID,		// flags
++	S_NULL		// raisestate
++    },
++
++    {		// MT_DP_NETSPIN -- hand-positioned spin / charge / vent mote (no collision)
++	-1,		// doomednum (runtime-spawned only)
++	S_DP_NETSPIN,		// spawnstate (blue mote; the driver re-states it per use)
 +	1000,		// spawnhealth
 +	S_NULL,		// seestate
 +	sfx_None,		// seesound

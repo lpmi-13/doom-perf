@@ -16,7 +16,7 @@
 
 --- a/r_segs.c
 +++ b/r_segs.c
-@@ -40,6 +40,61 @@
+@@ -40,6 +40,65 @@
  #include "r_sky.h"
  
  
@@ -69,6 +69,10 @@
 +	// 33 = read piston (tag 666), 34 = write piston (tag 667); the shader reads
 +	// the lane's scroll from (display - 33).
 +	doomperf_cpu_column_display = 33 + (tag - 666);
++    else if (surface == 2 && (tag == 762 || tag == 763))
++	// Network send-q BATTERY banks: a segmented charge gauge on each solid cell-column's
++	// lower (two-sided) face. 35 = red (+) column (tag 762), 36 = blue (-) column (tag 763).
++	doomperf_cpu_column_display = 35 + (tag - 762);
 +    else
 +	doomperf_cpu_column_display = 0;
 +    doomperf_cpu_column_texture_x = texturecolumn;
@@ -78,7 +82,7 @@
  // OPTIMIZE: closed two sided lines as single sided
  
  // True if any of the segs textures might be visible.
-@@ -121,12 +176,13 @@
+@@ -121,12 +180,13 @@
  	
      lightnum = (frontsector->lightlevel >> LIGHTSEGSHIFT)+extralight;
  
@@ -97,7 +101,7 @@
  	walllights = scalelight[0];
      else if (lightnum >= LIGHTLEVELS)
  	walllights = scalelight[LIGHTLEVELS-1];
-@@ -284,7 +340,9 @@
+@@ -284,7 +344,9 @@
  	    dc_yh = yh;
  	    dc_texturemid = rw_midtexturemid;
  	    dc_source = R_GetColumn(midtexture,texturecolumn);
@@ -107,7 +111,7 @@
  	    ceilingclip[rw_x] = viewheight;
  	    floorclip[rw_x] = -1;
  	}
-@@ -306,7 +364,9 @@
+@@ -306,7 +368,9 @@
  		    dc_yh = mid;
  		    dc_texturemid = rw_toptexturemid;
  		    dc_source = R_GetColumn(toptexture,texturecolumn);
@@ -117,7 +121,7 @@
  		    ceilingclip[rw_x] = mid;
  		}
  		else
-@@ -336,7 +396,9 @@
+@@ -336,7 +400,9 @@
  		    dc_texturemid = rw_bottomtexturemid;
  		    dc_source = R_GetColumn(bottomtexture,
  					    texturecolumn);
@@ -127,7 +131,7 @@
  		    floorclip[rw_x] = mid;
  		}
  		else
-@@ -643,12 +705,10 @@
+@@ -643,12 +709,10 @@
  	{
  	    lightnum = (frontsector->lightlevel >> LIGHTSEGSHIFT)+extralight;
  

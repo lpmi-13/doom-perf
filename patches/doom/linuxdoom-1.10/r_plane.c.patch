@@ -6,13 +6,14 @@
 #   0023  disk-queue-channel
 #   0035  disk-platter-spindle
 #
+#   (+)   network-qdisc-disc (kernel-TX qdisc floor-display sentinels 126/127)
 # Order-independent: this is the only Doom Perf patch that touches r_plane.c.
 # Regenerate by diffing a clean tree against the staged build tree;
 # see scripts/build-doom-wasm.sh.
 
 --- a/r_plane.c
 +++ b/r_plane.c
-@@ -44,6 +44,14 @@ rcsid[] = "$Id: r_plane.c,v 1.4 1997/02/03 16:47:55 b1 Exp $";
+@@ -44,19 +44,47 @@
  planefunction_t		floorfunc;
  planefunction_t		ceilingfunc;
  
@@ -22,12 +23,47 @@
 +#define DOOMPERF_CPU_RUN_QUEUE_DISPLAY_LIGHT	144
 +// Storage (disk) wing: the summit platter floor (rotating utilization tracks).
 +#define DOOMPERF_DISK_PLATTER_DISPLAY_LIGHT	130
++// Network substation kernel-TX QDISC pit (NETWORK_QDISC_DISC_PLAN.md): the occupancy disc
++// (126) and the two enqueue/dequeue flow lines (127). These are the network wing's OWN
++// reserved floor-display sentinels (block 124-128), not storage's 130-134.
++#define DOOMPERF_NET_QDISC_DISPLAY_LIGHT	126
++#define DOOMPERF_NET_FLOW_DISPLAY_LIGHT		127
 +extern int doomperf_cpu_floor_display;
 +
  //
  // opening
  //
-@@ -420,6 +428,17 @@ void R_DrawPlanes (void)
+ 
+ // Here comes the obnoxious "visplane".
+-#define MAXVISPLANES	128
++// Doom Perf: raised from the vanilla 128. R_FindPlane keys a visplane on
++// (flat, height, lightlevel), and the resource wings drive many adjacent
++// sectors to CONTINUOUSLY-varying, per-sector light levels off live telemetry
++// (the network substation alone smoothly lights its pool/gate/drain/signal/bay
++// sectors, each a distinct value under load). Distinct light => a distinct
++// visplane that can no longer merge with its neighbour, so a dense down-the-hall
++// view of an instrument bay blew past 128 and R_FindPlane's I_Error("no more
++// visplanes") aborted the engine (screen goes black). 1024 gives generous
++// headroom; the scan in R_FindPlane is O(planes-in-use), not O(MAX), so a bigger
++// ceiling costs only memory (~byte top[]/bottom[] arrays). Cf. MAXVISSPRITES.
++#define MAXVISPLANES	1024
+ visplane_t		visplanes[MAXVISPLANES];
+ visplane_t*		lastvisplane;
+ visplane_t*		floorplane;
+ visplane_t*		ceilingplane;
+ 
+ // ?
+-#define MAXOPENINGS	SCREENWIDTH*64
++// Doom Perf: raised 4x from the vanilla SCREENWIDTH*64. The same dense
++// instrument-bay views that stress the visplane table also store many more
++// masked-seg / sprite clip spans here; the vanilla overflow check lives only
++// under RANGECHECK (compiled out of release), so an overflow would silently
++// corrupt the heap rather than error cleanly. Give it matching headroom.
++#define MAXOPENINGS	SCREENWIDTH*256
+ short			openings[MAXOPENINGS];
+ short*			lastopening;
+ 
+@@ -420,6 +448,21 @@
  	}
  	
  	// regular flat
@@ -39,13 +75,17 @@
 +		doomperf_cpu_floor_display = 2;
 +	    else if (pl->lightlevel == DOOMPERF_DISK_PLATTER_DISPLAY_LIGHT)
 +		doomperf_cpu_floor_display = 4;
++	    else if (pl->lightlevel == DOOMPERF_NET_QDISC_DISPLAY_LIGHT)
++		doomperf_cpu_floor_display = 5;
++	    else if (pl->lightlevel == DOOMPERF_NET_FLOW_DISPLAY_LIGHT)
++		doomperf_cpu_floor_display = 6;
 +	    else
 +		doomperf_cpu_floor_display = 0;
 +	}
  	ds_source = W_CacheLumpNum(firstflat +
  				   flattranslation[pl->picnum],
  				   PU_STATIC);
-@@ -449,5 +468,6 @@ void R_DrawPlanes (void)
+@@ -449,5 +492,6 @@
  	}
  	
  	Z_ChangeTag (ds_source, PU_CACHE);

@@ -11,7 +11,7 @@
 
 --- a/p_mobj.c
 +++ b/p_mobj.c
-@@ -764,14 +764,32 @@ void P_SpawnMapThing (mapthing_t* mthing)
+@@ -764,14 +764,36 @@
      if (deathmatch && mobjinfo[i].flags & MF_NOTDMATCH)
  	return;
  		
@@ -43,7 +43,11 @@
 +	&& mthing->type != 48	// Doom Perf CPU load-pressure sign
 +	&& mthing->type != 2028	// tech pillar
 +	&& mthing->type != 2035	// Doom Perf memory-wing RSS-reliquary barrel
-+	&& mthing->type != 3003)	// Doom Perf memory-wing OOM-killer Baron
++	&& mthing->type != 3003	// Doom Perf memory-wing OOM-killer Baron
++	&& mthing->type != 3011	// Doom Perf network-wing socket capacitor tower
++	&& mthing->type != 3012	// Doom Perf network-wing NIC RX ring turbine wheel
++	&& mthing->type != 3013	// Doom Perf network-wing NIC TX ring dynamo drum
++	&& mthing->type != 3014)	// Doom Perf network-wing send-q battery bank
 +	return;
 +
      // spawn it

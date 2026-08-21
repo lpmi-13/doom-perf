@@ -13,7 +13,7 @@
 
 --- a/info.h
 +++ b/info.h
-@@ -1140,6 +1140,169 @@
+@@ -1140,6 +1140,189 @@
      S_TECH2LAMP2,
      S_TECH2LAMP3,
      S_TECH2LAMP4,
@@ -180,10 +180,30 @@
 +    S_DP_NETARC1,
 +    S_DP_NETARC2,
 +    S_DP_NETARC_BIG,
++    // Socket-lock capacitor bank: the TRAVELLING BUS-CURRENT bead (SPR_BFE1 D/E round mote,
++    // fullbright, long-lived) that glides along the wire between the two capacitor towers, and
++    // the static capacitor-TOWER prop (SPR_COLU A, sector-lit) that stands in each socket bay.
++    S_DP_NETCUR1,
++    S_DP_NETCUR2,
++    S_DP_NETCAPTWR,
++    // Ring-buffer (level 2) + send-q (level 0) machines. Three static, sector-lit billboard
++    // props (turbine wheel over ELEC A, dynamo drum over SMT2 A, battery bank over COL1 A) plus
++    // the live motes the engine hand-positions around/over them (turbine=SMIT A, dynamo=SMT2 A,
++    // battery=COL1 A -- unused IWAD frames; ELEC/COLU are placed things, so avoided):
++    // S_DP_NETSPIN is the electric-
++    // blue orbiting/charge mote (BFE1 D, fullbright, tics -1) for the RX turbine ring and the
++    // send-q battery column; S_DP_NETSPIN_V its violet twin (PMAP B) for the TX dynamo ring;
++    // S_DP_NETVENT a brief rising boil-off mote fired off a full battery at overcharge.
++    S_DP_NETTURB,
++    S_DP_NETDYN,
++    S_DP_NETBATT,
++    S_DP_NETSPIN,
++    S_DP_NETSPIN_V,
++    S_DP_NETVENT,
      NUMSTATES
  } statenum_t;
  
-@@ -1298,6 +1461,20 @@
+@@ -1298,6 +1481,26 @@
      MT_MISC84,
      MT_MISC85,
      MT_MISC86,
@@ -201,6 +221,12 @@
 +    MT_DP_DISKPLATE,
 +    MT_DP_DISKRAIN,
 +    MT_DP_NETARC,
++    MT_DP_NETCAP,
++    MT_DP_NETCAPTWR,
++    MT_DP_NETTURB,	// NIC RX ring turbine wheel (solid prop, doomednum 3012)
++    MT_DP_NETDYN,	// NIC TX ring dynamo drum (solid prop, doomednum 3013)
++    MT_DP_NETBATT,	// send-q battery bank (solid prop, doomednum 3014)
++    MT_DP_NETSPIN,	// orbiting spin / charge / vent mote (runtime-spawned, no collision)
      NUMMOBJTYPES
  
  } mobjtype_t;

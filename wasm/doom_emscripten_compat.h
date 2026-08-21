@@ -198,6 +198,17 @@ extern int doomperf_net_backlogged;
 extern int doomperf_net_synrecv;
 extern int doomperf_net_ring_known[2];
 
+// Kernel-TX QDISC floor instrument (NETWORK_QDISC_DISC_PLAN.md). fill/known are pushed from
+// the browser (DoomPerf_SetNetQdiscFill/Known in i_video_ems.c); flow/sat are published by
+// p_tick.c each tick (from DoomPerf_EffectiveNetworkTx and max(lock_drops[1][1], fill)) and
+// read by the r_draw floor shaders (R_DoomPerfNetQdiscPixel / R_DoomPerfNetFlowPixel). All
+// four are defined in i_video_ems.c; this force-included header is why p_tick.c and r_draw.c
+// can reference them with no extern of their own. [[doomperf-engine-global-externs]]
+extern int doomperf_net_qdisc_fill;
+extern int doomperf_net_qdisc_known;
+extern int doomperf_net_qdisc_flow;
+extern int doomperf_net_qdisc_sat;
+
 // Doom Perf data-source mode, chosen on the level-select menu (mode_e in m_menu.c):
 //   0 = live browser telemetry; 1/2 = high CPU utilization/saturation (CPU room);
 //   3/4/5 = high disk utilization / saturation-shallow-queue / saturation-deep-queue

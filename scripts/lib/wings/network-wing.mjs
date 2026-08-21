@@ -147,6 +147,17 @@ const coilWallLabels = [
   { texture: tex("WLKD"), patch: tex("PWKD"), l1: "BACKLOG", l2: "DROP" },    // right / backlog
 ];
 
+// Kernel-TX QDISC BAY placard (NETWORK_QDISC_DISC_PLAN.md): a two-line wall sign naming
+// the sunken occupancy disc. The engine (DoomPerf_UpdateNetQdiscCap) swaps the whole
+// midtexture DPNQDG <-> DPNQDX by texture identity, keyed on whether tc's qdisc backlog
+// is readable: DEPTH = the live gauge; UNKNOWN = the netlink/tc probe returned nothing
+// (?qdisc=off or a restricted container), the same honest-fallback affordance the swap-cap
+// pipe uses. The disc is the gauge, the KTXT terminal the readout. [[wall-label-centering-width]]
+const qdiscPlacards = {
+  depth: { texture: tex("QDG"), patch: tex("PQDG"), l1: "QDISC", l2: "DEPTH" },
+  unknown: { texture: tex("QDX"), patch: tex("PQDX"), l1: "QDISC", l2: "UNKNOWN" },
+};
+
 // Tesla-coil lightning bolt (SPR_BLUD A/B, MT_DP_NETARC): a jagged white-core / electric-
 // blue arc that the engine crackles around the electrode tips. Two frames wobble so a bolt
 // flickers over its brief life; the arc DENSITY (spawn rate) carries the load, not the art.
@@ -210,6 +221,150 @@ const buildNetLightningBig = () => {
   });
   return buildPatch(px, W, H, { transparent: T, leftOffset: 15, topOffset: H - 2 });
 };
+
+// ===== Socket-lock CAPACITOR BANKS, take 3: authored SUBSTATION CAPACITOR TOWERS. Rather
+// than reuse the coils' glowing-rod vocabulary, each level-0 socket bay now stands TWO
+// hand-drawn capacitor towers -- a steel rack of stacked white capacitor units on dark-brown
+// ribbed porcelain insulator posts (the classic HV shunt-capacitor bank) -- as solid billboard
+// PROPS (MT_DP_NETCAPTWR, doomednum 3011, sprite SPR_COL2 frame A -- an unused single-frame IWAD
+// decoration. (SPR_COLU is the FLOOR-LAMP thing 2028, which the hub + memory wing DO place, so
+// reusing it repainted those lamps into towers; SPR_COL2's thing 31 is never placed.)
+// The live signal reads as the TRAVELLING BUS CURRENT the player picked: a bright bead
+// (SPR_BFE1 D/E round mote) runs along the wire between the two tower tops, spawned faster as
+// the lane's queue fills, plus an ambient charge glow on the bay floor. No jagged bolts -- the
+// current running BETWEEN towers is the socket bank's signature, distinct from the coils'
+// outward crackle. [[pwad-sprite-override-constraint]] [[prefer-everpresent-over-flicker]]
+const capMoteRamp = [4, 4, 192, 194, 196]; // white core -> electric blue (115,115,255)
+const capMoteFlash = [4, 4, 4, 192, 196];  // whiter, for the flicker frame
+// The capacitor TOWER billboard (overrides IWAD COL2A0): a steel rack of five tiers of white
+// capacitor cans, top insulator bushings, standing on three ribbed brown porcelain posts over
+// a dark base pad. Floor-standing offset (feet at origin: leftOffset W/2, topOffset H).
+const TOWER_W = 64, TOWER_H = 152;
+const buildCapTowerSprite = () => {
+  const W = TOWER_W, H = TOWER_H, T = 247;
+  const px = new Uint8Array(W * H).fill(T);
+  const put = (x, y, c) => { if (x >= 0 && x < W && y >= 0 && y < H) px[y * W + x] = c; };
+  const rect = (x0, y0, x1, y1, c) => { for (let y = y0; y < y1; y += 1) for (let x = x0; x < x1; x += 1) put(x, y, c); };
+  const WHITE = 80, WH2 = 83, WSHAD = 89, STEEL = 99, DKG = 105, BLACK = 5; // steel + white cans
+  const BRN = 68, BRN2 = 72, DBRN = 15, BRNHI = 63;                          // porcelain browns
+  // Base pad.
+  rect(6, 142, 58, 149, DKG);
+  rect(3, 148, 61, 152, BLACK);
+  // Three ribbed brown porcelain insulator posts (the skirted legs).
+  for (const cx of [14, 32, 50]) {
+    for (let y = 102; y < 143; y += 1) {
+      const rib = (y % 4 === 0);
+      const half = rib ? 6 : 5;
+      for (let x = cx - half; x <= cx + half; x += 1) {
+        let c = rib ? BRNHI : ((y % 4 === 2) ? DBRN : BRN);
+        if (x < cx - 3) c = DBRN; else if (x > cx + 3) c = (rib ? BRN : BRN2); // round shading
+        put(x, y, c);
+      }
+    }
+    rect(cx - 6, 100, cx + 7, 103, STEEL); // cap where the post meets the rack base
+  }
+  // Steel rack: outer vertical rails + five tiers of paired white cans.
+  rect(6, 12, 12, 102, STEEL); rect(52, 12, 58, 102, STEEL);
+  rect(6, 12, 8, 102, DKG); rect(56, 12, 58, 102, DKG); // dark rail edges
+  const tierTop = 14, tierH = 17;
+  for (let t = 0; t < 5; t += 1) {
+    const y0 = tierTop + t * tierH;
+    rect(8, y0 - 2, 56, y0, STEEL); // shelf rail above the tier
+    for (const [bx0, bx1] of [[14, 30], [34, 50]]) {
+      rect(bx0, y0, bx1, y0 + tierH - 3, WHITE);
+      rect(bx0, y0, bx1, y0 + 2, WH2);                 // top highlight
+      rect(bx0, y0 + tierH - 6, bx1, y0 + tierH - 3, WSHAD); // bottom shade
+      for (let x = bx0; x < bx1; x += 1) { put(x, y0, DKG); put(x, y0 + tierH - 4, DKG); }
+      for (let y = y0; y < y0 + tierH - 3; y += 1) { put(bx0, y, DKG); put(bx1 - 1, y, DKG); }
+    }
+  }
+  // Top bushings: small insulator stacks + grey terminal caps across the rack top.
+  rect(8, 12, 56, 14, STEEL);
+  for (const bx of [16, 26, 38, 48]) {
+    rect(bx - 1, 4, bx + 2, 12, BRN);
+    rect(bx - 2, 7, bx + 3, 8, DBRN); // a rib
+    put(bx, 2, STEEL); put(bx + 1, 2, STEEL);
+  }
+  return buildPatch(px, W, H, { transparent: T, leftOffset: Math.floor(W / 2), topOffset: H });
+};
+
+// ===== RING-BUFFER (level 2) + send-q (level 0) INSTRUMENT PROPS ("more alive network
+// instruments", Phase 3). Three authored substation machines, each a solid billboard prop
+// (MF_SOLID, tics -1) drawn feet-at-origin (leftOffset W/2, topOffset H). The wire feeds them
+// off signals the engine ALREADY has: the TURBINE/DYNAMO wheels SPIN (orbiting mote-rings in
+// p_tick.c) at the live RX/TX throughput and shed sparks on ring drops; the BATTERY banks FILL
+// (a rising charge-mote column) with the send-q depth and VENT at overcharge -- never sparking,
+// because a full send-q backpressures, it does not drop. Sprite names reuse free IWAD single-
+// frame decorations (ELEC/SMT2/COL1, frame A) per [[pwad-sprite-override-constraint]]; the lab
+// map never places their stock doomednums so only these props are affected.
+
+// TURBINE WHEEL (overrides SMITA0 -- an unused single-frame IWAD decoration; do NOT use ELEC,
+// whose thing 48 the hub places to flank the network entrance): an axial-flow turbine rotor -- a pale steel shroud ring
+// around a wheel of dark swept blades on a bright steel hub, bolted to a dark machine pedestal.
+// The RX ring's signature; the engine orbits bright motes around the hub so it reads as spin.
+const buildTurbineSprite = () => {
+  const W = 100, H = 144, T = 247;
+  const px = new Uint8Array(W * H).fill(T);
+  const put = (x, y, c) => { if (x >= 0 && x < W && y >= 0 && y < H) px[y * W + x] = c; };
+  const rect = (x0, y0, x1, y1, c) => { for (let y = y0; y < y1; y += 1) for (let x = x0; x < x1; x += 1) put(x, y, c); };
+  const SHROUD = 84, SHROUD_HI = 80, SHROUD_SH = 90;   // pale steel shroud ring
+  const BLADE = 8, BLADE2 = 6, BLADE_HI = 100;         // dark swept blades (3-tone for depth)
+  const HUB = 96, HUB_HI = 4, BOLT = 6;                // bright steel hub
+  const BASE = 105, BASE_DK = 5, BASE_HI = 99;         // machine pedestal
+  const cx = 50, cy = 54, R = 46, HUBR = 11;
+  for (let y = 0; y < 108; y += 1) {
+    for (let x = 0; x < W; x += 1) {
+      const dx = x - cx, dy = y - cy, r = Math.hypot(dx, dy);
+      if (r > R + 0.5) continue;
+      if (r > R - 6) { put(x, y, dy < -r * 0.4 ? SHROUD_HI : (dy > r * 0.5 ? SHROUD_SH : SHROUD)); continue; }
+      if (r <= HUBR) { put(x, y, r < 4 ? HUB_HI : HUB); continue; }
+      // Swept blades: 11 blades whose leading edge curves with radius (the sweep term).
+      const a = Math.atan2(dy, dx) + r * 0.06;
+      const frac = ((a / (Math.PI * 2)) * 11) % 1;
+      put(x, y, frac < 0.30 ? BLADE_HI : (frac < 0.70 ? BLADE : BLADE2));
+    }
+  }
+  for (const [bx, by] of [[cx, cy - 6], [cx + 6, cy + 3], [cx - 6, cy + 3]]) put(bx, by, BOLT);
+  rect(28, 98, 72, 112, BASE); rect(30, 98, 70, 100, BASE_HI);
+  rect(20, 112, 80, 144, BASE); rect(20, 112, 80, 114, BASE_HI); rect(20, 140, 80, 144, BASE_DK);
+  for (let x = 26; x < 80; x += 12) rect(x, 118, x + 2, 138, BASE_DK); // cooling ribs
+  return buildPatch(px, W, H, { transparent: T, leftOffset: Math.floor(W / 2), topOffset: H });
+};
+
+// DYNAMO (overrides SMT2A0): a Victorian ring-dynamo after the Siemens engraving -- a big banded
+// field-magnet DRUM with a dark wound bore and a violet commutator/brush stub, a smaller EXCITER
+// box at its side, bolted to a riveted base with two cables snaking off. The TX ring's signature;
+// the engine orbits violet output motes and cracks a brush-arc at the commutator on TX drops.
+const buildDynamoSprite = () => {
+  const W = 116, H = 128, T = 247;
+  const px = new Uint8Array(W * H).fill(T);
+  const put = (x, y, c) => { if (x >= 0 && x < W && y >= 0 && y < H) px[y * W + x] = c; };
+  const rect = (x0, y0, x1, y1, c) => { for (let y = y0; y < y1; y += 1) for (let x = x0; x < x1; x += 1) put(x, y, c); };
+  const DRUM = 96, DRUM_HI = 84, BAND = 80;            // grey field drum + pale pole-shoe band
+  const CORE = 6, WIND = 15, WIND2 = 68;               // dark wound bore + copper winding bars
+  const STEEL = 99, DK = 5, BOLT = 8;
+  const VIO = 251, VIO_HI = 4;                         // commutator violet glow
+  const cx = 72, cy = 52, R = 50;
+  for (let y = 0; y < 106; y += 1) {
+    for (let x = 0; x < W; x += 1) {
+      const dx = x - cx, dy = y - cy, r = Math.hypot(dx, dy);
+      if (r > R + 0.5) continue;
+      if (r > R - 10) { put(x, y, dx < 0 ? DRUM_HI : DRUM); continue; }   // outer yoke ring
+      if (r > R - 16) { put(x, y, BAND); continue; }                     // pale pole band
+      put(x, y, (y % 4 === 0) ? WIND2 : (r > R - 28 ? WIND : CORE));      // wound bore
+    }
+  }
+  rect(cx + R - 12, cy - 8, cx + R + 6, cy + 8, STEEL);  // commutator housing
+  rect(cx + R - 4, cy - 4, cx + R + 2, cy + 4, VIO); put(cx + R - 1, cy, VIO_HI);
+  rect(4, 58, 40, 102, STEEL); rect(4, 58, 40, 60, DRUM_HI);            // exciter box
+  rect(10, 66, 34, 94, CORE);
+  for (let y = 68; y < 94; y += 4) rect(10, y, 34, y + 1, WIND2);
+  rect(0, 102, W, 128, DK); rect(0, 102, W, 104, STEEL);               // bolted base plate
+  for (let x = 6; x < W; x += 12) put(x, 114, BOLT);
+  for (let x = cx; x < W; x += 1) { const yy = 116 + Math.round(4 * Math.sin((x - cx) * 0.3)); put(x, yy, CORE); put(x, yy + 3, CORE); }
+  return buildPatch(px, W, H, { transparent: T, leftOffset: Math.floor(W / 2), topOffset: H });
+};
+
 
 // ===== Trackside SIGNAL HEAD (railway block signal) beside each bus lane. A dark
 // riveted backboard carries two round lamps -- red (STOP, upper) over green (GO, lower)
@@ -395,6 +550,34 @@ const SIG_LEN = 64; //   post face width (v-extent); a 64-wide texture maps 1:1
 const SIG_DEPTH = 16; // post depth (u): carved off the bus's outermost 16 units, at the rail
 const SIG_H = 96; //     signal-head height above the catwalk (<=128 -> no vertical tiling)
 
+// ===== Socket-lock CAPACITOR BANKS (level 0): one bay off each level-0 catwalk (RX/RECV-Q
+// left, TX/SEND-Q right), carved into the outer wall like the coil bay, standing TWO authored
+// substation CAPACITOR TOWERS (MT_DP_NETCAPTWR props) that flank a clear central walkway to
+// the socket terminal on the bay's deep wall. The two towers sit at local (u=+/-412, v=1002)
+// and (u=+/-412, v=1302), so at vc=1152 the walk between them stays open. The live effect is
+// the TRAVELLING BUS CURRENT (p_tick.c, RING_PITCH discipline): a bead runs along the wire
+// between the two tower tops -- world (-v, u) puts the towers at world x=-1002/-1302, world y
+// +/-384 (face-front, so the bead reads in front of them), at TOWER top z. Bay floor glows
+// with fill (CAP_BAY_TAG). No gauge, no up-the-can crackle.
+const CAP_COL_C = 412; //   |u| of the two towers (mid-bay, matches the coil bay depth)
+const CAP_SPREAD = 150; //  |v - vc| of the two towers (they flank the walkway to the terminal)
+const TOWER_EDNUM = 3011; // MT_DP_NETCAPTWR doomednum (solid billboard prop; see info.c)
+const CAP_BAY_TAG = ids.sectorTags[0] + 52; // 752 recv bay / 753 send bay (floor charge glow)
+// The ring-buffer (level 2) bays use the two-flanking-props pattern with authored billboard
+// machines (doomednums hardcoded like the capacitor tower's 3011, mirrored in info.c mobjinfo +
+// p_mobj.c allowlist); their floor glow tracks live throughput. The send-q bay instead uses 3D
+// GEOMETRY: two solid CELL-COLUMN pillars whose walkway faces carry a segmented charge gauge
+// (R_DoomPerfNetBatteryPixel, dispatched off lineTags 762/763 in r_segs.c) filling bottom-up
+// with the send-q depth -- no billboard, no floating motes.
+const TURB_EDNUM = 3012;  // MT_DP_NETTURB -- NIC RX ring turbine wheel
+const DYN_EDNUM = 3013;   // MT_DP_NETDYN  -- NIC TX ring dynamo drum
+const RING_BAY_TAG = ids.sectorTags[0] + 54; // 754 turbine (RX) bay / 755 dynamo (TX) bay glow
+const BATT_LINE_TAG = ids.lineTags[0] + 2;   // 762 red (+) cell column / 763 blue (-) cell column
+const BATT_HW = 32;       // battery cell-column half-width (64x64 footprint, all faces 64 wide)
+const BATT_H = 40;        // battery height: a low block (cap band + 2 cell rows) with its TOP at
+//                           eye level and OPEN AIR above it. MUST match H in
+//                           R_DoomPerfNetBatteryPixel (the riser the gauge shader fills).
+
 // Substation material kit (all verified exclusive to this wing -- no element shared with
 // the cpu/memory/storage wings; see NETWORK_POWERPLANT_PLAN.md). Every riser is named
 // off the builder's STEP1 default so the catwalks never read as the disk wing's tan
@@ -425,8 +608,45 @@ export const networkFeeder = {
   fall: [C0, C1],
 };
 
+// ===== Kernel-TX QDISC floor instrument (NETWORK_QDISC_DISC_PLAN.md). Replaces the
+// level-1 TX flush console with a SUNKEN, RAILED disc-pit off the TX catwalk: a
+// world-locked OCCUPANCY DISC (violet pie wedge = real qdisc backlog) between two glowing
+// FLOW LINES (enqueue-in upstream, dequeue-out downstream) that run PARALLEL to the TX bus
+// (along v) so their pulses travel +v like the TX packet-orbs. The pit is `blockEdge` (look
+// down over the rail, can't fall in); a walkable F1 frame surrounds it on ALL FOUR SIDES (a
+// near walkway inset from the catwalk, a deep walkway at the terminal, plus the front/back
+// margins) so the player can circle the display. The disc + line WORLD centres below are
+// mirrored in r_draw.c's NET_QDISC_* / NET_FLOW_* #defines and MUST stay in sync (RING_PITCH
+// discipline) or the shader reads as drifting with the camera ([[platter-animation-radial]]).
+const QD_VC = (C0 + TRANS + C1) / 2;   // 1792: level-1 bay v-centre (== coilTermVC)
+const QD_DEEP = 600;                   // bay deep wall (terminal): DEEPER than other bays' ALCHW
+//                                        so a wide walkway rings the pit (catwalk opening stays 320)
+const QD_PIT_U1 = 384;                 // pit near edge -> a 64-wide NEAR walkway u[320,384]
+const QD_PIT_U2 = 528;                 // pit far edge  -> a 72-wide DEEP walkway u[528,600]
+const QD_DISC_CU = (QD_PIT_U1 + QD_PIT_U2) / 2; // 456: disc u-centre (world y)
+const QD_DISC_R = 72;                  // disc radius: fills the 144-wide pit u-span, reads foreshortened
+const QD_FLOW_LEN = 96;                // v-length of each flow-line strip up/down-stream of the disc
+const QD_PIT_DROP = 28;                // pit floor sunk below F1 -> look DOWN into it from the walkway rail
+const QD_DISC_TAG = ids.sectorTags[0] + 56;    // 756: occupancy disc floor
+const QD_INFLOW_TAG = ids.sectorTags[0] + 57;  // 757: inflow (enqueue) line
+const QD_OUTFLOW_TAG = ids.sectorTags[0] + 58; // 758: outflow (dequeue) line
+// Floor-display sentinels from the NETWORK block [124,128] (NOT storage's 131/132): 126 =
+// the occupancy disc (r_plane -> display 5), 127 = both flow lines (display 6). The disc +
+// flow sub-features are the only network floors on these exact values (verified no static
+// sector authors 126/127); a gate/drain light-ramp that transiently lands on one only
+// mis-shades OFF-disc pixels, which the shader returns as background -> no visible artifact.
+const QD_DISC_LIGHT = ids.lights[0] + 2;   // 126
+const QD_FLOW_LIGHT = ids.lights[0] + 3;   // 127
+// The disc CENTRE + flow-line axis in WORLD coords (west wing: local (u,v) -> world (-v,u)).
+// Mirrored in r_draw.c: NET_QDISC_CX/CY/OUTER, NET_FLOW_CY.
+export const netQdiscWorld = {
+  cx: -QD_VC,        // -1792 (world x = -v at the disc centre)
+  cy: QD_DISC_CU,    //   456 (world y = u at the disc centre / flow-line axis)
+  outer: QD_DISC_R,  //    72
+};
+
 const build = (ctx) => {
-  const { areaRect, direction, base, accent, terminalPanelFloor } = ctx;
+  const { areaRect, addAreaThing, direction, base, accent, terminalPanelFloor } = ctx;
 
   addWingEntrance(ctx);
 
@@ -633,30 +853,192 @@ const build = (ctx) => {
   levels.forEach(catwalks);
   stairs.forEach(gantryStair);
 
-  // ===== Stage TERMINALS: a walk-up console in a shallow 256-wide niche in each stage's
-  // outer wall (RX on the left u<0, TX on the right u>0), the command-forward SCREEN over
-  // a control-panel riser. The old placard wording now reads on the catwalk floor in
-  // front of each (catwalkSide). kernel-RX is the coil-bay softnet console, so only the
-  // five `stations` are laid here. [[terminal-design-principles]] [[doom-wall-texture-128-tiling]]
-  const SIGN_W = wallSignSize.width; // 256 (still used by the coil-bay side labels)
-  const stageTerminal = (lvl, side, sc) => {
+  // ===== Stage TERMINALS: every stage station is now a walk-in INSTRUMENT BAY reading from
+  // its bay's deep wall (level 0 socket capacitor/battery banks, level 1 kernel-TX qdisc pit,
+  // level 2 ring turbine/dynamo bays); kernel-RX is the coil-bay softnet console. The old
+  // per-stage placard wording reads on the catwalk floor in front of each (catwalkSide).
+  // SIGN_W is the coil-bay + qdisc-placard wall-sign width. [[terminal-design-principles]]
+  const SIGN_W = wallSignSize.width; // 256
+  // ===== Socket-lock CAPACITOR BANKS: the two level-0 socket stations are instrument bays
+  // holding two authored SUBSTATION CAPACITOR TOWERS (solid billboard props) that flank a clear
+  // central walkway to the socket terminal on the bay's deep wall. The bay is one open floor
+  // (tagged for an ambient charge glow); the towers are things, so no pillar tiling.
+  // [[terminal-design-principles]]
+  const socketCapBay = (side, lane, sc) => {
+    const lvl = levels[0];
     const vc = Math.round((lvl.sv1 + lvl.cv2) / 2);
-    const uNiche = side === "left"
-      ? { u1: -EDGEHW - ALC_RECESS, u2: -EDGEHW }
-      : { u1: EDGEHW, u2: EDGEHW + ALC_RECESS };
-    areaRect(direction, `net${lvl.level}-term-${side}`, { ...uNiche, v1: vc - terminalTextureSize.width / 2, v2: vc + terminalTextureSize.width / 2 }, {
-      ...conduit,
-      kind: "terminal",
-      floor: lvl.walk + terminalPanelFloor,
-      ceiling: lvl.walk + terminalPanelFloor + terminalTextureSize.height,
+    const sgn = side === "left" ? -1 : 1;
+    const inner = sgn * EDGEHW; //  catwalk-side opening (old outer wall)
+    const outer = sgn * ALCHW; //   deep wall
+    // Open bay floor (front approach + deep, one sector), tagged for the fill charge glow.
+    areaRect(direction, `cap-${side}-floor`, uv(outer, inner, lvl.sv1, lvl.cv2), {
+      ...intake, kind: "net-alcove", floor: F0, ceiling: HALL_CEIL, light: 150, tag: CAP_BAY_TAG + lane,
+    });
+    // Two CAPACITOR towers at (u=+/-412, v = vc +/- CAP_SPREAD), flanking the walkway (recv only;
+    // the send-q bay is now the 3D battery cell-columns in batteryBay).
+    addAreaThing(direction, TOWER_EDNUM, sgn * CAP_COL_C, vc - CAP_SPREAD);
+    addAreaThing(direction, TOWER_EDNUM, sgn * CAP_COL_C, vc + CAP_SPREAD);
+    // The socket terminal on the deep wall, centred behind the two towers (== coil-terminal).
+    areaRect(direction, `cap-${side}-term`, uv(sgn * (ALCHW + ALC_RECESS), outer, vc - terminalTextureSize.width / 2, vc + terminalTextureSize.width / 2), {
+      ...conduit, kind: "terminal",
+      floor: F0 + terminalPanelFloor,
+      ceiling: F0 + terminalPanelFloor + terminalTextureSize.height,
       light: 184,
       labelSide: side === "left" ? leftWall : rightWall,
       labelTexture: sc.texture,
       controlPanel: true,
-      riserWall: BUS_HOUSING, // metal base under the panel; keep STEP1 off this recess
+      riserWall: BUS_HOUSING,
     });
   };
-  stations.forEach((st) => stageTerminal(levels[st.level], st.side, st.screen));
+  // ===== RING-BUFFER (level 2) INSTRUMENT BAYS: the two NIC-ring stations become instrument
+  // bays (like the socket capacitor banks), each standing TWO authored machines flanking a clear
+  // walkway to the ring terminal on the deep wall -- TURBINE WHEELS on the RX (left) ring, DYNAMO
+  // drums on the TX (right) ring. One open floor tagged for the throughput glow; the machines are
+  // things (no pillar tiling). The engine spins them (orbiting motes) at the live RX/TX rate.
+  const ringInstrumentBay = (side, lane, propEdnum, sc) => {
+    const lvl = levels[2];
+    const vc = Math.round((lvl.sv1 + lvl.cv2) / 2);
+    const sgn = side === "left" ? -1 : 1;
+    const inner = sgn * EDGEHW; //  catwalk-side opening
+    const outer = sgn * ALCHW; //   deep wall
+    areaRect(direction, `ring-${side}-floor`, uv(outer, inner, lvl.sv1, lvl.cv2), {
+      ...intake, kind: "net-alcove", floor: F2, ceiling: HALL_CEIL, light: 150, tag: RING_BAY_TAG + lane,
+    });
+    addAreaThing(direction, propEdnum, sgn * CAP_COL_C, vc - CAP_SPREAD);
+    addAreaThing(direction, propEdnum, sgn * CAP_COL_C, vc + CAP_SPREAD);
+    areaRect(direction, `ring-${side}-term`, uv(sgn * (ALCHW + ALC_RECESS), outer, vc - terminalTextureSize.width / 2, vc + terminalTextureSize.width / 2), {
+      ...conduit, kind: "terminal",
+      floor: F2 + terminalPanelFloor,
+      ceiling: F2 + terminalPanelFloor + terminalTextureSize.height,
+      light: 184,
+      labelSide: side === "left" ? leftWall : rightWall,
+      labelTexture: sc.texture,
+      controlPanel: true,
+      riserWall: BUS_HOUSING,
+    });
+  };
+  // ===== SEND-Q BATTERY BANK (level 0, right): two 3D BATTERY CELL-COLUMNS -- solid full-height
+  // pillars whose faces carry the segmented charge gauge (R_DoomPerfNetBatteryPixel via lineTags
+  // 762/763, filling bottom-up with the send-q depth). The near column is the red (+) terminal,
+  // the far the blue (-). The bay floor is TILED around the two pillars (the builder forbids
+  // overlapping sectors): full-depth front + deep bands flank the middle u-band, itself split in v
+  // into three floor gaps + the two pillar footprints.
+  const batteryBay = (side, sc) => {
+    const lvl = levels[0];
+    const vc = Math.round((lvl.sv1 + lvl.cv2) / 2);
+    const sgn = side === "left" ? -1 : 1;
+    const uEdge = sgn * EDGEHW, uDeep = sgn * ALCHW;            // catwalk opening / deep wall
+    const uColLo = sgn * (CAP_COL_C - BATT_HW), uColHi = sgn * (CAP_COL_C + BATT_HW); // pillar u-band
+    const floorOpt = { ...intake, kind: "net-alcove", floor: F0, ceiling: HALL_CEIL, light: 150, tag: CAP_BAY_TAG + 1 };
+    const vcols = [vc - CAP_SPREAD, vc + CAP_SPREAD];
+    // Front (catwalk-side) + deep floor bands run the full stage depth.
+    areaRect(direction, `batt-${side}-front`, uv(uEdge, uColLo, lvl.sv1, lvl.cv2), floorOpt);
+    areaRect(direction, `batt-${side}-deep`, uv(uColHi, uDeep, lvl.sv1, lvl.cv2), floorOpt);
+    // Middle u-band tiled in v: floor gap, pillar, floor gap, pillar, floor gap.
+    [[lvl.sv1, vcols[0] - BATT_HW], [vcols[0] + BATT_HW, vcols[1] - BATT_HW], [vcols[1] + BATT_HW, lvl.cv2]]
+      .forEach(([v1, v2], k) => areaRect(direction, `batt-${side}-gap${k}`, uv(uColLo, uColHi, v1, v2), floorOpt));
+    // Each ~1/3-height cell-column BLOCK (floor=BATT_H raised, ceiling=HALL_CEIL, OPEN AIR above so
+    // the player sees the top) wears the segmented charge gauge on its perimeter face (762 = red +,
+    // 763 = blue -; BATT_H must match H in R_DoomPerfNetBatteryPixel), and carries TWO short grey
+    // TERMINAL CONTACTS on top -- raised nubs (floor BATT_H+CT_H). The block top is TILED so the
+    // gauge lineTag stays on the four OUTER FRAME strips only; the two contacts sit in the UNtagged
+    // interior, never touching a tagged edge -- else lineTagFor would hand the tag to a contact
+    // riser and the shader would paint the gauge onto it instead of leaving it grey.
+    // (4 corner contacts were declined: they'd sit against the tagged perimeter and bleed.)
+    const uMin = Math.min(uColLo, uColHi), uMax = Math.max(uColLo, uColHi), uc = (uMin + uMax) / 2;
+    const FR = 4, CT_HW = 7, CT_H = 8, GAPHW = 4; // frame width; contact half-width; height; half-gap
+    const gaugeOpt = (tag) => ({ ...conduit, kind: "net-battery", wall: BUS_HOUSING, floor: BATT_H, ceiling: HALL_CEIL, floorFlat: groundFlatName, ceilingFlat: ceilingFlatName, light: 176, lineTag: tag });
+    const topOpt = { ...conduit, kind: "net-battery", wall: BUS_HOUSING, floor: BATT_H, ceiling: HALL_CEIL, floorFlat: groundFlatName, ceilingFlat: ceilingFlatName, light: 176 };
+    const nubOpt = { ...conduit, kind: "net-instrument", wall: BUS_HOUSING, floor: BATT_H + CT_H, ceiling: HALL_CEIL, floorFlat: groundFlatName, ceilingFlat: ceilingFlatName, light: 210 };
+    vcols.forEach((vcb, k) => {
+      const id = `batt-col-${side}-${k}`, tag = BATT_LINE_TAG + k, vLo = vcb - BATT_HW, vHi = vcb + BATT_HW;
+      // Four gauge FRAME strips (the perimeter faces the charge gauge renders on).
+      areaRect(direction, `${id}-fr-s`, uv(uMin, uMax, vLo, vLo + FR), gaugeOpt(tag));
+      areaRect(direction, `${id}-fr-n`, uv(uMin, uMax, vHi - FR, vHi), gaugeOpt(tag));
+      areaRect(direction, `${id}-fr-w`, uv(uMin, uMin + FR, vLo + FR, vHi - FR), gaugeOpt(tag));
+      areaRect(direction, `${id}-fr-e`, uv(uMax - FR, uMax, vLo + FR, vHi - FR), gaugeOpt(tag));
+      // Untagged interior floor flanking the central contact column (u).
+      areaRect(direction, `${id}-in-w`, uv(uMin + FR, uc - CT_HW, vLo + FR, vHi - FR), topOpt);
+      areaRect(direction, `${id}-in-e`, uv(uc + CT_HW, uMax - FR, vLo + FR, vHi - FR), topOpt);
+      // Central column (v): floor, contact 0, gap, contact 1, floor -- all untagged interior + 2 nubs.
+      areaRect(direction, `${id}-c-s`, uv(uc - CT_HW, uc + CT_HW, vLo + FR, vcb - GAPHW - 2 * CT_HW), topOpt);
+      areaRect(direction, `${id}-nub0`, uv(uc - CT_HW, uc + CT_HW, vcb - GAPHW - 2 * CT_HW, vcb - GAPHW), nubOpt);
+      areaRect(direction, `${id}-c-gap`, uv(uc - CT_HW, uc + CT_HW, vcb - GAPHW, vcb + GAPHW), topOpt);
+      areaRect(direction, `${id}-nub1`, uv(uc - CT_HW, uc + CT_HW, vcb + GAPHW, vcb + GAPHW + 2 * CT_HW), nubOpt);
+      areaRect(direction, `${id}-c-n`, uv(uc - CT_HW, uc + CT_HW, vcb + GAPHW + 2 * CT_HW, vHi - FR), topOpt);
+    });
+    // The send-q terminal on the deep wall, centred behind the two columns.
+    areaRect(direction, `batt-${side}-term`, uv(sgn * (ALCHW + ALC_RECESS), uDeep, vc - terminalTextureSize.width / 2, vc + terminalTextureSize.width / 2), {
+      ...conduit, kind: "terminal",
+      floor: F0 + terminalPanelFloor,
+      ceiling: F0 + terminalPanelFloor + terminalTextureSize.height,
+      light: 184,
+      labelSide: side === "left" ? leftWall : rightWall,
+      labelTexture: sc.texture,
+      controlPanel: true,
+      riserWall: BUS_HOUSING,
+    });
+  };
+  // ===== Kernel-TX QDISC BAY (level 1, RIGHT/TX catwalk): a SUNKEN, RAILED disc-pit
+  // mirroring the coil bay's u-footprint on the +u side. The bay floor is an F1 frame the
+  // player walks (front margin + back margin + a deep walkway along the terminal wall); the
+  // centre is a `blockEdge` pit sunk QD_PIT_DROP below F1, so the player looks DOWN into it
+  // over the rail (the vantage fix for floor-disc foreshortening) but cannot fall in. Three
+  // pit sub-sectors tile it along v: inflow line (upstream) | occupancy disc | outflow line
+  // (downstream), each a dark base flat carrying its floor-display sentinel light. The KTXT
+  // terminal sits on the deep wall (tc -s qdisc readout); the QDISC placard on the front end
+  // wall names the gauge. [[terminal-design-principles]] [[wall-label-centering-width]]
+  const qdiscBay = (side) => {
+    const lvl = levels[1];
+    const sgn = side === "left" ? -1 : 1;      // "right" here (kernel-TX), kept general
+    const vc = QD_VC;
+    const uOpen = sgn * EDGEHW;                 // 320: catwalk-side opening (bay mouth)
+    const uNear = sgn * QD_PIT_U1;              // 384: pit near edge / near-walkway rail
+    const uFar = sgn * QD_PIT_U2;               // 528: pit far edge / deep-walkway rail
+    const uDeep = sgn * QD_DEEP;                // 600: deep wall (terminal) -- deeper than other bays
+    const inflowV1 = vc - QD_DISC_R - QD_FLOW_LEN; // 1624
+    const discV1 = vc - QD_DISC_R;             // 1720
+    const discV2 = vc + QD_DISC_R;             // 1864
+    const outflowV2 = vc + QD_DISC_R + QD_FLOW_LEN; // 1960
+    // Walkable F1 frame RINGING the pit on all four sides: full-width front + back margins,
+    // a NEAR walkway inset from the catwalk, and a DEEP walkway in front of the terminal --
+    // one continuous floor the player can circle the display on. (No rail at the catwalk mouth
+    // now: the pit is inset, so u=320 is an open F1->F1 step-in across the whole bay width.)
+    const frameOpt = { ...intake, kind: "net-alcove", floor: F1, ceiling: HALL_CEIL, light: 150 };
+    areaRect(direction, "qdisc-front", uv(uOpen, uDeep, lvl.sv1, inflowV1), frameOpt);
+    areaRect(direction, "qdisc-back", uv(uOpen, uDeep, outflowV2, lvl.cv2), frameOpt);
+    areaRect(direction, "qdisc-nearwalk", uv(uOpen, uNear, inflowV1, outflowV2), frameOpt);
+    areaRect(direction, "qdisc-deepwalk", uv(uFar, uDeep, inflowV1, outflowV2), frameOpt);
+    // Sunken, RAILED display pit (blockEdge): dark ground flat so the FULLBRIGHT disc/pulses
+    // pop against it. Three sub-sectors along v carry the two display sentinels.
+    const pitBase = { ...conduit, kind: "net-alcove", floor: F1 - QD_PIT_DROP, ceiling: HALL_CEIL, floorFlat: groundFlatName, blockEdge: true };
+    areaRect(direction, "qdisc-inflow", uv(uNear, uFar, inflowV1, discV1), { ...pitBase, light: QD_FLOW_LIGHT, tag: QD_INFLOW_TAG });
+    areaRect(direction, "qdisc-disc", uv(uNear, uFar, discV1, discV2), { ...pitBase, light: QD_DISC_LIGHT, tag: QD_DISC_TAG });
+    areaRect(direction, "qdisc-outflow", uv(uNear, uFar, discV2, outflowV2), { ...pitBase, light: QD_FLOW_LIGHT, tag: QD_OUTFLOW_TAG });
+    // KTXT terminal on the deep wall (control-panel recess), centred on vc.
+    areaRect(direction, "qdisc-term", uv(sgn * (QD_DEEP + ALC_RECESS), uDeep, vc - terminalTextureSize.width / 2, vc + terminalTextureSize.width / 2), {
+      ...conduit, kind: "terminal",
+      floor: F1 + terminalPanelFloor,
+      ceiling: F1 + terminalPanelFloor + terminalTextureSize.height,
+      light: 184,
+      labelSide: side === "left" ? leftWall : rightWall,
+      labelTexture: kernelTxScreen.texture,
+      controlPanel: true,
+      riserWall: BUS_HOUSING,
+    });
+    // "QDISC DEPTH" placard on the bay's FRONT end wall (low v), swapped to "QDISC UNKNOWN"
+    // by DoomPerf_UpdateNetQdiscCap when tc's backlog is unreadable (mirrors coil-label-squeeze).
+    areaRect(direction, "qdisc-placard", uv(uOpen, uDeep, lvl.sv1 - ALC_RECESS, lvl.sv1), {
+      ...hall, kind: "net-sign", floor: F1, ceiling: F1 + wallSignSize.height, light: 200,
+      labelSide: frontWall, labelTexture: qdiscPlacards.depth.texture, labelWidth: SIGN_W,
+    });
+  };
+  // Level 1 RIGHT (kernel-TX) = the qdisc disc bay; level 0 = recv CAPACITOR bay (left) +
+  // send BATTERY cell-columns (right); level 2 = ring turbine (RX) / dynamo (TX) instrument bays.
+  stations.filter((st) => st.level === 1).forEach((st) => qdiscBay(st.side));
+  stations.filter((st) => st.level === 0 && st.side === "left").forEach((st) => socketCapBay(st.side, 0, st.screen));
+  stations.filter((st) => st.level === 0 && st.side === "right").forEach((st) => batteryBay(st.side, st.screen));
+  stations.filter((st) => st.level === 2).forEach((st) => ringInstrumentBay(st.side, st.side === "left" ? 0 : 1, st.side === "left" ? TURB_EDNUM : DYN_EDNUM, st.screen));
 
   // ===== Kernel-RX softnet TESLA-COIL BAY off the kernel stage's LEFT (RX) catwalk. The
   // combined kernel-RX bus bed reads "receive is hot"; this bay DECOMPOSES that into its
@@ -760,8 +1142,8 @@ const textures = [
     height: terminalTextureSize.height,
     build: () => buildTerminalPatch(s),
   })),
-  // Tesla-electrode side-wall labels, two-line wall signs.
-  ...coilWallLabels.map((s) => ({
+  // Tesla-electrode side-wall labels + the kernel-TX qdisc placard variants, two-line wall signs.
+  ...[...coilWallLabels, qdiscPlacards.depth, qdiscPlacards.unknown].map((s) => ({
     texture: s.texture,
     patch: s.patch,
     width: wallSignSize.width,
@@ -802,6 +1184,18 @@ const sprites = [
   { name: "BLUDA0", build: () => buildNetLightningSprite(0) },
   { name: "BLUDB0", build: () => buildNetLightningSprite(1) },
   { name: "BLUDC0", build: () => buildNetLightningBig() },
+  // Socket-lock capacitor charge effect (MT_DP_NETCAP): D/E rising charge motes, F flashover.
+  // Travelling-bus-current bead (round electric-blue mote, MT_DP_NETCAP D/E) + the authored
+  // capacitor-tower prop (SPR_COLU frame A, MT_DP_NETCAPTWR).
+  { name: "BFE1D0", build: () => buildFxPatch({ size: 14, ramp: capMoteRamp, outerFrac: 0.85 }) },
+  { name: "BFE1E0", build: () => buildFxPatch({ size: 12, ramp: capMoteFlash, outerFrac: 0.8 }) },
+  { name: "COL2A0", build: () => buildCapTowerSprite() },
+  // Ring-buffer (L2) instrument props: turbine wheel (RX), dynamo drum (TX). Authored over UNUSED
+  // single-frame IWAD decorations -- NOT ones whose stock thing the map places (SMIT=47, SMT2 are
+  // never placed; ELEC=48 and COLU=2028 ARE, so overriding them leaks into the hub / other wings).
+  // (The send-q battery is 3D geometry + a wall shader now, not a billboard sprite.)
+  { name: "SMITA0", build: () => buildTurbineSprite() },
+  { name: "SMT2A0", build: () => buildDynamoSprite() },
 ];
 
 const terminals = ({ terminalHalfWidth }) => {
@@ -811,13 +1205,16 @@ const terminals = ({ terminalHalfWidth }) => {
     return { ax, ay, bx, by };
   };
   const deep = -(ALCHW + ALC_RECESS);
-  // The five directional stage consoles read from the back face of their niche: the
-  // outer wall pushed out by ALC_RECESS, on the RX (u<0) or TX (u>0) side, centred on
-  // the station's vc (kernel-RX is the softnet console below, not a niche).
+  // Every stage console reads from its bay's DEEP wall (u = +/-(ALCHW+ALC_RECESS)), on the
+  // RX (u<0) or TX (u>0) side, centred on the station's vc: level 0 socket capacitor/battery
+  // banks, level 1 the kernel-TX qdisc pit, level 2 the ring bays (kernel-RX = softnet console).
   const stationTerminals = stations.map((st) => {
     const lvl = levels[st.level];
     const vc = Math.round((lvl.sv1 + lvl.cv2) / 2);
-    const u = st.side === "left" ? -(EDGEHW + ALC_RECESS) : EDGEHW + ALC_RECESS;
+    // Every station reads from its bay's DEEP wall: level 0 socket + level 2 ring bays from
+    // ALCHW; level 1's kernel-TX qdisc pit is a DEEPER bay, so it reads from QD_DEEP.
+    const wall = (st.level === 1 ? QD_DEEP : ALCHW) + ALC_RECESS;
+    const u = st.side === "left" ? -wall : wall;
     return { sign: st.sign, segments: [segment([u, vc - terminalHalfWidth], [u, vc + terminalHalfWidth])] };
   });
   return [

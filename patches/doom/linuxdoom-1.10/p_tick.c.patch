@@ -34,6 +34,7 @@
 #         (doomperf_net_gate_red); loss is overflow-only -- a drop fires ONLY when the tail
 #         orb hits a full MAXQ-deep queue (so every drop has a red line), and it DISSIPATES
 #         upward in a lane-coloured spark spray (DoomPerf_NetDrop), not a downward fall
+#   (+)   network-qdisc-disc (publish qdisc flow/sat for r_draw + DPNQDG<->DPNQDX placard swap)
 # Order-independent: this is the only Doom Perf patch that touches p_tick.c.
 # Regenerate by diffing a clean tree against the staged build tree;
 # see scripts/build-doom-wasm.sh.
@@ -46,7 +47,7 @@
  //-----------------------------------------------------------------------------
  //
  // $Id:$
-@@ -30,9 +30,4037 @@
+@@ -30,9 +30,4249 @@
  
  #include "doomstat.h"
  
@@ -2025,6 +2026,44 @@
 +    }
 +}
 +
++// Doom Perf: the kernel-TX QDISC placard swap (NETWORK_QDISC_DISC_PLAN.md). The disc bay's
++// wall sign reads "QDISC DEPTH" (DPNQDG) while tc's backlog is readable and "QDISC UNKNOWN"
++// (DPNQDX) when it is not -- the same honest-fallback affordance as the swap-cap pipe above.
++// A near-verbatim copy of DoomPerf_UpdateSwapCap, keyed on doomperf_net_qdisc_known and
++// matching by texture identity, so no sector tag is needed.
++void DoomPerf_UpdateNetQdiscCap (void)
++{
++    static int	tex_ready = 0;
++    static int	sign_depth, sign_unknown;
++    int		want_sign;
++    int		i;
++
++    if (!tex_ready)
++    {
++	sign_depth = R_CheckTextureNumForName("DPNQDG");
++	sign_unknown = R_CheckTextureNumForName("DPNQDX");
++	tex_ready = 1;
++    }
++    // A map built before the variants existed keeps its placard rather than blanking the
++    // fitting to texture 0 (which renders as a hole).
++    if (sign_depth < 0 || sign_unknown < 0)
++	return;
++
++    want_sign = doomperf_net_qdisc_known ? sign_depth : sign_unknown;
++
++    for (i = 0; i < numsides; i++)
++    {
++	// The placard hangs on the one-sided far wall of its own recess: a MID texture.
++	// (Cover the bottom slot too, defensively, in case meshing lands it on a lower.)
++	if (sides[i].midtexture == sign_depth
++	    || sides[i].midtexture == sign_unknown)
++	    sides[i].midtexture = (short)want_sign;
++	if (sides[i].bottomtexture == sign_depth
++	    || sides[i].bottomtexture == sign_unknown)
++	    sides[i].bottomtexture = (short)want_sign;
++    }
++}
++
 +// Doom Perf: the OOM-killer BARON (memory wing, Station D). A Baron of Hell is
 +// placed (map thing 3003) in the pen sector tagged DOOMPERF_MEMORY_OOM_PEN_TAG at
 +// the head of the RSS reliquary. We freeze its AI (tics = -1) and make it
@@ -2911,6 +2950,32 @@
 +#define DOOMPERF_NET_COIL_TOPZ	24		// electrode tip height (map units)
 +#define DOOMPERF_NET_COIL_BIG	780		// smoothed glow above this fires the tall branchy bolt
 +static const int doomperf_net_coil_x[2] = {-1664, -1920};	// squeeze / drop electrode world x
++// Socket-lock CAPACITOR BANKS: two level-0 bays (RX left / TX right), each standing TWO
++// authored capacitor-tower props with a TRAVELLING BUS-CURRENT bead running along the wire
++// between their tops. Mirrored from network-wing.mjs (RING_PITCH discipline). West maps local
++// (u,v) -> world (-v,u), so the two towers (local u=+/-412, v=1002/1302) sit at world
++// x=-1002/-1302; the bead runs at world y +/-384 (face-front, so it reads in front of them).
++#define DOOMPERF_NET_CAP_TOPZ	140	// tower-top wire height where the current bead runs
++#define DOOMPERF_NET_CANL_TAG	752	// 752 + lane : socket bay floor (glow ramps with fill)
++static const int doomperf_net_cap_x[2] = {-1002, -1302};	// the two towers' world x (A / B)
++static const int doomperf_net_cap_y[2] = {-384, 384};		// RX (left) / TX (right) bay, face-front
++// ===== RING-BUFFER (level 2) TURBINE + DYNAMO wheels and SEND-Q (level 0) BATTERY banks ("more
++// alive network instruments"). Mirrored from network-wing.mjs (RING_PITCH discipline). West maps
++// local (u,v) -> world (-v,u). The two ring bays sit at level-2 vc=2432 (props at v=2282/2582,
++// u=+/-412 -> world x=-2282/-2582). The wheels SPIN via a ring of orbiting motes hand-positioned
++// around each hub at an angular rate set by the live RX/TX throughput; overrun/brush SPARKS fire
++// off the rim on ring drops. (The send-q BATTERY banks are 3D cell-column geometry with a
++// segmented fill shader -- R_DoomPerfNetBatteryPixel, tags 762-763 -- not mobjs, so they're not
++// driven here.)
++static const int doomperf_net_wheel_x[2] = {-2282, -2582};	// the two flanking wheels' world x
++#define DOOMPERF_NET_TURB_Y	(-388)	// RX ring bay (left): motes ride in front of the wheels
++#define DOOMPERF_NET_DYN_Y	388	// TX ring bay (right)
++#define DOOMPERF_NET_TURB_Z	(-102)	// turbine hub height (walk F2=-192 + 90 map units)
++#define DOOMPERF_NET_DYN_Z	(-116)	// dynamo drum-centre height (F2 + 76)
++#define DOOMPERF_NET_WHEEL_R	40	// orbit radius (just inside the blade rim)
++#define DOOMPERF_NET_SPIN_MOTES	8	// motes per wheel in the orbiting ring
++// (The send-q BATTERY banks are 3D cell-column geometry with a segmented fill shader on their
++// faces -- R_DoomPerfNetBatteryPixel, tags 762-763 -- not mobjs, so no constants live here.)
 +
 +static mobj_t*	doomperf_netpkt_rx[DOOMPERF_NET_CAP];
 +static mobj_t*	doomperf_netpkt_tx[DOOMPERF_NET_CAP];
@@ -3767,6 +3832,10 @@
 +    // instead of flickering. [0]=squeeze [1]=drop. The bus beds no longer move or temper
 +    // (lane height + colour frozen), so no flats here.
 +    static int	coil_glow[2] = {0, 0};
++    // Doom Perf: per-lane smoothed drive for the socket-lock CAPACITOR BANKS (level 0). Same
++    // one-pole low-pass so the gauge floor, can glow and charge-mote density all ease. [0]=RX
++    // recv-q, [1]=TX send-q. Updated BEFORE the sector loop so the gauge/cans read it there.
++    static int	cap_glow[2] = {0, 0};
 +    // Trackside signal lamps: cached texture nums (queried once; -2 = not yet looked up).
 +    // The lit aspect is NOT a threshold here -- it mirrors doomperf_net_gate_red, set by
 +    // DoomPerf_NetLane when an orb is physically held at the gate.
@@ -3777,6 +3846,26 @@
 +    {
 +	sig_go = R_CheckTextureNumForName ("DPNSIGGO");
 +	sig_stop = R_CheckTextureNumForName ("DPNSIGST");
++    }
++
++    // Publish the kernel-TX QDISC floor-shader inputs for r_draw (both are file-scope in
++    // this TU): flow = TX throughput -> the outflow line's drain-pulse cadence (keeps
++    // pulsing even at saturation); sat = the enqueue-loss trip -> reds the inflow line,
++    // taken as max(TX lock drop, real backlog fill) so it fires in BOTH the qdisc-known
++    // (fill hits the limit) and qdisc-unknown (tx_dropped alone) regimes.
++    doomperf_net_qdisc_flow = DoomPerf_EffectiveNetworkTx ();
++    doomperf_net_qdisc_sat = (doomperf_net_lock_drops[1][1] > doomperf_net_qdisc_fill)
++			   ? doomperf_net_lock_drops[1][1] : doomperf_net_qdisc_fill;
++
++    // Ease the two socket-lock capacitor banks toward their live queue fill (index.ts already
++    // folds the accept backlog into these level-0 fills), so the gauge/cans below and the
++    // charge motes further down all track one smoothed value.
++    for (lane = 0; lane < 2; lane++)
++    {
++	int	target = doomperf_net_lock_fill[0][lane];
++	if (target > 1000)
++	    target = 1000;
++	cap_glow[lane] += (target - cap_glow[lane]) / 8;	// one-pole low-pass
 +    }
 +
 +    for (i = 0; i < numsectors; i++)
@@ -3876,6 +3965,15 @@
 +	    }
 +	    continue;
 +	}
++
++	// Socket-lock capacitor BAY floor: an ambient charge glow that brightens with the
++	// queue fill (also lights the sector-lit tower props standing on it).
++	idx = tag - DOOMPERF_NET_CANL_TAG;
++	if (idx >= 0 && idx < 2)
++	{
++	    sectors[i].lightlevel = (short)(150 + (cap_glow[idx] * 90) / 1000);
++	    continue;
++	}
 +    }
 +
 +    // (Packet DROPS are now shown in-lane: DoomPerf_NetLane peels the tail orb out of an
@@ -3919,6 +4017,121 @@
 +			      MT_DP_NETARC);
 +	    if (big)
 +		P_SetMobjState (mo, S_DP_NETARC_BIG);
++	}
++    }
++
++    // Socket-lock CAPACITOR BANK (RECV-Q, lane 0 only): the TRAVELLING BUS CURRENT. A bright bead
++    // is launched A->B along the wire between the two capacitor towers at a rate set by the
++    // smoothed recv-q fill, and glides tower-to-tower (its ~50-tic life crosses the 300-unit span,
++    // then it self-removes). The SEND-Q bay (lane 1) is now a BATTERY bank -- its charge column
++    // and vent are driven in DoomPerf_UpdateNetworkMachines, not a travelling bead.
++    for (lane = 0; lane < 1; lane++)
++    {
++	int	g = cap_glow[lane];
++
++	if (P_Random () < 3 + (g * 130) / 1000)		// idle trickle .. steady stream
++	{
++	    mobj_t*	mo = P_SpawnMobj (doomperf_net_cap_x[0] << FRACBITS,
++				      doomperf_net_cap_y[lane] << FRACBITS,
++				      DOOMPERF_NET_CAP_TOPZ << FRACBITS,
++				      MT_DP_NETCAP);
++	    P_SetMobjState (mo, S_DP_NETCUR1);
++	    mo->momx = -6 * FRACUNIT;			// 300 units over ~50 tics, tower A -> tower B
++	}
++    }
++}
++
++// Doom Perf: RING-BUFFER TURBINES / DYNAMOS ("more alive network instruments"). The turbine (RX)
++// and dynamo (TX) wheels each carry a ring of orbiting motes whose angular speed IS the live
++// throughput -- an idle wheel barely creeps, a saturated NIC blurs; a ring DROP
++// (doomperf_net_lock_drops[2][lane]) sheds a spark off the rim (turbine overrun) or cracks the
++// commutator (dynamo brush-arc). (The send-q battery banks are 3D cell-column geometry with a
++// segmented fill shader, R_DoomPerfNetBatteryPixel -- not mobjs.) Every mote is hand-positioned
++// (floorz==ceilingz==z skips P_ZMovement, the [[hand-positioned-mobj-floorz]] idiom). Reads only
++// signals the engine already has (EffectiveNetworkRx/Tx + the level fills/drops); no new feed.
++void DoomPerf_UpdateNetworkMachines (void)
++{
++    // spin[ring][wheel][mote]: ring 0 = RX turbine, 1 = TX dynamo. (The send-q battery banks
++    // are now 3D cell-column GEOMETRY with a segmented fill shader on their faces -- see
++    // R_DoomPerfNetBatteryPixel / tags 762-763 -- so they need no mobjs here.)
++    static mobj_t*	spin[2][2][DOOMPERF_NET_SPIN_MOTES];
++    static int		ang[2];		// current ring phase (fine angle) per ring type
++    int			ring, w, m, i;
++    int			rate[2];
++
++    // A level (re)load frees every mobj; drop the stale pointers before touching them.
++    if (leveltime == 0)
++    {
++	for (ring = 0; ring < 2; ring++)
++	{
++	    ang[ring] = 0;
++	    for (w = 0; w < 2; w++)
++		for (m = 0; m < DOOMPERF_NET_SPIN_MOTES; m++)
++		    spin[ring][w][m] = NULL;
++	}
++    }
++
++    rate[0] = DoomPerf_EffectiveNetworkRx ();
++    rate[1] = DoomPerf_EffectiveNetworkTx ();
++    for (i = 0; i < 2; i++)
++    {
++	if (rate[i] < 0) rate[i] = 0;
++	else if (rate[i] > 1000) rate[i] = 1000;
++    }
++
++    // --- Turbine (RX) + dynamo (TX) spin rings ---
++    for (ring = 0; ring < 2; ring++)
++    {
++	int	drops = doomperf_net_lock_drops[2][ring];
++	int	hubY = ring ? DOOMPERF_NET_DYN_Y : DOOMPERF_NET_TURB_Y;
++	int	hubZ = ring ? DOOMPERF_NET_DYN_Z : DOOMPERF_NET_TURB_Z;
++	int	sprstate = ring ? S_DP_NETSPIN_V : S_DP_NETSPIN;
++	int	speed;
++
++	if (drops < 0) drops = 0; else if (drops > 1000) drops = 1000;
++	// Angular step: a slow idle creep (so the wheel is never dead) up to a hard blur.
++	speed = 12 + (rate[ring] * 220) / 1000;		// fine-angle units per tic
++	ang[ring] = (ang[ring] + speed) & FINEMASK;
++
++	for (w = 0; w < 2; w++)
++	{
++	    int		hubX = doomperf_net_wheel_x[w];
++
++	    for (m = 0; m < DOOMPERF_NET_SPIN_MOTES; m++)
++	    {
++		int	fa = (ang[ring] + m * (FINEANGLES / DOOMPERF_NET_SPIN_MOTES)) & FINEMASK;
++		fixed_t	x = (hubX << FRACBITS) + FixedMul (DOOMPERF_NET_WHEEL_R << FRACBITS, finecosine[fa]);
++		fixed_t	z = (hubZ << FRACBITS) + FixedMul (DOOMPERF_NET_WHEEL_R << FRACBITS, finesine[fa]);
++		fixed_t	y = hubY << FRACBITS;
++		mobj_t*	mo = spin[ring][w][m];
++
++		if (!mo)
++		{
++		    mo = P_SpawnMobj (x, y, z, MT_DP_NETSPIN);
++		    P_SetMobjState (mo, sprstate);
++		    spin[ring][w][m] = mo;
++		}
++		else
++		{
++		    P_UnsetThingPosition (mo);
++		    mo->x = x;
++		    mo->y = y;
++		    P_SetThingPosition (mo);
++		}
++		mo->z = z;
++		mo->floorz = mo->ceilingz = z;		// hand-positioned; skip P_ZMovement
++	    }
++
++	    // Ring DROP -> a spark off the rim. Turbine (ring 0) sheds it at a RANDOM blade tip
++	    // (overrun); dynamo (ring 1) cracks it at the COMMUTATOR (fixed rim point, world +x).
++	    if (drops > 0 && P_Random () < (drops * 200) / 1000)
++	    {
++		int	fa = ring ? 0 : ((P_Random () << 5) & FINEMASK);
++		fixed_t	sx = (hubX << FRACBITS) + FixedMul (DOOMPERF_NET_WHEEL_R << FRACBITS, finecosine[fa]);
++		fixed_t	sz = (hubZ << FRACBITS) + FixedMul (DOOMPERF_NET_WHEEL_R << FRACBITS, finesine[fa]);
++
++		P_SpawnMobj (sx, hubY << FRACBITS, sz, MT_DP_NETARC);
++	    }
 +	}
 +    }
 +}
@@ -4084,7 +4297,7 @@
  //
  // THINKERS
  // All thinkers should be allocated by Z_Malloc
-@@ -123,6 +4151,194 @@
+@@ -123,6 +4363,194 @@
  
  
  
@@ -4279,7 +4492,7 @@
  //
  // P_Ticker
  //
-@@ -130,11 +4346,11 @@
+@@ -130,11 +4558,11 @@
  void P_Ticker (void)
  {
      int		i;
@@ -4293,7 +4506,7 @@
      // pause if in menu and at least one tic has been run
      if ( !netgame
  	 && menuactive
-@@ -143,16 +4359,37 @@
+@@ -143,16 +4571,39 @@
      {
  	return;
      }
@@ -4319,6 +4532,8 @@
 +    DoomPerf_UpdateRunQueueParticles ();
 +    DoomPerf_UpdateNetworkPackets ();
 +    DoomPerf_UpdateNetworkLocks ();
++    DoomPerf_UpdateNetQdiscCap ();
++    DoomPerf_UpdateNetworkMachines ();
 +    // Before P_PlayerThink so this tic's lane scale drags THIS tic's P_MovePlayer.
 +    DoomPerf_UpdateCauseway ();
 +

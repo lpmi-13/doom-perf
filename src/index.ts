@@ -317,6 +317,11 @@ type DoomPerfEngine = {
   _DoomPerf_SetNetBacklogged?: (count: number) => void;
   _DoomPerf_SetNetSynRecv?: (count: number) => void;
   _DoomPerf_SetNetRingDepthKnown?: (lane: number, known: number) => void;
+  // Kernel-TX qdisc floor instrument (NETWORK_QDISC_DISC_PLAN.md): the occupancy disc's fill
+  // (real backlog permille, 0 when unknown) and whether tc's backlog is readable (drives the
+  // disc's known/unknown mode + the DPNQDG<->DPNQDX "QDISC UNKNOWN" placard swap).
+  _DoomPerf_SetNetQdiscFill?: (permille: number) => void;
+  _DoomPerf_SetNetQdiscKnown?: (known: number) => void;
   _DoomPerf_GetSimMode?: () => number;
   _DoomPerf_GetEffectiveCpuCoreCount?: () => number;
   _DoomPerf_GetEffectiveCpuCore?: (id: number) => number;
@@ -589,6 +594,11 @@ const pushTelemetryToEngine = (
     Math.max(net.softnetDropsPerSecond ?? 0, net.rxDropsPerSecond ?? 0) / DROP_FULL
   ));
   engine?._DoomPerf_SetNetLockDrops?.(1, 1, netPm((net.txDropsPerSecond ?? 0) / DROP_FULL));
+  // Kernel-TX QDISC floor disc: fill = the real backlog occupancy when tc is readable, else 0
+  // so the disc draws its indeterminate "scanning" state (the red inflow line carries the loss
+  // instead). `known` also swaps the DPNQDG "QDISC DEPTH" placard to DPNQDX "QDISC UNKNOWN".
+  engine?._DoomPerf_SetNetQdiscKnown?.(qdiscKnown ? 1 : 0);
+  engine?._DoomPerf_SetNetQdiscFill?.(qdiscKnown ? netPm((net.qdiscBacklogBytes ?? 0) / SOCKET_Q_FULL) : 0);
 
   // Ring lock (2): overruns (fifo) are always present; the pool fill is a pressure
   // proxy off the overrun rate (no instantaneous ring occupancy lives in /proc). Ring

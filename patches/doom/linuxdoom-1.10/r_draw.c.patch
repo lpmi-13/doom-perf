@@ -13,13 +13,14 @@
 #   0029  cpu-load-gauge-redesign
 #   0035  disk-platter-spindle
 #
+#   (+)   network-qdisc-disc (kernel-TX qdisc occupancy disc + enqueue/dequeue flow-line shaders)
 # Order-independent: this is the only Doom Perf patch that touches r_draw.c.
 # Regenerate by diffing a clean tree against the staged build tree;
 # see scripts/build-doom-wasm.sh.
 
 --- a/r_draw.c
 +++ b/r_draw.c
-@@ -95,6 +95,22 @@
+@@ -95,6 +95,23 @@
  // just for profiling 
  int			dccount;
  
@@ -32,6 +33,7 @@
 +static byte R_DoomPerfCpuStreakPixel (int ty);
 +static byte R_DoomPerfCpuGaugePixel (int gauge, int ty);
 +static byte R_DoomPerfDiskGaugePixel (int gauge, int ty);
++static byte R_DoomPerfNetBatteryPixel (int gauge, int ty);
 +static byte R_DoomPerfDiskQueuePixel (fixed_t xfrac, fixed_t yfrac, byte background);
 +static byte R_DoomPerfDiskDashboardPixel (int tx, int ty, byte background);
 +static byte R_DoomPerfDiskPlatterPixel (fixed_t xfrac, fixed_t yfrac, byte background);
@@ -42,7 +44,7 @@
  //
  // A column is a vertical slice/span from a wall texture that,
  //  given the DOOM style restrictions on the view orientation,
-@@ -137,9 +153,45 @@
+@@ -137,9 +154,53 @@
      // This is as fast as it gets.
      do 
      {
@@ -76,6 +78,14 @@
 +				    doomperf_cpu_column_texture_x,
 +				    (frac>>FRACBITS)&127,
 +				    dc_source[(frac>>FRACBITS)&127])];
++	else if (doomperf_cpu_column_display == 35 || doomperf_cpu_column_display == 36)
++	    // Send-q BATTERY bank: a segmented cell gauge filling bottom-up with the send-q depth
++	    // on a solid cell-column's lower (two-sided) face. The column is full-height (to the
++	    // 176 bay ceiling) so ty is masked with &255. 35 = the red (+) cell, 36 = the blue (-)
++	    // cell. Via dc_colormap so the bay light plays over it; charged cells use bright
++	    // electric-blue indices so the filled rows read as live.
++	    *dest = dc_colormap[R_DoomPerfNetBatteryPixel(doomperf_cpu_column_display - 35,
++							  (frac>>FRACBITS)&255)];
 +	else if (doomperf_cpu_column_display >= 20)
 +	    *dest = dc_colormap[R_DoomPerfDiskGaugePixel(doomperf_cpu_column_display - 20,
 +							 (frac>>FRACBITS)&127)];
@@ -91,7 +101,7 @@
  	
  	dest += SCREENWIDTH; 
  	frac += fracstep;
-@@ -514,6 +566,872 @@
+@@ -514,6 +575,1081 @@
  // just for profiling
  int			dscount;
  
@@ -357,6 +367,59 @@
 +    if (ty < warn_ty)
 +	return DOOMPERF_DISK_RED;
 +    return DOOMPERF_DISK_GOLD;
++}
++
++// Send-q BATTERY bank (network wing). Draws a segmented lead-acid CELL gauge on a low (40-tall,
++// ty 0=top .. 40=bottom) solid cell-column face -- short enough that its TOP (terminal caps +
++// cells) sits at eye level. A coloured TERMINAL CAP band with a +/- glyph sits at the top, then a
++// 2-ROW grid of cells that light bottom-up with the send-q depth (doomperf_net_lock_fill[0][1]) --
++// charged cells glow electric-blue, uncharged stay dark, dark grid lines separate them. gauge 0 =
++// the red (+) column, gauge 1 = the blue (-) column. Reads the fill straight (index.ts feeds it
++// live + sim); no engine tick needed. Side-effect-free. H MUST match BATT_H in network-wing.mjs.
++static byte R_DoomPerfNetBatteryPixel (int gauge, int ty)
++{
++    int		tx = doomperf_cpu_column_texture_x & 63;	// 64-wide cell face
++    int		fill = doomperf_net_lock_fill[0][1];		// send-q depth (permille)
++    const int	H = 40;						// riser height (top at eye level)
++    const int	CAPBAND = 12;					// terminal-cap band (carries the +/- glyph)
++    const int	G0 = 14, G1 = 38;				// cell-grid vertical span (2 rows of 12)
++    const byte	FRAME = 5;					// near-black case frame / grid lines
++    const byte	EMPTY = 8;					// uncharged cell (dark)
++    const byte	CAP = gauge ? 200 : 176;			// blue (-) / red (+) terminal cap
++    const byte	LIT1 = 197, LIT2 = 196;				// electric-blue charged cell (two shades)
++    int		cellH, row, col, fillLine, gx;
++
++    if (fill < 0) fill = 0; else if (fill > 1000) fill = 1000;
++    if (ty < 0) ty = 0; else if (ty > H) ty = H;
++
++    // Outer case frame.
++    if (tx < 2 || tx > 61 || ty < 1 || ty > H - 2)
++	return FRAME;
++
++    // Terminal-cap band with a +/- glyph (white on the coloured cap).
++    if (ty < CAPBAND)
++    {
++	gx = tx - 32;
++	if (gx >= -8 && gx <= 8 && ty >= 4 && ty <= 6)		// horizontal bar (both + and -)
++	    return 4;
++	if (!gauge && gx >= -2 && gx <= 2 && ty >= 1 && ty <= 9)	// vertical stroke (+ only)
++	    return 4;
++	return CAP;
++    }
++
++    // Cell grid: 2 rows x 3 columns over [G0..G1] x [2..61], dark grid lines between.
++    cellH = (G1 - G0) / 2;
++    if (cellH < 1) cellH = 1;
++    if (((ty - G0) % cellH) == 0 || ((tx - 2) % 20) == 0)
++	return FRAME;
++    row = (ty - G0) / cellH;
++    col = (tx - 2) / 20;
++
++    // Cells at or below the charge line are lit; the line rises from the bottom with fill.
++    fillLine = G1 - (fill * (G1 - G0)) / 1000;
++    if (ty >= fillLine)
++	return ((row + col) & 1) ? LIT1 : LIT2;
++    return EMPTY;
 +}
 +
 +static int R_DoomPerfCpuWorldX (fixed_t xfrac)
@@ -944,6 +1007,158 @@
 +    return hue[a >> 29];			// 8-segment rainbow wheel
 +}
 +
++// ===== Kernel-TX QDISC floor instrument (NETWORK_QDISC_DISC_PLAN.md). A world-locked
++// OCCUPANCY DISC sunk in the level-1 TX bay floor, flanked by two glowing FLOW LINES
++// (enqueue-in upstream, dequeue-out downstream). Geometry, WORLD units (west wing: local
++// (u,v) -> world (-v,u)); mirrored from network-wing.mjs netQdiscWorld -- the centre + axis
++// MUST stay locked or the shaders read as drifting with the camera.
++#define DOOMPERF_NET_QDISC_CX		(-1792)	// world x = -QD_VC (disc v-centre 1792)
++#define DOOMPERF_NET_QDISC_CY		456	// world y = QD_DISC_CU (disc u-centre / flow axis)
++#define DOOMPERF_NET_QDISC_OUTER	72	// disc radius (== QD_DISC_R)
++#define DOOMPERF_NET_QDISC_INNER	8	// small centre hub -> a clean pie origin
++#define DOOMPERF_NET_FLOW_HW		7	// flow-line half-width (world y) -> a thin line
++#define DOOMPERF_NET_QDISC_VIOLET	252	// (207,0,207) hot violet -- the TX-identity fill
++#define DOOMPERF_NET_QDISC_RED		176	// (255,0,0) bright red -- the near-limit alarm
++#define DOOMPERF_NET_QDISC_RIM		253	// bright magenta capacity outline
++#define DOOMPERF_NET_QDISC_VOID		0	// pure black: unfilled wedge / off-line pit floor
++#define DOOMPERF_NET_QDISC_ALARM	700	// sat permille that reds the disc + inflow (loss alarm)
++#define DOOMPERF_NET_QDISC_DARKEST	18	// deepest colormap level at the disc rim
++
++// The occupancy DISC. KNOWN: a violet pie wedge sweeps 0..full with the real qdisc backlog,
++// darkened radially through the engine's own colormaps like the disk platter. UNKNOWN: a dim
++// violet base with a bright band sweeping around it like a radar scan -- "depth unmeasured",
++// distinct from both empty (0%) and full (100%). A thin bright rim always marks capacity.
++// The disc + its rim REDDEN on the enqueue-loss ALARM -- doomperf_net_qdisc_sat, the SAME
++// signal the inflow line reds on -- so the disc and its inflow always agree: red == dropping,
++// independent of how full the wedge is (fq_codel/CoDel drops from a queue that is not full, so
++// a red-but-partly-empty disc is honest). The wedge EXTENT is the occupancy; the RED is the
++// loss alarm -- two decoupled readings that no longer look contradictory. Painted FULLBRIGHT by
++// the R_DrawSpan dispatch. Integer math only (isqrt for radius, R_DoomPerfPointAngle for the
++// wedge -- never R_PointToAngle2, which sets viewx/viewy and would jump the camera mid-span).
++// [[point-to-angle2-clobbers-view]]
++static byte
++R_DoomPerfNetQdiscPixel
++( fixed_t		xfrac,
++  fixed_t		yfrac,
++  byte			background )
++{
++    int		worldx;
++    int		worldy;
++    int		dx;
++    int		dy;
++    int		r2;
++    int		r;
++    int		fill;
++    int		span;
++    int		level;
++    int		hue;
++    int		alarm;
++    angle_t	a;
++    unsigned	af;
++    unsigned	thresh;
++    unsigned	sweep;
++
++    worldx = R_DoomPerfCpuWorldX(xfrac);
++    worldy = R_DoomPerfCpuWorldY(yfrac);
++    dx = worldx - DOOMPERF_NET_QDISC_CX;
++    dy = worldy - DOOMPERF_NET_QDISC_CY;
++    r2 = dx * dx + dy * dy;
++    if (r2 > DOOMPERF_NET_QDISC_OUTER * DOOMPERF_NET_QDISC_OUTER)
++	return background;				// off-disc: the dark pit floor
++    r = R_DoomPerfISqrt(r2);				// 0 .. OUTER
++
++    // The enqueue-loss alarm: reds the disc + rim in lockstep with the inflow line.
++    alarm = (doomperf_net_qdisc_sat >= DOOMPERF_NET_QDISC_ALARM);
++
++    if (r >= DOOMPERF_NET_QDISC_OUTER - 2)
++	return alarm ? DOOMPERF_NET_QDISC_RED
++		     : DOOMPERF_NET_QDISC_RIM;		// capacity outline (whole circle)
++    if (r < DOOMPERF_NET_QDISC_INNER)
++	return DOOMPERF_NET_QDISC_VOID;			// centre hub
++
++    // Angle CLOCKWISE FROM THE TOP (screen y grows downward -> feed (-dy, dx)).
++    a = R_DoomPerfPointAngle(-dy, dx);
++    af = a >> 22;					// 0 .. 1023 around the circle
++    span = DOOMPERF_NET_QDISC_OUTER - DOOMPERF_NET_QDISC_INNER;
++
++    if (doomperf_net_qdisc_known)
++    {
++	fill = doomperf_net_qdisc_fill;
++	if (fill < 0)
++	    fill = 0;
++	if (fill > 1000)
++	    fill = 1000;
++	thresh = ((unsigned)fill << 10) / 1000;		// filled sweep, 0..1023
++	if (af >= thresh)
++	    return DOOMPERF_NET_QDISC_VOID;		// unfilled wedge: dark
++
++	// Violet fill, reddening on the loss alarm (== the inflow line); darkened outward.
++	hue = alarm ? DOOMPERF_NET_QDISC_RED : DOOMPERF_NET_QDISC_VIOLET;
++	level = ((r - DOOMPERF_NET_QDISC_INNER) * DOOMPERF_NET_QDISC_DARKEST) / span;
++	if (level < 0)
++	    level = 0;
++	if (level > DOOMPERF_NET_QDISC_DARKEST)
++	    level = DOOMPERF_NET_QDISC_DARKEST;
++	return colormaps[level * 256 + hue];
++    }
++
++    // UNKNOWN: a bright violet band sweeps around a dim violet base (radar scan), keyed on
++    // leveltime so it reads as actively looking but unable to measure depth.
++    sweep = ((unsigned)(leveltime * 6)) & 1023;
++    if (((af - sweep) & 1023) < 80)
++	return DOOMPERF_NET_QDISC_VIOLET;		// bright sweep band
++    return colormaps[16 * 256 + DOOMPERF_NET_QDISC_VIOLET];	// dim base
++}
++
++// The two FLOW LINES either side of the disc. Both run PARALLEL to the TX bus (along v) so
++// their pulses travel +v (downstream, toward the NIC) like the TX packet-orbs. Inflow is
++// upstream of the disc (worldx > CX), outflow downstream (worldx < CX). Outflow always
++// pulses (drains even at saturation); inflow pulses too, UNLESS the enqueue-loss trip fires
++// (doomperf_net_qdisc_sat past the alarm), when it goes SOLID RED -- packets dropped at
++// enqueue, honest in both the qdisc-known (queue at limit) and qdisc-unknown (tx_dropped)
++// regimes. A dim violet base keeps each line everpresent; pulses glow over it. FULLBRIGHT.
++static byte
++R_DoomPerfNetFlowPixel
++( fixed_t		xfrac,
++  fixed_t		yfrac,
++  byte			background )
++{
++    int		worldx;
++    int		worldy;
++    int		dy;
++    int		inflow;
++    int		flow;
++    int		speed;
++    int		t;
++    int		pos;
++
++    worldx = R_DoomPerfCpuWorldX(xfrac);
++    worldy = R_DoomPerfCpuWorldY(yfrac);
++    dy = worldy - DOOMPERF_NET_QDISC_CY;
++    if (dy < 0)
++	dy = -dy;
++    if (dy > DOOMPERF_NET_FLOW_HW)
++	return background;				// off the thin line: dark pit floor
++
++    inflow = (worldx > DOOMPERF_NET_QDISC_CX);
++
++    // Inflow reds SOLID (no band) when packets are being dropped at enqueue.
++    if (inflow && doomperf_net_qdisc_sat >= DOOMPERF_NET_QDISC_ALARM)
++	return DOOMPERF_NET_QDISC_RED;
++
++    // Travelling pulse: the head advances in +v (downstream) for BOTH lines; cadence rises
++    // with TX throughput. t = position along v (world x = -v, so +v is -worldx increasing).
++    flow = doomperf_net_qdisc_flow;
++    if (flow < 0)
++	flow = 0;
++    speed = 1 + flow / 120;
++    t = -worldx;
++    pos = (((t - leveltime * speed) % 40) + 40) % 40;	// period 40 units
++    if (pos < 10)
++	return DOOMPERF_NET_QDISC_VIOLET;		// a travelling violet pulse
++    return colormaps[20 * 256 + DOOMPERF_NET_QDISC_VIOLET];	// dim base line (everpresent)
++}
++
 +static byte
 +R_DoomPerfCpuFloorPixel
 +( fixed_t		xfrac,
@@ -958,13 +1173,17 @@
 +	return R_DoomPerfDiskQueuePixel(xfrac, yfrac, background);
 +    if (doomperf_cpu_floor_display == 4)
 +	return R_DoomPerfDiskPlatterPixel(xfrac, yfrac, background);
++    if (doomperf_cpu_floor_display == 5)
++	return R_DoomPerfNetQdiscPixel(xfrac, yfrac, background);
++    if (doomperf_cpu_floor_display == 6)
++	return R_DoomPerfNetFlowPixel(xfrac, yfrac, background);
 +    return background;
 +}
 +
  
  //
  // Draws the actual span.
-@@ -553,7 +1471,21 @@
+@@ -553,7 +1689,24 @@
  
  	// Lookup pixel from flat texture tile,
  	//  re-index using light/colormap.
@@ -973,11 +1192,14 @@
 +	{
 +	    byte	bg = ds_source[spot];
 +	    byte	px = R_DoomPerfCpuFloorPixel (xfrac, yfrac, bg);
-+	    // The disk platter is an emissive instrument: draw its painted pixels
-+	    // FULLBRIGHT so the whole disk reads uniformly and stays world-locked,
-+	    // instead of fading to dark with distance (which made the fill look
-+	    // glued to the player). Background floor pixels still shade normally.
-+	    if (doomperf_cpu_floor_display == 4 && px != bg)
++	    // The disk platter (4) and the network qdisc disc (5) + flow lines (6) are
++	    // emissive instruments: draw their painted pixels FULLBRIGHT so they read
++	    // uniformly and stay world-locked, instead of fading to dark with distance
++	    // (which made the fill look glued to the player). Background floor pixels
++	    // still shade normally.
++	    if ((doomperf_cpu_floor_display == 4
++		 || doomperf_cpu_floor_display == 5
++		 || doomperf_cpu_floor_display == 6) && px != bg)
 +		*dest++ = colormaps[px];
 +	    else
 +		*dest++ = ds_colormap[px];
@@ -987,7 +1209,7 @@
  
  	// Next step in u,v.
  	xfrac += ds_xstep; 
-@@ -676,8 +1608,20 @@
+@@ -676,8 +1829,22 @@
  	spot = ((yfrac>>(16-6))&(63*64)) + ((xfrac>>16)&63);
  	// Lowres/blocky mode does it twice,
  	//  while scale is adjusted appropriately.
@@ -997,7 +1219,9 @@
 +	{
 +	    byte	bg = ds_source[spot];
 +	    byte	cpu_pixel = R_DoomPerfCpuFloorPixel (xfrac, yfrac, bg);
-+	    byte	out = (doomperf_cpu_floor_display == 4 && cpu_pixel != bg)
++	    byte	out = ((doomperf_cpu_floor_display == 4
++			       || doomperf_cpu_floor_display == 5
++			       || doomperf_cpu_floor_display == 6) && cpu_pixel != bg)
 +			      ? colormaps[cpu_pixel] : ds_colormap[cpu_pixel];
 +	    *dest++ = out;
 +	    *dest++ = out;

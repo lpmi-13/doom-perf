@@ -121,11 +121,23 @@ export const reserved = {
     //   730     SYN-RECV backlog column (socket-lock alcove)
     //   740-745 trackside signal posts (740+level*2+lane) -- lamp swapped green/red by
     //           the engine off the lane's stall state (network-wing.mjs signalPost)
-    // Lights 124-128 stay reserved (gate glow is driven by TAG, not light-sentinel
-    // match, so no exact-value sentinel is spent). Line tags 760-799 currently unused.
+    //   752-753 socket capacitor BAYS (752+lane) -- floor glow ramps with recv-q/send-q fill
+    //           (the travelling-current bead runs faster too); 750-751 free
+    //   754-755 ring turbine (RX) / dynamo (TX) instrument-bay floor glow
+    //   756-758 kernel-TX QDISC pit (NETWORK_QDISC_DISC_PLAN.md): 756 occupancy disc floor,
+    //           757 inflow (enqueue) line, 758 outflow (dequeue) line. 759 free.
+    // Lights: gate glow is driven by TAG (no sentinel spent), but 126/127 ARE now spent as
+    // floor-display sentinels for the qdisc pit -- 126 = the disc (r_plane -> display 5),
+    // 127 = both flow lines (display 6). 124/125/128 stay reserved. These live in the network
+    // block on purpose (NOT storage's 130-134): storage owns the disk-platter 130 sentinel.
+    // The qdisc instrument's four engine globals + two setters (i_video_ems.c / compat.h):
+    //   doomperf_net_qdisc_fill/known  <- DoomPerf_SetNetQdiscFill/Known (browser push)
+    //   doomperf_net_qdisc_flow/sat    <- published each tick by p_tick, read by r_draw.
+    // Placard textures DPNQDG (QDISC DEPTH) / DPNQDX (QDISC UNKNOWN) swap by texture identity
+    // in DoomPerf_UpdateNetQdiscCap. Line tags 760-799 currently unused.
     sectorTags: [700, 759],
     lineTags: [760, 799],
-    lights: [124, 128], // reserved sentinels (unused: gate glow driven by tag)
+    lights: [124, 128], // 126 = qdisc disc, 127 = qdisc flow-line floor-display sentinels; 124/125/128 free
     namePrefix: "DPN", // DPNET (label) + DPN... for lock pools/gates/drains/signs
     // Packet-orb sprites streaming the two grove lanes (engine network-packets
     // patch). Unlike textures/flats, sprite LUMPS must reuse existing IWAD sprite
@@ -134,8 +146,11 @@ export const reserved = {
     // fade FX; PMAP (A–D) -> violet TX packet + FX. Both unused by CPU (PINS/
     // SOUL/BON1/BON2). BLUD A/B/C -> softnet Tesla-coil lightning (MT_DP_NETARC): A/B a
     // small flickering bolt, C the tall branchy bolt fired at very high saturation. Blood
-    // is never spawned in a combat-free lab, so the frames are free.
-    spriteReplacements: ["PINVA0", "PINVB0", "PINVC0", "PINVD0", "PMAPA0", "PMAPB0", "PMAPC0", "PMAPD0", "BLUDA0", "BLUDB0", "BLUDC0"],
+    // is never spawned in a combat-free lab, so the frames are free. BFE1 D/E -> socket-lock
+    // travelling-current bead (MT_DP_NETCAP; A/B/C are the memory-fault SPRK spray, D/E free).
+    // COLU A -> the authored capacitor-tower prop (MT_DP_NETCAPTWR); the lab places no stock
+    // COLU things, so overriding it is safe.
+    spriteReplacements: ["PINVA0", "PINVB0", "PINVC0", "PINVD0", "PMAPA0", "PMAPB0", "PMAPC0", "PMAPD0", "BLUDA0", "BLUDB0", "BLUDC0", "BFE1D0", "BFE1E0", "COLUA0"],
   },
 };
 

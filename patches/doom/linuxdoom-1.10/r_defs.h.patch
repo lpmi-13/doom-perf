@@ -1,0 +1,28 @@
+# Doom Perf engine patch: r_defs.h
+#
+# Doom Perf change to r_defs.h: raise MAXDRAWSEGS so the resource wings' dense
+# single-view wall geometry (esp. the network substation hall) renders fully
+# rather than silently dropping segs past the vanilla 256 (HOM). Companion to
+# the MAXVISPLANES / MAXOPENINGS bumps in r_plane.c.patch.
+#
+# Order-independent: this is the only Doom Perf patch that touches r_defs.h.
+# Regenerate by diffing a clean tree against the staged build tree;
+# see scripts/build-doom-wasm.sh.
+
+--- a/r_defs.h
++++ b/r_defs.h
+@@ -52,7 +52,13 @@
+ #define SIL_TOP			2
+ #define SIL_BOTH		3
+ 
+-#define MAXDRAWSEGS		256
++// Doom Perf: raised 4x from the vanilla 256. The resource wings put a lot of
++// wall geometry in a single view (the network hall's segmented bus channels,
++// catwalk stairs, and the many small instrument-bay sectors). Vanilla silently
++// drops segs past MAXDRAWSEGS (R_StoreWallRange returns early), so an overflow
++// shows as HOM / missing walls rather than a crash; raising it keeps the dense
++// bay views rendering fully now that the visplane ceiling no longer caps them.
++#define MAXDRAWSEGS		1024
+ 
+ 
+ 
