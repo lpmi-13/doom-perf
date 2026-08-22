@@ -1012,7 +1012,7 @@
 +// (enqueue-in upstream, dequeue-out downstream). Geometry, WORLD units (west wing: local
 +// (u,v) -> world (-v,u)); mirrored from network-wing.mjs netQdiscWorld -- the centre + axis
 +// MUST stay locked or the shaders read as drifting with the camera.
-+#define DOOMPERF_NET_QDISC_CX		(-1792)	// world x = -QD_VC (disc v-centre 1792)
++#define DOOMPERF_NET_QDISC_CX		(-2592)	// world x = -QD_VC (disc v-centre 2592)
 +#define DOOMPERF_NET_QDISC_CY		456	// world y = QD_DISC_CU (disc u-centre / flow axis)
 +#define DOOMPERF_NET_QDISC_OUTER	72	// disc radius (== QD_DISC_R)
 +#define DOOMPERF_NET_QDISC_INNER	8	// small centre hub -> a clean pie origin

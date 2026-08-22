@@ -408,6 +408,36 @@ const buildSignalPatch = ({ redLit }) => {
 };
 
 
+// ===== TRAIN-TUNNEL cast-iron LINER wall (DPNTUN): the dark segmented lining of the tube tunnel
+// at the switchyard head -- horizontal ring FLANGES (the bolted cast-iron rings a tube tunnel is
+// built from) every 32px, vertical SEGMENT seams every 64px, and a bolt head at each crossing.
+// Near-black so the bore reads as receding into the dark; 128x128 tiles flush both ways so a tall
+// headwall or a long side wall repeats the rings cleanly. [[doom-texture-power-of-two]]
+const buildTunnelLinerPatch = () => {
+  const W = 128, H = 128;
+  const px = new Uint8Array(W * H).fill(110); // (39,39,39) near-black liner base
+  const put = (x, y, c) => { if (x >= 0 && x < W && y >= 0 && y < H) px[y * W + x] = c; };
+  const rect = (x0, y0, x1, y1, c) => { for (let y = y0; y < y1; y += 1) for (let x = x0; x < x1; x += 1) put(x, y, c); };
+  // Cast-iron ring flanges: a recessed dark groove, a steel flange face, a thin highlight lip.
+  for (let ry = 0; ry < H; ry += 32) {
+    rect(0, ry, W, ry + 6, 6);        // (19,19,19) recessed groove above the flange
+    rect(0, ry + 6, W, ry + 12, 105); // dark-steel flange face
+    rect(0, ry + 10, W, ry + 11, 99); // steel highlight lip
+  }
+  // Vertical segment seams (bolted joints between lining rings).
+  for (let cx = 0; cx < W; cx += 64) {
+    rect(cx, 0, cx + 3, H, 6);
+    for (let y = 0; y < H; y += 1) put(cx + 3, y, 105);
+  }
+  // Bolt heads at each flange/seam crossing: a bright steel stud.
+  for (let ry = 8; ry < H; ry += 32) {
+    for (let cx = 12; cx < W; cx += 32) {
+      put(cx, ry, 79); put(cx + 1, ry, 80); put(cx, ry + 1, 80);
+    }
+  }
+  return buildPatch(px, W, H);
+};
+
 // Bus-bar bed flats: a DEEP BLUE conductor bed with lane identity kept in a single
 // bright ENERGISED RAIL stripe (RX cyan, TX violet). The engine tempers the BED colour
 // with the stage's live queue fill -- deep blue (cool) -> electric blue -> white-hot blue
@@ -514,20 +544,74 @@ const LANEHW = (MEDHW + POOLHW) / 2; // 68 -> |world y| of each lane (bus centre
 const ALCHW = 504; //    ss-census alcove bay deep wall (kept 184 deep past the wider outer wall)
 const ALC_RECESS = 16;
 
-// ===== Depth boundaries (local v). Long flat stages (512) joined by compact catwalk /
-// transformer transitions (128). Mirrors the engine's DoomPerf_NET_* region/spawn constants.
+// ===== Depth boundaries (local v). Flat catwalk stages (832) joined by stair / transformer
+// transitions (448). The stairs carry a deep descent -- each stage drops 168 (see F1/F2 below)
+// at a 12-rise / 32-run step angle, so the stair RUN is 168 * 32/12 = 448. The drop was trimmed
+// ~10% (was 192) for a slightly shallower, shorter hall; keeping the SAME step angle pulled the
+// run in with it, and both TRANS and LVL_LEN are on the 64-grid (448 = 7*64, run = whole steps)
+// so the floor inscriptions stay aligned. The terminal ALCOVES stay a fixed width (BAY_HW) centred
+// on each stage. Mirrors the engine's DoomPerf_NET_* region/spawn constants; every stage-derived
+// world coord below (V AND Z) is duplicated in p_tick.c / r_draw.c and MUST stay in sync (the
+// RING_PITCH discipline).
 const V_ENTRY = 704, V_FOYER = 896;
-const LVL_LEN = 512, TRANS = 128, GATE_D = 16;
-const C0 = V_FOYER + LVL_LEN; //       1408  transformer 0 (socket -> kernel)
-const C1 = C0 + TRANS + LVL_LEN; //    2048  transformer 1 (kernel -> ring)
-const V_L2END = C1 + TRANS + LVL_LEN;//2688  ring bus end (final step-down -> switchyard head)
-const V_PLAZA = V_L2END + 112; //      2800  switchyard-head front edge
-const V_TERM_WALL = V_PLAZA + 16; //   2816  back wall: IFACE DEV screen
+const LVL_LEN = 832, TRANS = 448, GATE_D = 16;
+const C0 = V_FOYER + LVL_LEN; //       1728  transformer 0 (socket -> kernel)
+const C1 = C0 + TRANS + LVL_LEN; //    3008  transformer 1 (kernel -> ring)
+const V_L2END = C1 + TRANS + LVL_LEN;//4288  ring bus end (final step-down -> switchyard head)
+const V_PLAZA = V_L2END + 112; //      4400  switchyard-head front edge
+const V_TERM_WALL = V_PLAZA + 16; //   4416  portal plane (old back wall) -> now the tunnel mouth
+// Terminal-ALCOVE half-width in v: every side instrument bay (socket capacitor / send battery /
+// ring turbine-dynamo / kernel-TX qdisc pit / kernel-RX coil) is held to this fixed 512-wide
+// window centred on its stage's v-midpoint (vc), regardless of how long the stage is. As the
+// stages lengthened this stayed put, so the extra length is plain descending catwalk before and
+// after each bay -- "keep the alcoves the same width" while the catwalks grow. 256 == the ORIGINAL
+// half-stage, so the bays are byte-for-byte the size they were.
+const BAY_HW = 256;
 
-// ===== Walk floors (local z): 0 / -96 / -192, a deep descent. The bus drops the full
-// 96 through the STEP-DOWN TRANSFORMER at each stage; the catwalks take a 4-step stair.
-const F0 = 0, F1 = -96, F2 = -192;
-const STEP_DROP = 24; //   catwalk staircase riser
+// ===== TRAIN TUNNEL at the switchyard head (the WIRE beyond the host). The hall opens onto a
+// massive tube-style tunnel: a raised STATION PLATFORM either side of a SUNKEN TRACK BED that
+// carries the two packet lanes head-on through an arched PORTAL into a long dark BORE that
+// narrows, lowers and darkens to a vanishing point. TX orbs stream INTO the bore and shrink into
+// the black (departing to the wire); RX orbs emerge FROM it (arriving). The player is railed off
+// the track bed (blockEdge) -- looks down the tunnel, can't walk in -- while the NOCLIP orbs ride
+// through freely (the same see-through-but-impassable trick the bus troughs use). The orb
+// spawn/exit X in p_tick.c (DOOMPERF_NET_RX_SPAWN_X / _TX_EXIT_X = -3440) sits deep in the
+// near-black bore and MUST stay inside V_BORE_END below (RING_PITCH discipline).
+const BED_Z = -384;              // sunken track-bed floor: 48 below F2 (-336) platform -> a mind-the-gap drop
+const BEDHW = POOLHW;            // 112: track-bed half-width (the two lanes + margin, == bus outer edge)
+const V_PORTAL = V_TERM_WALL;    // 4416: portal plane -- the arched tunnel mouth
+const V_ARCH = V_PORTAL + 24;    // 4440: stepped-arch headwall ring depth
+// Stepped horseshoe ARCH across the mouth: u-columns with a RAISED-CENTRE ceiling profile, so the
+// upper texture on the portal line reads as an arch cut into the headwall (tall centre, low sides).
+// The whole ceiling profile was dropped 160 (from 96/56/8) to make the mouth SHORTER -- a lower,
+// wider opening that reads more like an external ethernet port -- keeping the same horseshoe
+// silhouette, just brought down. The bore rings drop the same 160 so the ceiling never steps back
+// UP as you look into the tunnel; they still recede (each lower than the last) into the dark.
+const archCols = [
+  { u1: -112, u2: -72, ceil: -152 },
+  { u1: -72, u2: -32, ceil: -104 },
+  { u1: -32, u2: 32, ceil: -64 },
+  { u1: 32, u2: 72, ceil: -104 },
+  { u1: 72, u2: 112, ceil: -152 },
+];
+// Three receding BORE rings -- each narrower + lower + darker for a forced-perspective vanish.
+// hw stays > the lane |u|=68 (LANEHW) so the NOCLIP orbs never clip the narrowing walls.
+const boreRings = [
+  { id: "bore0", v1: V_ARCH, v2: V_ARCH + 260, hw: 112, ceil: -64, light: 84 },
+  { id: "bore1", v1: V_ARCH + 260, v2: V_ARCH + 500, hw: 96, ceil: -88, light: 48 },
+  { id: "bore2", v1: V_ARCH + 500, v2: V_ARCH + 700, hw: 80, ceil: -112, light: 16 },
+];
+const V_BORE_END = V_ARCH + 700; // 5140: bore end cap (deep black); orbs fade at x=-5040 just short
+const TUNNEL_WALL = tex("TUN");  // authored cast-iron tunnel-liner wall texture (DPNTUN)
+
+// ===== Walk floors (local z): 0 / -168 / -336, a deep descent. The bus drops the full
+// 168 through the STEP-DOWN TRANSFORMER at each stage; the catwalks take a 14-step stair.
+// Each stage's drop was trimmed ~10% (was 192) for a slightly shallower, shorter hall, at the
+// SAME step angle -- so two steps came off (16 -> 14), each riser still STEP_DROP over a 32 run.
+// STAIR_STEPS * STEP_DROP must equal the walk drop (F1-F0 = 168); 14*32 run = 448 = TRANS.
+const F0 = 0, F1 = -168, F2 = -336;
+const STAIR_STEPS = 14; // steps per catwalk staircase (was 16; same 12/32 step angle, ~10% less drop)
+const STEP_DROP = 12; //   catwalk staircase riser (unchanged -> 14*12 = 168 total, same grade)
 const POOL_EMPTY = 64; //  bus floor below walk when drained (a deep channel)
 const POOL_FULL = 32; //   bus floor below walk when brimming (stays below the low spine top)
 const ORB_RIDE = -16; //   orb ride-height RELATIVE to walk: down IN the bus, above the spine top (mirrored in p_tick.c)
@@ -553,10 +637,10 @@ const SIG_H = 96; //     signal-head height above the catwalk (<=128 -> no verti
 // ===== Socket-lock CAPACITOR BANKS (level 0): one bay off each level-0 catwalk (RX/RECV-Q
 // left, TX/SEND-Q right), carved into the outer wall like the coil bay, standing TWO authored
 // substation CAPACITOR TOWERS (MT_DP_NETCAPTWR props) that flank a clear central walkway to
-// the socket terminal on the bay's deep wall. The two towers sit at local (u=+/-412, v=1002)
-// and (u=+/-412, v=1302), so at vc=1152 the walk between them stays open. The live effect is
+// the socket terminal on the bay's deep wall. The two towers sit at local (u=+/-412, v=1162)
+// and (u=+/-412, v=1462), so at vc=1312 the walk between them stays open. The live effect is
 // the TRAVELLING BUS CURRENT (p_tick.c, RING_PITCH discipline): a bead runs along the wire
-// between the two tower tops -- world (-v, u) puts the towers at world x=-1002/-1302, world y
+// between the two tower tops -- world (-v, u) puts the towers at world x=-1162/-1462, world y
 // +/-384 (face-front, so the bead reads in front of them), at TOWER top z. Bay floor glows
 // with fill (CAP_BAY_TAG). No gauge, no up-the-can crackle.
 const CAP_COL_C = 412; //   |u| of the two towers (mid-bay, matches the coil bay depth)
@@ -618,7 +702,7 @@ export const networkFeeder = {
 // margins) so the player can circle the display. The disc + line WORLD centres below are
 // mirrored in r_draw.c's NET_QDISC_* / NET_FLOW_* #defines and MUST stay in sync (RING_PITCH
 // discipline) or the shader reads as drifting with the camera ([[platter-animation-radial]]).
-const QD_VC = (C0 + TRANS + C1) / 2;   // 1792: level-1 bay v-centre (== coilTermVC)
+const QD_VC = (C0 + TRANS + C1) / 2;   // 2592: level-1 bay v-centre (== coilTermVC)
 const QD_DEEP = 600;                   // bay deep wall (terminal): DEEPER than other bays' ALCHW
 //                                        so a wide walkway rings the pit (catwalk opening stays 320)
 const QD_PIT_U1 = 384;                 // pit near edge -> a 64-wide NEAR walkway u[320,384]
@@ -640,7 +724,7 @@ const QD_FLOW_LIGHT = ids.lights[0] + 3;   // 127
 // The disc CENTRE + flow-line axis in WORLD coords (west wing: local (u,v) -> world (-v,u)).
 // Mirrored in r_draw.c: NET_QDISC_CX/CY/OUTER, NET_FLOW_CY.
 export const netQdiscWorld = {
-  cx: -QD_VC,        // -1792 (world x = -v at the disc centre)
+  cx: -QD_VC,        // -2592 (world x = -v at the disc centre)
   cy: QD_DISC_CU,    //   456 (world y = u at the disc centre / flow-line axis)
   outer: QD_DISC_R,  //    72
 };
@@ -838,8 +922,8 @@ const build = (ctx) => {
   // stepped down through its transformer -- so the current drops while the player steps
   // down. The grated treads (GANTRY_RISER via `hall`) read as a maintenance gantry.
   const gantryStair = (s) => {
-    const stepV = (s.v2 - s.v1) / 4;
-    for (let k = 0; k < 4; k += 1) {
+    const stepV = (s.v2 - s.v1) / STAIR_STEPS;
+    for (let k = 0; k < STAIR_STEPS; k += 1) {
       const floor = s.wTop - (k + 1) * STEP_DROP;
       const ceiling = HALL_CEIL;
       const sv1 = s.v1 + k * stepV, sv2 = s.v1 + (k + 1) * stepV;
@@ -867,11 +951,12 @@ const build = (ctx) => {
   const socketCapBay = (side, lane, sc) => {
     const lvl = levels[0];
     const vc = Math.round((lvl.sv1 + lvl.cv2) / 2);
+    const bv1 = vc - BAY_HW, bv2 = vc + BAY_HW; // fixed 512-wide alcove window (plain catwalk outside)
     const sgn = side === "left" ? -1 : 1;
     const inner = sgn * EDGEHW; //  catwalk-side opening (old outer wall)
     const outer = sgn * ALCHW; //   deep wall
     // Open bay floor (front approach + deep, one sector), tagged for the fill charge glow.
-    areaRect(direction, `cap-${side}-floor`, uv(outer, inner, lvl.sv1, lvl.cv2), {
+    areaRect(direction, `cap-${side}-floor`, uv(outer, inner, bv1, bv2), {
       ...intake, kind: "net-alcove", floor: F0, ceiling: HALL_CEIL, light: 150, tag: CAP_BAY_TAG + lane,
     });
     // Two CAPACITOR towers at (u=+/-412, v = vc +/- CAP_SPREAD), flanking the walkway (recv only;
@@ -898,10 +983,11 @@ const build = (ctx) => {
   const ringInstrumentBay = (side, lane, propEdnum, sc) => {
     const lvl = levels[2];
     const vc = Math.round((lvl.sv1 + lvl.cv2) / 2);
+    const bv1 = vc - BAY_HW, bv2 = vc + BAY_HW; // fixed 512-wide alcove window (plain catwalk outside)
     const sgn = side === "left" ? -1 : 1;
     const inner = sgn * EDGEHW; //  catwalk-side opening
     const outer = sgn * ALCHW; //   deep wall
-    areaRect(direction, `ring-${side}-floor`, uv(outer, inner, lvl.sv1, lvl.cv2), {
+    areaRect(direction, `ring-${side}-floor`, uv(outer, inner, bv1, bv2), {
       ...intake, kind: "net-alcove", floor: F2, ceiling: HALL_CEIL, light: 150, tag: RING_BAY_TAG + lane,
     });
     addAreaThing(direction, propEdnum, sgn * CAP_COL_C, vc - CAP_SPREAD);
@@ -926,16 +1012,17 @@ const build = (ctx) => {
   const batteryBay = (side, sc) => {
     const lvl = levels[0];
     const vc = Math.round((lvl.sv1 + lvl.cv2) / 2);
+    const bv1 = vc - BAY_HW, bv2 = vc + BAY_HW; // fixed 512-wide alcove window (plain catwalk outside)
     const sgn = side === "left" ? -1 : 1;
     const uEdge = sgn * EDGEHW, uDeep = sgn * ALCHW;            // catwalk opening / deep wall
     const uColLo = sgn * (CAP_COL_C - BATT_HW), uColHi = sgn * (CAP_COL_C + BATT_HW); // pillar u-band
     const floorOpt = { ...intake, kind: "net-alcove", floor: F0, ceiling: HALL_CEIL, light: 150, tag: CAP_BAY_TAG + 1 };
     const vcols = [vc - CAP_SPREAD, vc + CAP_SPREAD];
-    // Front (catwalk-side) + deep floor bands run the full stage depth.
-    areaRect(direction, `batt-${side}-front`, uv(uEdge, uColLo, lvl.sv1, lvl.cv2), floorOpt);
-    areaRect(direction, `batt-${side}-deep`, uv(uColHi, uDeep, lvl.sv1, lvl.cv2), floorOpt);
+    // Front (catwalk-side) + deep floor bands run the alcove window depth.
+    areaRect(direction, `batt-${side}-front`, uv(uEdge, uColLo, bv1, bv2), floorOpt);
+    areaRect(direction, `batt-${side}-deep`, uv(uColHi, uDeep, bv1, bv2), floorOpt);
     // Middle u-band tiled in v: floor gap, pillar, floor gap, pillar, floor gap.
-    [[lvl.sv1, vcols[0] - BATT_HW], [vcols[0] + BATT_HW, vcols[1] - BATT_HW], [vcols[1] + BATT_HW, lvl.cv2]]
+    [[bv1, vcols[0] - BATT_HW], [vcols[0] + BATT_HW, vcols[1] - BATT_HW], [vcols[1] + BATT_HW, bv2]]
       .forEach(([v1, v2], k) => areaRect(direction, `batt-${side}-gap${k}`, uv(uColLo, uColHi, v1, v2), floorOpt));
     // Each ~1/3-height cell-column BLOCK (floor=BATT_H raised, ceiling=HALL_CEIL, OPEN AIR above so
     // the player sees the top) wears the segmented charge gauge on its perimeter face (762 = red +,
@@ -992,21 +1079,22 @@ const build = (ctx) => {
     const lvl = levels[1];
     const sgn = side === "left" ? -1 : 1;      // "right" here (kernel-TX), kept general
     const vc = QD_VC;
+    const bv1 = vc - BAY_HW, bv2 = vc + BAY_HW; // fixed 512-wide alcove window (plain catwalk outside)
     const uOpen = sgn * EDGEHW;                 // 320: catwalk-side opening (bay mouth)
     const uNear = sgn * QD_PIT_U1;              // 384: pit near edge / near-walkway rail
     const uFar = sgn * QD_PIT_U2;               // 528: pit far edge / deep-walkway rail
     const uDeep = sgn * QD_DEEP;                // 600: deep wall (terminal) -- deeper than other bays
-    const inflowV1 = vc - QD_DISC_R - QD_FLOW_LEN; // 1624
-    const discV1 = vc - QD_DISC_R;             // 1720
-    const discV2 = vc + QD_DISC_R;             // 1864
-    const outflowV2 = vc + QD_DISC_R + QD_FLOW_LEN; // 1960
+    const inflowV1 = vc - QD_DISC_R - QD_FLOW_LEN; // 2520
+    const discV1 = vc - QD_DISC_R;             // 2616
+    const discV2 = vc + QD_DISC_R;             // 2760
+    const outflowV2 = vc + QD_DISC_R + QD_FLOW_LEN; // 2856
     // Walkable F1 frame RINGING the pit on all four sides: full-width front + back margins,
     // a NEAR walkway inset from the catwalk, and a DEEP walkway in front of the terminal --
     // one continuous floor the player can circle the display on. (No rail at the catwalk mouth
     // now: the pit is inset, so u=320 is an open F1->F1 step-in across the whole bay width.)
     const frameOpt = { ...intake, kind: "net-alcove", floor: F1, ceiling: HALL_CEIL, light: 150 };
-    areaRect(direction, "qdisc-front", uv(uOpen, uDeep, lvl.sv1, inflowV1), frameOpt);
-    areaRect(direction, "qdisc-back", uv(uOpen, uDeep, outflowV2, lvl.cv2), frameOpt);
+    areaRect(direction, "qdisc-front", uv(uOpen, uDeep, bv1, inflowV1), frameOpt);
+    areaRect(direction, "qdisc-back", uv(uOpen, uDeep, outflowV2, bv2), frameOpt);
     areaRect(direction, "qdisc-nearwalk", uv(uOpen, uNear, inflowV1, outflowV2), frameOpt);
     areaRect(direction, "qdisc-deepwalk", uv(uFar, uDeep, inflowV1, outflowV2), frameOpt);
     // Sunken, RAILED display pit (blockEdge): dark ground flat so the FULLBRIGHT disc/pulses
@@ -1028,7 +1116,7 @@ const build = (ctx) => {
     });
     // "QDISC DEPTH" placard on the bay's FRONT end wall (low v), swapped to "QDISC UNKNOWN"
     // by DoomPerf_UpdateNetQdiscCap when tc's backlog is unreadable (mirrors coil-label-squeeze).
-    areaRect(direction, "qdisc-placard", uv(uOpen, uDeep, lvl.sv1 - ALC_RECESS, lvl.sv1), {
+    areaRect(direction, "qdisc-placard", uv(uOpen, uDeep, bv1 - ALC_RECESS, bv1), {
       ...hall, kind: "net-sign", floor: F1, ceiling: F1 + wallSignSize.height, light: 200,
       labelSide: frontWall, labelTexture: qdiscPlacards.depth.texture, labelWidth: SIGN_W,
     });
@@ -1048,15 +1136,20 @@ const build = (ctx) => {
   // RING_PITCH discipline). The rods are physical geometry; the labels sit on the deep wall.
   // The walk floor is TILED around the two rod footprints (the builder forbids overlaps).
   const ROD_U1 = -414, ROD_U2 = -386, RHW = 14; // electrode footprint: thin (28) rod
-  const rodV = [1664, 1920];                     // squeeze / drop electrode v-centres
+  const coilVc = Math.round((levels[1].sv1 + levels[1].cv2) / 2); // 2592: kernel stage v-midpoint
+  const coilBv1 = coilVc - BAY_HW, coilBv2 = coilVc + BAY_HW;      // fixed 512-wide alcove window
+  const rodV = [coilVc - 128, coilVc + 128];     // squeeze / drop electrode v-centres (coilVc +/-128; = -coil_x in p_tick.c)
   const ROD_TOP = F1 + 120;                      // tip height = 24 map units (== p_tick COIL_TOPZ)
-  const bayMat = { ...conduit, kind: "net-alcove", floor: F1, ceiling: HALL_CEIL, light: 150 };
-  areaRect(direction, "coil-bay-deep", { u1: -ALCHW, v1: levels[1].sv1, u2: ROD_U1, v2: levels[1].cv2 }, bayMat);
-  areaRect(direction, "coil-bay-front", { u1: ROD_U2, v1: levels[1].sv1, u2: -EDGEHW, v2: levels[1].cv2 }, bayMat);
+  // Bay floor/walls off `intake` (base COMPTILE wall) so the walls flanking the softnet console
+  // match the other five stage bays (all built from `intake`); only the electrode rods keep the
+  // conductor accent below. (Was `conduit`/SILVER1, which made this bay the odd one out.)
+  const bayMat = { ...intake, kind: "net-alcove", floor: F1, ceiling: HALL_CEIL, light: 150 };
+  areaRect(direction, "coil-bay-deep", { u1: -ALCHW, v1: coilBv1, u2: ROD_U1, v2: coilBv2 }, bayMat);
+  areaRect(direction, "coil-bay-front", { u1: ROD_U2, v1: coilBv1, u2: -EDGEHW, v2: coilBv2 }, bayMat);
   [
-    [levels[1].sv1, rodV[0] - RHW],
+    [coilBv1, rodV[0] - RHW],
     [rodV[0] + RHW, rodV[1] - RHW],
-    [rodV[1] + RHW, levels[1].cv2],
+    [rodV[1] + RHW, coilBv2],
   ].forEach(([v1, v2], k) => {
     areaRect(direction, `coil-bay-mid${k}`, { u1: ROD_U1, v1, u2: ROD_U2, v2 }, bayMat);
   });
@@ -1072,7 +1165,7 @@ const build = (ctx) => {
   // control-panel console showing the command that confirms this saturation + its live
   // output (see terminalOverlay formatNetworkSoftnet). Sits at the rods' v-midpoint, on
   // the deep wall behind them, so it reads as the readout the two coils crackle from.
-  const coilTermVC = (rodV[0] + rodV[1]) / 2; // 1792, between the rods
+  const coilTermVC = (rodV[0] + rodV[1]) / 2; // 2592 (== coilVc), between the rods
   areaRect(direction, "coil-terminal", { u1: -ALCHW - ALC_RECESS, v1: coilTermVC - 96, u2: -ALCHW, v2: coilTermVC + 96 }, {
     ...conduit,
     kind: "terminal",
@@ -1087,31 +1180,52 @@ const build = (ctx) => {
   // Electrode labels on the bay's two SIDE walls (orthogonal to the terminal): a shallow
   // recess in each end wall, its back face carrying the name of the rod on that side.
   // Left end (v = stage start, screen-left) = squeeze; right end = backlog drop.
-  areaRect(direction, "coil-label-squeeze", { u1: -ALCHW, v1: levels[1].sv1 - ALC_RECESS, u2: -EDGEHW, v2: levels[1].sv1 }, {
+  areaRect(direction, "coil-label-squeeze", { u1: -ALCHW, v1: coilBv1 - ALC_RECESS, u2: -EDGEHW, v2: coilBv1 }, {
     ...hall, kind: "net-sign", floor: F1, ceiling: F1 + wallSignSize.height, light: 200,
     labelSide: frontWall, labelTexture: coilWallLabels[0].texture, labelWidth: SIGN_W,
   });
-  areaRect(direction, "coil-label-backlog", { u1: -ALCHW, v1: levels[1].cv2, u2: -EDGEHW, v2: levels[1].cv2 + ALC_RECESS }, {
+  areaRect(direction, "coil-label-backlog", { u1: -ALCHW, v1: coilBv2, u2: -EDGEHW, v2: coilBv2 + ALC_RECESS }, {
     ...hall, kind: "net-sign", floor: F1, ceiling: F1 + wallSignSize.height, light: 200,
     labelSide: backWall, labelTexture: coilWallLabels[1].texture, labelWidth: SIGN_W,
   });
 
-  // ===== Switchyard head at the wire/ring level: the back wall carries the IFACE DEV
-  // screen (the grid tie / /proc/net/dev boundary) on its control-panel riser above the
-  // deep floor.
-  areaRect(direction, "plaza", { u1: -EDGEHW, v1: V_L2END, u2: EDGEHW, v2: V_PLAZA }, {
-    ...hall, kind: "net-plaza", floor: F2, ceiling: HALL_CEIL, light: 156,
+  // ===== Switchyard head = a tube-tunnel STATION (the wire beyond the host). The hall opens onto a
+  // massive tunnel: raised PLATFORMS either side of a sunken TRACK BED that runs the two packet
+  // lanes head-on through a stepped ARCH into a long dark receding BORE. TX orbs stream into the
+  // bore and shrink into the black; RX orbs emerge from it. The player is railed off the track bed
+  // (blockEdge -- looks down the tunnel, can't walk in); the NOCLIP orbs ride through. Constants at
+  // module scope (BED_Z / BEDHW / archCols / boreRings). The sar -n DEV terminal moved to the entry
+  // box, so this back wall is free for the portal (no read-point here). [[network-trackside-signals]]
+  // The OUTSIDE of the tunnel (the headwall around the mouth + the station platform walls) wears
+  // the wing's SILVER1 accent -- the same brushed-metal wall that flanks the softnet_stat console
+  // in the coil bay -- NOT the dark cast-iron liner (that's kept for the tunnel INTERIOR only). The
+  // spandrel above the arch is an upper texture drawn by the higher-ceiling sector (the track bed),
+  // so the bed also wears the accent; the arch jambs + bore stay on the liner (darkMat).
+  const PORTAL_WALL = accent.wall; // SILVER1: matches the walls either side of the softnet terminal
+  const platMat = { ...hall, kind: "net-plaza", ceiling: HALL_CEIL, wall: PORTAL_WALL, floor: F2, light: 156 };
+  const darkMat = { ...conduit, kind: "net-tunnel", wall: TUNNEL_WALL, floor: BED_Z, floorFlat: groundFlatName, ceilingFlat: groundFlatName };
+  // Raised station PLATFORMS flanking the track bed (continue the ring catwalks at F2).
+  areaRect(direction, "tunnel-plat-l", { u1: -EDGEHW, v1: V_L2END, u2: -BEDHW, v2: V_PORTAL }, platMat);
+  areaRect(direction, "tunnel-plat-r", { u1: BEDHW, v1: V_L2END, u2: EDGEHW, v2: V_PORTAL }, platMat);
+  // Sunken TRACK BED between the platforms: blockEdge (look down over the platform lip, can't step
+  // in; the NOCLIP orbs ride through). Dark ballast floor, open to the room ceiling; its lip wears
+  // the steel bus housing so it reads as a raised platform edge. `wall` is the OUTSIDE accent so the
+  // spandrel above the arch mouth reads as headwall, not tunnel interior.
+  areaRect(direction, "tunnel-bed", { u1: -BEDHW, v1: V_L2END, u2: BEDHW, v2: V_PORTAL }, {
+    ...hall, kind: "net-plaza", floor: BED_Z, ceiling: HALL_CEIL, light: 132,
+    floorFlat: groundFlatName, wall: PORTAL_WALL, riserWall: BUS_HOUSING, blockEdge: true,
   });
-  areaRect(direction, "plaza-back-left", { u1: -EDGEHW, v1: V_PLAZA, u2: -128, v2: V_TERM_WALL }, {
-    ...hall, kind: "net-plaza", floor: F2, ceiling: HALL_CEIL, light: 146,
+  // Stepped horseshoe ARCH cut into the headwall at the portal (raised-centre ceiling profile).
+  archCols.forEach((c, k) => {
+    areaRect(direction, `tunnel-arch${k}`, { u1: c.u1, v1: V_PORTAL, u2: c.u2, v2: V_ARCH }, {
+      ...darkMat, ceiling: c.ceil, light: 96,
+    });
   });
-  areaRect(direction, "plaza-back-right", { u1: 128, v1: V_PLAZA, u2: EDGEHW, v2: V_TERM_WALL }, {
-    ...hall, kind: "net-plaza", floor: F2, ceiling: HALL_CEIL, light: 146,
-  });
-  // The per-interface (sar -n DEV) terminal lives in the entry box, so the
-  // switchyard-head back wall is now plain plaza (no read-point here).
-  areaRect(direction, "plaza-back-center", { u1: -128, v1: V_PLAZA, u2: 128, v2: V_TERM_WALL }, {
-    ...hall, kind: "net-plaza", floor: F2, ceiling: HALL_CEIL, light: 146,
+  // Receding BORE: narrower + lower + darker in three steps -> a vanishing tube the orbs fade into.
+  boreRings.forEach((r) => {
+    areaRect(direction, `tunnel-${r.id}`, { u1: -r.hw, v1: r.v1, u2: r.hw, v2: r.v2 }, {
+      ...darkMat, ceiling: r.ceil, light: r.light,
+    });
   });
 
   // ===== Wall-mounted BUS LIGHT STRIPS: narrow full-height LITEBLU pilasters recessed
@@ -1154,6 +1268,8 @@ const textures = [
   // by the engine (DoomPerf_UpdateNetworkLocks).
   { texture: signalScreens.go, patch: tex("PSGO"), width: SIGTEX_W, height: SIGTEX_H, build: () => buildSignalPatch({ redLit: false }) },
   { texture: signalScreens.stop, patch: tex("PSST"), width: SIGTEX_W, height: SIGTEX_H, build: () => buildSignalPatch({ redLit: true }) },
+  // Train-tunnel cast-iron liner wall (the switchyard-head tube tunnel).
+  { texture: TUNNEL_WALL, patch: tex("PTUN"), width: 128, height: 128, build: () => buildTunnelLinerPatch() },
 ];
 
 const flats = [
@@ -1232,9 +1348,12 @@ const terminals = ({ terminalHalfWidth }) => {
     },
     {
       // softnet_stat terminal on the kernel-RX Tesla bay deep wall, between the rods
-      // (v 1696..1888 = the rods' midpoint 1792 +/- 96; matches the coil-terminal sector).
+      // (the rods' midpoint = kernel stage vc +/- 96; matches the coil-terminal sector).
       sign: "network-softnet",
-      segments: [segment([deep, 1696], [deep, 1888])],
+      segments: (() => {
+        const kvc = Math.round((levels[1].sv1 + levels[1].cv2) / 2);
+        return [segment([deep, kvc - 96], [deep, kvc + 96])];
+      })(),
     },
     ...stationTerminals,
   ];
