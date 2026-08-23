@@ -359,10 +359,12 @@ const formatMemoryFaults = (telemetry: TelemetrySnapshot): string => {
   const minor = Math.max(0, rate(m.minorFaultsPerSecond));
   const major = Math.max(0, rate(m.majorFaultsPerSecond));
   const lines: string[] = [];
-  // A labelled gauge row: 13-wide label, bar, then a right-aligned value+unit column
-  // so the trailing notes line up regardless of how many digits the value has.
+  // A labelled gauge row: 14-wide label, bar, then a right-aligned value+unit column
+  // so the trailing notes line up regardless of how many digits the value has. The
+  // field is 14 (not 13) so the widest label, "reclaim stall", still keeps a space
+  // before its bar rather than butting straight against the bracket.
   const gauge = (label: string, barStr: string, value: string, note = ""): string =>
-    `${label.padEnd(13)}${barStr} ${padStart(value, 8)}${note ? `   ${note}` : ""}`;
+    `${label.padEnd(14)}${barStr} ${padStart(value, 8)}${note ? `   ${note}` : ""}`;
   // The real `sar -B` table, not just its two fault columns: the reclaim side
   // (pgscank/pgscand/pgsteal/%vmeff) belongs beside the faults because they are two
   // halves of one loop — reclaim frees pages, faults bring them back. Direct scanning
@@ -537,8 +539,12 @@ const formatStorageIops = (telemetry: TelemetrySnapshot): string => {
   const scale = Math.max(1, ...devices.map((d) => rate(d.iops)));
   const rows = devices.slice(0, 5); // top-5, matching the five rain gauges
   rows.forEach((d) => {
+    // Clamp the name into the 10-col Device field (dm/mapper/multipath names can
+    // run long) so a wide name can't shove the bar out of alignment with the rows
+    // below it — same truncation the RSS terminal uses for COMMAND.
+    const name = d.name.length > 10 ? `${d.name.slice(0, 7)}...` : d.name;
     lines.push(
-      `${padStart(d.name, 10)}  ${bar(rate(d.iops) / scale)} ${padStart(String(Math.round(rate(d.iops))), 7)}  ${(clamp(d.utilization) * 100).toFixed(0)}%`
+      `${padStart(name, 10)}  ${bar(rate(d.iops) / scale)} ${padStart(String(Math.round(rate(d.iops))), 7)}  ${(clamp(d.utilization) * 100).toFixed(0)}%`
     );
   });
   // Pin the block height so the summary below doesn't jump as devices come and go.
@@ -895,7 +901,11 @@ const formatNetworkNicTx = (telemetry: TelemetrySnapshot): string => {
   // each number sits under its header. errs/colls/carrier aren't sampled per-direction
   // (0 on a healthy link); drop and fifo are the live saturation signals.
   const columns: [string, number][] = [["Iface", 10], ["errs", 8], ["drop", 8], ["fifo", 8], ["colls", 8], ["carrier", 9]];
-  const cells = [iface, "0", String(txDrops), String(txFifo), "0", "0"];
+  // Clamp the iface into its 10-col field: bond/vlan/bridge names (e.g. a docker
+  // br-<hash>) overflow it and shift every column out from under its header. (The
+  // NIC-RX terminal sidesteps this by keeping the iface in the free-text ip header.)
+  const ifaceCell = iface.length > 10 ? `${iface.slice(0, 7)}...` : iface;
+  const cells = [ifaceCell, "0", String(txDrops), String(txFifo), "0", "0"];
   lines.push(columns.map(([label, width]) => padStart(label, width)).join(""));
   lines.push(columns.map(([, width], i) => padStart(cells[i], width)).join(""));
   lines.push("");
