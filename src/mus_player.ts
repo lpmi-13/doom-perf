@@ -3,14 +3,25 @@
  * Loads pre-converted MIDI files from /music/ and plays them with Tone.js synthesizers.
  */
 
-import * as Tone from "tone";
+import type * as ToneNS from "tone";
 import { Midi } from "@tonejs/midi";
+
+// Tone.js constructs its global AudioContext the instant its module is
+// evaluated. Loading it statically at page load therefore trips the browser's
+// autoplay policy ("The AudioContext was not allowed to start...") before any
+// user gesture. Import it lazily instead, on the first play() call, which only
+// happens after the user has interacted -- so the context is created inside a
+// gesture and no warning is emitted. esbuild keeps the dynamically-imported
+// module in the same bundle but defers running its body until this fires.
+type ToneModule = typeof import("tone");
+let tonePromise: Promise<ToneModule> | null = null;
+const loadTone = (): Promise<ToneModule> => (tonePromise ??= import("tone"));
 
 // GM instrument categories for choosing synth types
 const GUITAR_PROGRAMS = new Set([24, 25, 26, 27, 28, 29, 30, 31]);
 const BASS_PROGRAMS = new Set([32, 33, 34, 35, 36, 37, 38, 39]);
 
-function createSynthForProgram(program: number): Tone.PolySynth {
+function createSynthForProgram(Tone: ToneModule, program: number): ToneNS.PolySynth {
   if (GUITAR_PROGRAMS.has(program)) {
     return new Tone.PolySynth({
       maxPolyphony: 6,
@@ -33,8 +44,8 @@ function createSynthForProgram(program: number): Tone.PolySynth {
 }
 
 export class MidiPlayer {
-  private synths: Tone.PolySynth[] = [];
-  private noiseSynth: Tone.NoiseSynth | null = null;
+  private synths: ToneNS.PolySynth[] = [];
+  private noiseSynth: ToneNS.NoiseSynth | null = null;
   private timeoutIds: ReturnType<typeof setTimeout>[] = [];
   private currentMidi: Midi | null = null;
   private playing = false;
@@ -58,6 +69,7 @@ export class MidiPlayer {
     this.stop();
     this.playing = true;
 
+    const Tone = await loadTone();
     await Tone.start();
     const midi = this.currentMidi;
     const startTime = Tone.now() + 0.3;
@@ -88,7 +100,7 @@ export class MidiPlayer {
       }
 
       const program = track.instrument?.number ?? 0;
-      const synth = createSynthForProgram(program);
+      const synth = createSynthForProgram(Tone, program);
       synth.volume.value = this.volume;
       synth.toDestination();
       this.synths.push(synth);
