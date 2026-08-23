@@ -482,6 +482,29 @@ const buildGroundFlat = () => {
   return lump(groundFlatName, Buffer.from(px));
 };
 
+// Authored HAZARD-CROSSING flat for the ring causeway (crossingBridge). The causeway floor used to
+// inherit the dark honeycomb catwalk grating and camouflaged into it; this makes it SALIENT -- bold
+// diagonal YELLOW/BLACK hazard chevrons (the universal "marked crossing / mind the live current"
+// cue) that pop hard against the dark grey grating and the blue hall. 16-unit period (8 yellow / 8
+// black), seamless across the 64 flat tiling. A thin darker line rides each stripe edge so the
+// chevrons keep definition once distance-shaded. [[riser-texture-and-light-rules]]
+const crossFlatName = tex("XNG");
+const buildCrossFlat = () => {
+  const size = 64;
+  const YELLOW = 231, BLACK = 0, EDGE = 163; // (255,255,0) / black / dim gold edge line
+  const px = new Uint8Array(size * size);
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
+      const band = (x + y) >> 3;        // 8-unit diagonal bands
+      const inband = (x + y) & 7;        // position within the band
+      let c = (band & 1) ? YELLOW : BLACK;
+      if (inband === 0) c = EDGE;        // dim edge line between stripes for definition
+      px[y * size + x] = c;
+    }
+  }
+  return lump(crossFlatName, Buffer.from(px));
+};
+
 // Authored BLUE service-lit ceiling flat (DPNCEIL) -- replaces freedoom's TLITE6_5, whose
 // four RED lamps were the wing's dominant warm cue. A dark charcoal panel grid (a 2x2
 // ceiling panel, seamed with a darker cross) carrying four recessed BLUE lamps, one per
@@ -567,6 +590,20 @@ const V_TERM_WALL = V_PLAZA + 16; //   4416  portal plane (old back wall) -> now
 // after each bay -- "keep the alcoves the same width" while the catwalks grow. 256 == the ORIGINAL
 // half-stage, so the bays are byte-for-byte the size they were.
 const BAY_HW = 256;
+
+// ===== RING-LEVEL CROSSING CAUSEWAY: a LOW crossing across the current channel low in the hall so
+// the player can cross RX<->TX catwalks without climbing back to the foyer. It sits in the plain
+// ring catwalk just before the NIC instrument bay (ring stage sv1=3456 .. bay mouth 3616), in a
+// GATE-FREE stretch. The feeder SPLITS the ring bus/spine over this v-span and this causeway fills
+// the gap. It is deliberately kept JUST BELOW the orb ride-height (CAUSEWAY_Z -356 < ride -352) so
+// the current flows VISIBLY over it (a low ford) and -- crucially -- does not DAM the sightline down
+// the channel: a raised walk-height deck (-336) sat above the orbs and occluded the whole sunken
+// channel behind it, so the crossing was dropped to orb level. The player steps down ~20 from the
+// catwalk (-336) onto it and back up the far side; the orbs skim ~4 units above it. No engine logic
+// (orbs simply glide through at their normal ring ride-z). World x = -v.
+const CAUSEWAY_Z = -356; //  causeway floor: 20 below the catwalk (steppable), 4 below the orb ride-z
+const BRIDGE_V1 = 3488; //   foyer-side causeway edge (world x=-3488)
+const BRIDGE_V2 = 3616; //   wire-side causeway edge  (world x=-3616, == ring bay mouth)
 
 // ===== TRAIN TUNNEL at the switchyard head (the WIRE beyond the host). The hall opens onto a
 // massive tube-style tunnel: a raised STATION PLATFORM either side of a SUNKEN TRACK BED that
@@ -844,15 +881,27 @@ const build = (ctx) => {
     const sigV1 = brink - SIG_LEN; // the bus's last SIG_LEN before the breaker becomes the signal band
     const ceiling = HALL_CEIL;
     const busOpts = (lane, flat) => ({ ...conduit, kind: "net-bus", floor: walk - POOL_EMPTY, ceiling, floorFlat: flat, light: 144, tag: POOL_TAG + level * 2 + lane, blockEdge: true, riserWall: BUS_HOUSING });
+    // The ring level's channel is SPLIT around the crossing causeway (crossingBridge, below): its
+    // bus/spine leave a gap [BRIDGE_V1, BRIDGE_V2] the low causeway fills. Other levels lay one
+    // continuous run. `layChannel` yields the sub-ranges around any gap.
+    const gap = level === 2 ? { v1: BRIDGE_V1, v2: BRIDGE_V2 } : null;
+    const layChannel = (baseId, u1, u2, va, vb, opt) => {
+      if (gap && gap.v1 > va && gap.v2 < vb) {
+        areaRect(direction, `${baseId}-a`, { u1, v1: va, u2, v2: gap.v1 }, opt);
+        areaRect(direction, `${baseId}-b`, { u1, v1: gap.v2, u2, v2: vb }, opt);
+      } else {
+        areaRect(direction, baseId, { u1, v1: va, u2, v2: vb }, opt);
+      }
+    };
     // The spine is a LOW divider (walk-24, well below the elevated catwalks and below the
     // orb ride-height, above the full charge line) so the player, standing on the raised
     // side catwalks, can see over it into BOTH buses from either side. It is `blockEdge`
     // (impassable, see-through) so it reads as a rail, not a floor to enter; its trough-
     // facing sides glow (SPINE_WALL) as the energised conductor between the two buses.
-    areaRect(direction, `${id}-spine`, { u1: -MEDHW, v1: cv1, u2: MEDHW, v2: brink }, { ...conduit, kind: "net-spine", floor: walk - 24, ceiling, light: 168, blockEdge: true, riserWall: SPINE_WALL });
+    layChannel(`${id}-spine`, -MEDHW, MEDHW, cv1, brink, { ...conduit, kind: "net-spine", floor: walk - 24, ceiling, light: 168, blockEdge: true, riserWall: SPINE_WALL });
     // Bus bars run the stage to the signal band; the trough itself carries the CURRENT.
-    areaRect(direction, `${id}-bus-rx`, { u1: -POOLHW, v1: cv1, u2: -MEDHW, v2: sigV1 }, busOpts(0, busFlatNames.rx.cool));
-    areaRect(direction, `${id}-bus-tx`, { u1: MEDHW, v1: cv1, u2: POOLHW, v2: sigV1 }, busOpts(1, busFlatNames.tx.cool));
+    layChannel(`${id}-bus-rx`, -POOLHW, -MEDHW, cv1, sigV1, busOpts(0, busFlatNames.rx.cool));
+    layChannel(`${id}-bus-tx`, MEDHW, POOLHW, cv1, sigV1, busOpts(1, busFlatNames.tx.cool));
     // Signal band (the last SIG_LEN before the breaker): the outermost SIG_DEPTH of each
     // bus rises into a trackside SIGNAL POST; the rest of the band stays trough (same fill
     // tag + rail), so the current still runs the full length under the signal.
@@ -932,10 +981,26 @@ const build = (ctx) => {
     }
   };
 
+  // ===== RING-LEVEL CROSSING CAUSEWAY: a LOW crossing across the whole channel (u[-POOLHW,POOLHW])
+  // filling the gap the ring feeder left in the bus/spine. Its floor sits at CAUSEWAY_Z (-356) --
+  // 20 below the catwalks and 4 BELOW the orb ride-z -- so the player steps down onto it to cross
+  // and the current flows VISIBLY over it (skimming ~4 units above) instead of being dammed behind a
+  // raised deck. The split bus/spine troughs either side stay `blockEdge` + see-through; the
+  // causeway's v-end risers (facing those troughs) inherit the dark bus housing so the crossing
+  // reads as the channel floor humping up into a low ford. NOT blockEdge, so the ~20 step from each
+  // catwalk is walkable. No engine involvement -- the orbs just glide through at their ring ride-z.
+  const crossingBridge = () => {
+    areaRect(direction, "net-bridge", { u1: -POOLHW, v1: BRIDGE_V1, u2: POOLHW, v2: BRIDGE_V2 }, {
+      ...hall, kind: "net-bridge", floor: CAUSEWAY_Z, ceiling: HALL_CEIL, light: 170,
+      floorFlat: crossFlatName, riserWall: BUS_HOUSING,
+    });
+  };
+
   levels.forEach(feeder);
   levels.forEach(breaker);
   levels.forEach(catwalks);
   stairs.forEach(gantryStair);
+  crossingBridge();
 
   // ===== Stage TERMINALS: every stage station is now a walk-in INSTRUMENT BAY reading from
   // its bay's deep wall (level 0 socket capacitor/battery banks, level 1 kernel-TX qdisc pit,
@@ -1278,6 +1343,7 @@ const flats = [
   ...trafLabel.flats,
   ...busFlats,
   buildCeilingFlat(),
+  buildCrossFlat(),
 ];
 
 // Packet-orb ramps (core -> rim). The core is a whiter double-spark and the rim stops
