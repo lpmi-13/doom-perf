@@ -20,7 +20,7 @@
 
 --- a/r_draw.c
 +++ b/r_draw.c
-@@ -95,6 +95,23 @@
+@@ -95,6 +95,52 @@
  // just for profiling 
  int			dccount;
  
@@ -30,6 +30,35 @@
 +// the other R_DoomPerfCpu* functions.
 +int			doomperf_cpu_column_display = 0;
 +int			doomperf_cpu_column_texture_x = 0;
++
++// Doom Perf: memory-well SHAFT depth-darkening (displays 37/38). The catwalk
++// overlooks a well that drops from z=0 to the -2048 floor; both faces the eye
++// follows down fade smoothly to black with depth so the drop reads bottomless.
++// Every DOOMPERF_ABYSS_DEPTH_UNITS map units deeper adds one darker COLORMAP
++// level, clamped at DOOMPERF_ABYSS_LEVEL_MAX (near black). ABYSS_DROP anchors the
++// two-sided abyss risers (pegged to the -2048 floor); SHAFT_CEIL anchors the
++// one-sided bookshelf shaft wall (pegged to its +768 ceiling). Both resolve to
++// "depth below the z=0 catwalk", a property of the wall surface, so the gradient
++// never swims with the player.
++#define DOOMPERF_ABYSS_DROP		2048
++#define DOOMPERF_SHAFT_CEIL		768
++#define DOOMPERF_ABYSS_DEPTH_UNITS	72
++// The interior walls (display 37) are a plain lit paneled-steel wall with NO lamps, so
++// the fade can be a real one: fullbright at the catwalk line, sinking to near-black by
++// the -2048 floor so the drop reads as a wall receding into darkness (a visible dark
++// fade). DOOMPERF_ABYSS37_UNITS = one extra COLORMAP level per this many map units of
++// depth; matched to the bookshelf wall's own depth rate (DOOMPERF_ABYSS_DEPTH_UNITS)
++// for a consistent look. (Nothing has to "stay visible" down the drop anymore.)
++#define DOOMPERF_ABYSS37_UNITS		72
++#define DOOMPERF_ABYSS_LEVEL_MAX	31
++
++// 4x4 ordered-dither (Bayer) thresholds, 0..15, for blending between the two
++// adjacent COLORMAP levels in the well-shaft fade so its 32-step ramp reads as a
++// smooth gradient with no banding line. Keyed on the wall's own texture coords, so
++// the stipple is locked to the surface and never shimmers as the player moves.
++static const int doomperf_shaft_dither[16] =
++    { 0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5 };
++
 +static byte R_DoomPerfCpuStreakPixel (int ty);
 +static byte R_DoomPerfCpuGaugePixel (int gauge, int ty);
 +static byte R_DoomPerfDiskGaugePixel (int gauge, int ty);
@@ -44,7 +73,7 @@
  //
  // A column is a vertical slice/span from a wall texture that,
  //  given the DOOM style restrictions on the view orientation,
-@@ -137,9 +154,53 @@
+@@ -137,9 +183,92 @@
      // This is as fast as it gets.
      do 
      {
@@ -86,6 +115,45 @@
 +	    // electric-blue indices so the filled rows read as live.
 +	    *dest = dc_colormap[R_DoomPerfNetBatteryPixel(doomperf_cpu_column_display - 35,
 +							  (frac>>FRACBITS)&255)];
++	else if (doomperf_cpu_column_display == 37 || doomperf_cpu_column_display == 38)
++	{
++	    // Memory-well SHAFT depth fade. `frac` is the wall's continuous texture
++	    // coordinate; with default lower-texture pegging a two-sided abyss riser
++	    // (37) reads (-ABYSS_DROP - worldZ), so depth below the z=0 catwalk is
++	    // (frac>>FRACBITS) + ABYSS_DROP; a one-sided shaft wall (38) is pegged to
++	    // its +768 ceiling, so depth is (frac>>FRACBITS) - SHAFT_CEIL.
++	    //
++	    // Display 37 (the plain lit paneled-steel interior walls the catwalk
++	    // overlooks) starts FULLBRIGHT at the catwalk line and fades PURELY by depth
++	    // -- no distance/sector term -- at DOOMPERF_ABYSS37_UNITS, sinking to near-
++	    // black by the -2048 floor so the drop reads as a wall receding into darkness.
++	    // There are no lamps to keep visible, so the fade is a real one. Display 38
++	    // (the bookshelf shaft wall) keeps its own diminished light (sector + distance)
++	    // and adds the depth term on top.
++	    //
++	    // The COLORMAP has only 32 levels, so a plain level = depth/UNITS steps a
++	    // whole shade every UNITS units -- a visible band line. Instead carry the
++	    // level at 16x precision and ORDER-DITHER between the two straddling levels
++	    // via a Bayer threshold keyed on the wall's texture coords: the ramp reads
++	    // as a smooth blend, the stipple rides the surface (no shimmer).
++	    int depth = (doomperf_cpu_column_display == 37)
++		      ? (frac>>FRACBITS) + DOOMPERF_ABYSS_DROP
++		      : (frac>>FRACBITS) - DOOMPERF_SHAFT_CEIL;
++	    int sub, level;
++	    int units = (doomperf_cpu_column_display == 37)
++		      ? DOOMPERF_ABYSS37_UNITS : DOOMPERF_ABYSS_DEPTH_UNITS;
++	    if (depth < 0) depth = 0;
++	    sub = (depth * 16) / units;				// level in 1/16ths
++	    if (doomperf_cpu_column_display == 38)
++		sub += (((int)(dc_colormap - colormaps)) >> 8) * 16;
++	    level = sub >> 4;
++	    if ((sub & 15) > doomperf_shaft_dither[
++		    (((frac>>FRACBITS) & 3) << 2) | (doomperf_cpu_column_texture_x & 3)])
++		level++;
++	    if (level < 0) level = 0;
++	    else if (level > DOOMPERF_ABYSS_LEVEL_MAX) level = DOOMPERF_ABYSS_LEVEL_MAX;
++	    *dest = colormaps[level*256 + dc_source[(frac>>FRACBITS)&127]];
++	}
 +	else if (doomperf_cpu_column_display >= 20)
 +	    *dest = dc_colormap[R_DoomPerfDiskGaugePixel(doomperf_cpu_column_display - 20,
 +							 (frac>>FRACBITS)&127)];
@@ -101,7 +169,7 @@
  	
  	dest += SCREENWIDTH; 
  	frac += fracstep;
-@@ -514,6 +575,1081 @@
+@@ -514,6 +643,1081 @@
  // just for profiling
  int			dscount;
  
@@ -1183,7 +1251,7 @@
  
  //
  // Draws the actual span.
-@@ -553,7 +1689,24 @@
+@@ -553,7 +1757,24 @@
  
  	// Lookup pixel from flat texture tile,
  	//  re-index using light/colormap.
@@ -1209,7 +1277,7 @@
  
  	// Next step in u,v.
  	xfrac += ds_xstep; 
-@@ -676,8 +1829,22 @@
+@@ -676,8 +1897,22 @@
  	spot = ((yfrac>>(16-6))&(63*64)) + ((xfrac>>16)&63);
  	// Lowres/blocky mode does it twice,
  	//  while scale is adjusted appropriately.

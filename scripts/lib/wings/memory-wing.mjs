@@ -196,6 +196,13 @@ const barrelPadFlatName = wingName("memory", "BPAD");
 const pageFlatNames = { used: wingName("memory", "USED"), cache: wingName("memory", "CACH"), free: wingName("memory", "FREE") };
 const bookshelfTexture = { texture: wingName("memory", "SHLF"), patch: wingName("memory", "PSHLF"), width: 128, height: 128 };
 const abyssWallTexture = { texture: wingName("memory", "VOID"), patch: wingName("memory", "PVOID"), width: 64, height: 128 };
+// The INTERIOR abyss wall: the structural side every catwalk / platform / pod turns
+// to the void — the sheer inner face the catwalk actually overlooks. A plain lit
+// paneled-steel wall (NO lamps); the engine depth shader (display 37, tag 690) fades
+// it to near-black with depth, so the drop reads as a wall receding into darkness — a
+// visible dark fade. See buildInteriorWallPatch. (The old dark VOID texture is kept
+// for the reclaim sluice pit, which is not depth-shaded.)
+const interiorWallTexture = { texture: wingName("memory", "IWAL"), patch: wingName("memory", "PIWL"), width: 256, height: 128 };
 const rackTexture = { texture: wingName("memory", "RACK"), patch: wingName("memory", "PRACK"), width: 128, height: 128 };
 // The fault range's RAM-gate FORCEFIELD: a see-through electric energy field (a
 // two-sided mid texture on the gate seam) the bolts pass through. See buildForcefieldPatch.
@@ -861,13 +868,51 @@ const flightFrames = {
   D: { lift: 13, span: 9, thick: 9 }, // half-shut, wings folding in
 };
 
-// Abyss wall: the riser every catwalk / platform / pod turns to the void — i.e.
-// everything the eye finds BELOW the shelves. Every colour is drawn from the
+// The INTERIOR abyss wall (buildInteriorWallPatch): a plain LIT paneled-steel shaft
+// wall — NO lamps. Worn by every catwalk / platform / pod face that drops into the
+// void (the sheer inner walls the catwalk overlooks), it is a bright riveted-steel
+// panel lattice at the top so the engine depth shader (display 37, tag 690) has a lit
+// material to carry: it darkens the whole face by depth to near-black at the -2048
+// floor, so the drop reads as a wall receding into darkness — a visible DARK FADE, no
+// fixtures. Cool steel deliberately contrasts the warm book stacks across the void.
+const buildInteriorWallPatch = () => {
+  const W = interiorWallTexture.width;   // 256
+  const H = interiorWallTexture.height;  // 128
+  const { px, rect, dot } = canvas(W, H, 90); // steel rib-lattice base (rgb 171)
+
+  // Cool-steel shades off the neutral grey ramp (80 brightest .. 111 darkest):
+  const FIELD = 100;  // recessed panel field (rgb 107)
+  const HI = 84;      // lit bevel / rib highlight (211)
+  const LO = 102;     // shaded bevel / rib shadow (91)
+  const DEEP = 108;   // rivet / deepest reveal (55)
+
+  // A 64x64 grid of recessed steel panels set into a raised rib lattice; the 8-unit
+  // ribs between panels stay at the bright base, the panels are a touch darker and
+  // bevelled (lit bottom/right, shadowed top/left) so the wall reads as built plating.
+  const P = 64;
+  for (let y = 0; y < H; y += P) for (let x = 0; x < W; x += P) {
+    rect(x + 4, y + 4, P - 8, P - 8, FIELD);           // recessed panel field
+    rect(x + 4, y + 4, P - 8, 1, LO);                  // top inner edge (shadow)
+    rect(x + 4, y + 4, 1, P - 8, LO);                  // left inner edge (shadow)
+    rect(x + 4, y + P - 5, P - 8, 1, HI);              // bottom inner edge (lit)
+    rect(x + P - 5, y + 4, 1, P - 8, HI);              // right inner edge (lit)
+  }
+  // Bevel the rib lattice itself (lit left / shadowed right, lit top / shadowed bottom).
+  for (let x = 0; x < W; x += P) { rect(x, 0, 1, H, HI); rect(x + 3, 0, 1, H, LO); }
+  for (let y = 0; y < H; y += P) { rect(0, y, W, 1, HI); rect(0, y + 3, W, 1, LO); }
+  // Rivets at the lattice intersections.
+  for (let y = 0; y < H; y += P) for (let x = 0; x < W; x += P) { rect(x + 1, y + 1, 2, 2, DEEP); dot(x + 1, y + 1, HI); }
+
+  return buildPatch(px, W, H);
+};
+
+// Abyss wall (the reclaim sluice pit backdrop): every colour is drawn from the
 // palette's darkest greys (mortar in pure black, slab faces at 8/7, a 6 catch-
 // light on each course lip), so the drop reads as shadow rather than furniture,
 // while the pilasters + running-bond courses keep it unmistakably a built wall
-// and not a hole in the world. The shaft's bookshelves are one-sided mid
-// textures and are untouched by this.
+// and not a hole in the world. NO LONGER worn by the well risers (those are the lit
+// interiorWallTexture now); this survives on the sluice pit walls, which are not
+// depth-shaded. The shaft's bookshelves are one-sided mid textures, untouched.
 const buildAbyssWallPatch = () => {
   const W = abyssWallTexture.width;
   const H = abyssWallTexture.height;
@@ -1263,7 +1308,11 @@ const build = (ctx) => {
   // `wall` stays the shelf: the well's one-sided outer wall is books top to
   // bottom. `riserWall` is what the void shows on the *other* sectors' undersides
   // — every catwalk/platform/pod edge that falls away into it.
-  const voidStyle = { ...shaft, kind: "void", floor: ABYSS, floorFlat: "FLOOR7_2", light: 112, riserWall: abyssWallTexture.texture };
+  // `lineTag: 690` marks every face bordering the well for the engine's SHAFT
+  // depth-fade shader (r_segs.c gates it: the two-sided abyss risers -> display 37,
+  // the one-sided bookshelf shaft wall -> display 38), so the drop the catwalk
+  // overlooks darkens smoothly to black with depth and reads as bottomless.
+  const voidStyle = { ...shaft, kind: "void", floor: ABYSS, floorFlat: "FLOOR7_2", light: 112, riserWall: interiorWallTexture.texture, lineTag: 690 };
   const podStyle = { ...mbase, kind: "memory-walk", floor: WALK, light: 180 };
 
   // A shallow control-panel terminal recess whose one-sided far wall is the
@@ -1469,7 +1518,10 @@ const build = (ctx) => {
   // Its floor is the abyss itself, so the drop is bottomless; `light` matches the
   // tailwater it spills from rather than the void's gloom, or the fall reads as unlit.
   const LIP_D = 32; // pit depth: how far back from the shaft wall the lip sits
-  const pitStyle = { ...voidStyle, wall: abyssWallTexture.texture, ceiling: ROOM_CEIL, light: 150, riserWall: fallTexture.texture };
+  // Opt the reclaim sluice's outflow pit out of the well depth-fade (it inherits
+  // voidStyle's lineTag otherwise): the scrolling waterfall is the swap-backlog
+  // instrument, kept at its own brightness rather than darkened into the abyss.
+  const pitStyle = { ...voidStyle, wall: abyssWallTexture.texture, ceiling: ROOM_CEIL, light: 150, riserWall: fallTexture.texture, lineTag: undefined };
 
   // Walkways (floor 0). The entrance ledge starts exactly at the catwalk's south edge
   // (SC - CWH) so that arriving down the catwalk there is nothing to step onto on the
@@ -1584,6 +1636,13 @@ const textures = [
     width: abyssWallTexture.width,
     height: abyssWallTexture.height,
     build: buildAbyssWallPatch,
+  },
+  {
+    texture: interiorWallTexture.texture,
+    patch: interiorWallTexture.patch,
+    width: interiorWallTexture.width,
+    height: interiorWallTexture.height,
+    build: buildInteriorWallPatch,
   },
   ...fallTempers.map((temper) => ({
     texture: temper.texture,
