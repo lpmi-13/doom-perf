@@ -25,7 +25,7 @@
 // there and MUST stay in sync (the RING_PITCH discipline). See [[map-builder-architecture]],
 // [[telemetry-terminal-seam]], [[wing-terminal-segment-rotation]],
 // [[pwad-sprite-override-constraint]], [[doomperf-engine-global-externs]].
-import { addWingEntrance } from "./common.mjs";
+import { addWingEntrance, localSideToWorld, rotatePoint } from "./common.mjs";
 import { reserved, wingName } from "./registry.mjs";
 import {
   terminalTextureSize,
@@ -39,27 +39,8 @@ import {
 } from "../textures.mjs";
 import { lump, buildPatch } from "../wad-bytes.mjs";
 
-// Network is fixed to the WEST cardinal wing. Local (u,v) -> world (-v,u).
-const localSideToWorld = (direction, side) => {
-  const turns = { north: 0, east: 1, south: 2, west: 3 }[direction];
-  const sides = ["top", "right", "bottom", "left"];
-  const index = sides.indexOf(side);
-  if (turns === undefined || index === -1) {
-    throw new Error(`Cannot rotate side ${side} for direction ${direction}`);
-  }
-  return sides[(index + turns) % sides.length];
-};
-
-const rotatePoint = ([u, v], direction) => {
-  switch (direction) {
-    case "north": return [u, v];
-    case "east": return [v, -u];
-    case "south": return [-u, -v];
-    case "west": return [-v, u];
-    default: throw new Error(`Unknown map direction: ${direction}`);
-  }
-};
-
+// Network is fixed to the WEST cardinal wing (local (u,v) -> world (-v,u), via
+// the shared localSideToWorld / rotatePoint in common.mjs).
 const ids = reserved.network;
 const tex = (suffix) => wingName("network", suffix);
 
@@ -649,8 +630,7 @@ const TUNNEL_WALL = tex("TUN");  // authored cast-iron tunnel-liner wall texture
 const F0 = 0, F1 = -168, F2 = -336;
 const STAIR_STEPS = 14; // steps per catwalk staircase (was 16; same 12/32 step angle, ~10% less drop)
 const STEP_DROP = 12; //   catwalk staircase riser (unchanged -> 14*12 = 168 total, same grade)
-const POOL_EMPTY = 64; //  bus floor below walk when drained (a deep channel)
-const POOL_FULL = 32; //   bus floor below walk when brimming (stays below the low spine top)
+const POOL_EMPTY = 64; //  bus floor below walk (a deep channel; the bus bed is static)
 const ORB_RIDE = -16; //   orb ride-height RELATIVE to walk: down IN the bus, above the spine top (mirrored in p_tick.c)
 const HALL_CEIL = 176; //  FLAT ceiling (absolute) for the whole hall -- it does NOT
 //                         drop with the stages, so the space grows more cavernous as

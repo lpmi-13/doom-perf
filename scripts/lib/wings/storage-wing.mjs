@@ -65,7 +65,7 @@
 // 660/661/662 + wall:gauge (NO labelSide, or lineTagFor zeroes the tag);
 // dashboard = line tag 663 on a two-sided LOWER texture. The iostat terminal
 // read-point is emitted by terminals() in WORLD coords.
-import { addWingEntrance } from "./common.mjs";
+import { addWingEntrance, localSideToWorld, ringTrap } from "./common.mjs";
 import { reserved, wingName } from "./registry.mjs";
 import {
   terminalTextureSize,
@@ -86,18 +86,9 @@ import { buildPatch } from "../wad-bytes.mjs";
 const ids = reserved.storage;
 const tex = (suffix) => wingName("storage", suffix);
 
-// labelSide / textureSide are stored in WORLD-frame sides; the wing thinks in
-// local (u,v) sides and converts. (South is a 180-degree rotation: local "top"
-// (+v, the deep/far side) -> world "bottom", local "right" (+u) -> world "left".)
-const localSideToWorld = (direction, side) => {
-  const turns = { north: 0, east: 1, south: 2, west: 3 }[direction];
-  const sides = ["top", "right", "bottom", "left"];
-  const index = sides.indexOf(side);
-  if (turns === undefined || index === -1) {
-    throw new Error(`Cannot rotate side ${side} for direction ${direction}`);
-  }
-  return sides[(index + turns) % sides.length];
-};
+// Storage is the SOUTH wing (a 180-degree rotation: local "top" (+v, the deep/far
+// side) -> world "bottom", local "right" (+u) -> world "left"), applied through
+// the shared localSideToWorld / rotatePoint in common.mjs.
 
 // Custom WAD art, all under the reserved "DPD" prefix so it can't collide with
 // the other wings' names.
@@ -308,16 +299,11 @@ const ringVerts = (R) =>
 const deckRing = ringVerts(R_DECK);
 const stepRing = ringVerts(R_STEP);
 
-// addPoly wants a CLOCKWISE loop (interior on the right). A solid loop is the CCW
-// vertex list reversed; a ring trapezoid for slice i is [innerI, innerJ, outerJ,
-// outerI] (verified clockwise for this orientation), with the modulo taken from
-// the inner ring's length so the same helper serves the 10-face step rings and the
-// 30-ray round rings.
+// addPoly wants a CLOCKWISE loop (interior on the right); a solid loop is the CCW
+// vertex list reversed. Ring trapezoids use the shared ringTrap from common.mjs
+// (its modulo is the inner ring's length, so it serves the 10-face step rings and
+// the 30-ray round rings alike).
 const solid = (loop) => loop.slice().reverse();
-const ringTrap = (inner, outer, i) => {
-  const j = (i + 1) % inner.length;
-  return [inner[i], inner[j], outer[j], outer[i]];
-};
 
 // The drum (round spindle) and disk (round platter floor) are 30-gons; the deck
 // is a round-inner -> decagonal-outer ring framing the disk inside the summit.
@@ -348,22 +334,6 @@ for (let i = 0; i < N_SIDES; i += 1) {
 const rayAngles = deckOuterPts.map(([u, v]) => Math.atan2(v - CV, u));
 const drumPts = rayAngles.map((theta) => polarPt(R_DRUM, theta));
 const diskPts = rayAngles.map((theta) => polarPt(R_PLATTER, theta));
-
-// Outward (away from the climb) chamber off an outer face edge a->b: a quad
-// [a, b, b+o, a+o] where o is the rightward normal of a->b scaled by depth. For a
-// step's outer edge authored a=stepRing[i] -> b=stepRing[i+1], "right" points away
-// from the centre, so this extrudes the hall outward.
-const len = (a, b) => Math.hypot(b[0] - a[0], b[1] - a[1]);
-const unit = (a, b) => {
-  const l = len(a, b) || 1;
-  return [(b[0] - a[0]) / l, (b[1] - a[1]) / l];
-};
-const add = (p, [dx, dy], s) => [Math.round(p[0] + dx * s), Math.round(p[1] + dy * s)];
-const extrude = (a, b, depth) => {
-  const [ux, uy] = unit(a, b);
-  const out = [uy, -ux]; // right normal of a->b
-  return [a, b, add(b, out, depth), add(a, out, depth)];
-};
 
 // ===== Heights =====
 // RISE is Doom's maximum auto-climb, so it CANNOT go up: the tower gets taller

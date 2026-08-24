@@ -24,38 +24,10 @@
 // MEMORY_WING_REDESIGN_PLAN.md, [[memory-wing-well-redesign]],
 // [[builder-full-switch-polygon-bsp]], [[wing-terminal-segment-rotation]],
 // [[memory-wing-use-instruments]].
-import { addWingEntrance } from "./common.mjs";
+import { addWingEntrance, localSideToWorld, rotatePoint, ringTrap } from "./common.mjs";
 import { reserved, wingName } from "./registry.mjs";
 import { terminalTextureSize, buildTerminalPatch, wallSignSize, buildWallSignPatch, drawCenteredText, signTextColor } from "../textures.mjs";
 import { lump, buildPatch } from "../wad-bytes.mjs";
-
-// labelSide / textureSide are stored WORLD-frame; the wing thinks local (u,v) and
-// converts. (East is a +1 quarter-turn: local "top"(+v)->world "right", local
-// "left"(-u)->world "top", local "right"(+u)->world "bottom".)
-const localSideToWorld = (direction, side) => {
-  const turns = { north: 0, east: 1, south: 2, west: 3 }[direction];
-  const sides = ["top", "right", "bottom", "left"];
-  const index = sides.indexOf(side);
-  if (turns === undefined || index === -1) {
-    throw new Error(`Cannot rotate side ${side} for direction ${direction}`);
-  }
-  return sides[(index + turns) % sides.length];
-};
-
-const rotatePoint = ([u, v], direction) => {
-  switch (direction) {
-    case "north":
-      return [u, v];
-    case "east":
-      return [v, -u];
-    case "south":
-      return [-u, -v];
-    case "west":
-      return [-v, u];
-    default:
-      throw new Error(`Unknown map direction: ${direction}`);
-  }
-};
 
 // Shoelace signed area; the builder wants CLOCKWISE loops (interior on the right,
 // signed area < 0). ensureCW flips a loop that came out CCW so hand-ordered
@@ -88,12 +60,6 @@ const octVerts = (R) =>
 const spireOct = octVerts(R_SPIRE);
 const platOct = octVerts(R_PLAT);
 const wellOct = octVerts(R_WELL);
-// One convex ring trapezoid between two concentric octagons at face i (the disk
-// wing's proven ringTrap): [inner[i], inner[j], outer[j], outer[i]].
-const ringTrap = (inner, outer, i) => {
-  const j = (i + 1) % inner.length;
-  return [inner[i], inner[j], outer[j], outer[i]];
-};
 
 // ===== Heights =====
 const WALK = 0; // catwalk / platform / pod / vestibule floor
