@@ -213,7 +213,7 @@
  	
  	dest += SCREENWIDTH; 
  	frac += fracstep;
-@@ -514,6 +676,1132 @@
+@@ -514,6 +676,1107 @@
  // just for profiling
  int			dscount;
  
@@ -309,9 +309,17 @@
 +}
 +
 +
-+// Rising-streak procedural pixel for the eight CPU core pillars. Each pillar
-+// is driven by per-core utilization (in permille). The texture column index
-+// is supplied by r_segs.c so streaks stay locked to the wall surface.
++// Peak streak climb speed, reached when the run queue is unsaturated; a fully
++// saturated queue drags it down to 1 (never 0, so the ring never freezes). The
++// trail length is derived from it (trail_len = speed * 15), so faster streaks
++// are longer and slower ones shorter.
++#define DOOMPERF_CPU_STREAK_SPEED_MAX	6
++
++// Rising-streak procedural pixel for the eight CPU core pillars. Particle COUNT
++// (density) tracks per-core utilization; particle SPEED tracks system-wide
++// run-queue saturation, inverted (calm = fast flow, saturated = slow crawl). The
++// texture column index is supplied by r_segs.c so streaks stay locked to the
++// wall surface.
 +static byte R_DoomPerfCpuStreakPixel (int ty)
 +{
 +    int			core_id;
@@ -323,24 +331,34 @@
 +    int			trail_len;
 +    int			head_y;
 +    int			offset;
++    int			pressure;
 +
 +    core_id = doomperf_cpu_column_display - 1;
 +    if (core_id < 0 || core_id >= 16)
 +	return DOOMPERF_CPU_CORE_DARK;
 +    util = R_DoomPerfCorePermille(core_id);
 +
-+    // Density and streak parameters scale with utilization so a busy core
-+    // packs more rising particles travelling faster with longer trails.
++    // Particle COUNT tracks this core's utilization: a busier core lights more
++    // streak columns.
 +    tx = doomperf_cpu_column_texture_x & 63;
 +    seed = tx * 31 + core_id * 13 + (tx >> 2) * 7;
 +    density = 5 + util / 50;
 +    if (((seed * 17) & 31) >= density)
 +	return DOOMPERF_CPU_CORE_DARK;
 +
-+    // Head descends from ty=127 toward ty=0 over time so streaks rise.
-+    // Trail extends behind the head (toward higher ty).
-+    speed = 1 + util / 200;
-+    trail_len = 24 + util / 12;
++    // SPEED is the system-wide run-queue SATURATION, INVERTED: a calm scheduler
++    // lets streaks flow at SPEED_MAX, a saturated one drags them to a crawl of 1
++    // (congestion), never 0 so the ring never freezes. Trail length tracks speed,
++    // so fast streaks are long and slow ones short. Head descends ty=127->0 over
++    // time so streaks rise; the trail extends behind it (toward higher ty).
++    pressure = R_DoomPerfRunQueuePermille();
++    if (pressure < 0)
++	pressure = 0;
++    else if (pressure > 1000)
++	pressure = 1000;
++    speed = DOOMPERF_CPU_STREAK_SPEED_MAX
++	  - ((DOOMPERF_CPU_STREAK_SPEED_MAX - 1) * pressure) / 1000;
++    trail_len = speed * 15;
 +    head_y = (127 - ((leveltime * speed + seed * 11) & 127)) & 127;
 +    offset = (ty - head_y + 128) & 127;
 +    if (offset < 2)
@@ -549,27 +567,10 @@
 +static const int doomperf_pad_u[8] = { -96, 0, 96, 96, 96, 0, -96, -96 };
 +static const int doomperf_pad_v[8] = { 1024, 1024, 1024, 1120, 1216, 1216, 1216, 1120 };
 +
-+// Run-queue SATURATION heat pool: a radial pool welling up through the core-ring
-+// floor between the pillars, centred on the ring (world 0,1120). Its radius grows
-+// with the runnable-queue pressure (the same sim-aware signal the run-queue subway
-+// reads), so an idle scheduler shows only a calm ember at the centre while an
-+// overcommitted one floods the ring up to the cores. The per-core pads
-+// (utilization) paint ON TOP, so the central chamber floor now carries BOTH USE
-+// axes: discrete pads = per-core %util, the pool = run-queue saturation. Colour
-+// bands with pressure (calm blue .. red overload, R_DoomPerfCpuPressureColor, the
-+// run-queue subway's own ramp) and a bright rim marks the advancing fill-line. All
-+// squared-distance (no sqrt: R_DoomPerfISqrt is defined further down); a hard square
-+// clip keeps the disc off the flanking courtyard floors that share this display
-+// (frame light 160 == the core-pad sentinel), and it never reaches CLIP anyway
-+// (max fill 116 < 118) so no square corners show. World-locked + time-free so it
-+// stays centred on the ring and never reads as drifting with the player.
-+#define DOOMPERF_RQPOOL_CX	0
-+#define DOOMPERF_RQPOOL_CY	1120
-+#define DOOMPERF_RQPOOL_MINFILL	16	// always-present calm ember (everpresent)
-+#define DOOMPERF_RQPOOL_SPAN	100	// idle 16 .. saturated 116 (just inside the ring)
-+#define DOOMPERF_RQPOOL_CLIP	118	// world half-extent of the ring floor (safety clip)
-+#define DOOMPERF_RQPOOL_EYE	4	// dark drain dot at the centre
-+#define DOOMPERF_RQPOOL_RIM	4	// bright advancing fill-line width
++// The core-ring floor now shows only the per-core UTILISATION pads. Run-queue
++// SATURATION used to well up here as a radial heat pool, but it is now carried
++// by the core-pillar streak SPEED (see R_DoomPerfCpuStreakPixel), so the floor
++// between the pillars is left as plain background.
 +
 +static byte
 +R_DoomPerfCpuCorePixel
@@ -607,35 +608,9 @@
 +	return DOOMPERF_CPU_CORE_DARK;
 +    }
 +
-+    // No core pad here: paint the run-queue heat pool background.
-+    {
-+	int	dx = worldx - DOOMPERF_RQPOOL_CX;
-+	int	dy = worldy - DOOMPERF_RQPOOL_CY;
-+	int	r2, fillr, inner, pressure;
-+
-+	if (R_DoomPerfAbs(dx) > DOOMPERF_RQPOOL_CLIP
-+	    || R_DoomPerfAbs(dy) > DOOMPERF_RQPOOL_CLIP)
-+	    return background;			// off the ring floor entirely
-+
-+	pressure = R_DoomPerfRunQueuePermille();
-+	if (pressure < 0)
-+	    pressure = 0;
-+	else if (pressure > 1000)
-+	    pressure = 1000;
-+
-+	fillr = DOOMPERF_RQPOOL_MINFILL + (DOOMPERF_RQPOOL_SPAN * pressure) / 1000;
-+	r2 = dx * dx + dy * dy;
-+	if (r2 > fillr * fillr)
-+	    return background;			// beyond the pool: plain floor
-+	if (r2 < DOOMPERF_RQPOOL_EYE * DOOMPERF_RQPOOL_EYE)
-+	    return DOOMPERF_CPU_CORE_DARK;	// central drain dot
-+	inner = fillr - DOOMPERF_RQPOOL_RIM;
-+	if (inner < 0)
-+	    inner = 0;
-+	if (r2 > inner * inner)
-+	    return DOOMPERF_CPU_CORE_FRAME;	// bright advancing fill-line
-+	return R_DoomPerfCpuPressureColor(pressure);
-+    }
++    // No core pad here: plain floor. Run-queue saturation is now shown by the
++    // core-pillar streak speed (R_DoomPerfCpuStreakPixel), not a floor heat pool.
++    return background;
 +}
 +
 +static byte
@@ -1346,7 +1321,7 @@
  
  //
  // Draws the actual span.
-@@ -553,7 +1841,24 @@
+@@ -553,7 +1816,24 @@
  
  	// Lookup pixel from flat texture tile,
  	//  re-index using light/colormap.
@@ -1372,7 +1347,7 @@
  
  	// Next step in u,v.
  	xfrac += ds_xstep; 
-@@ -676,8 +1981,22 @@
+@@ -676,8 +1956,22 @@
  	spot = ((yfrac>>(16-6))&(63*64)) + ((xfrac>>16)&63);
  	// Lowres/blocky mode does it twice,
  	//  while scale is adjusted appropriately.
