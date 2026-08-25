@@ -48,7 +48,7 @@
  //-----------------------------------------------------------------------------
  //
  // $Id:$
-@@ -30,9 +30,4283 @@
+@@ -30,9 +30,4288 @@
  
  #include "doomstat.h"
  
@@ -3849,13 +3849,18 @@
 +		      DOOMPERF_NET_TX_EXIT_X, -1, 1, tx_target);
 +}
 +
-+// Doom Perf: THE THREE LOCKS themselves. Drives the pool surfaces (floor rises with
-+// queue occupancy), the gate congestion lights (brighten with each lock's
-+// saturation), the drain basins (glow with the lane's drop rate), and the SYN-RECV
-+// backlog column -- then peels overspill orbs off the drains on drops. All read the
++// Doom Perf: THE THREE LOCKS themselves. The lane POOLS are a CONSTANT channel now --
++// frozen bed height + colour from the map, only a gentle smoothed brightness tracks
++// each lock's queue fill (no floor move). Saturation reads instead via the gate
++// congestion lights (brighten + breaker-trip strobe with each lock's saturation), the
++// drain basins (glow with the lane's drop rate), the trackside signal posts (lamp
++// green<->red as an orb is physically held at a gate), the softnet Tesla coils, and
++// the SYN-RECV backlog column -- the one floor that still RISES, with the half-open
++// count. Packet DROPS are shown IN-LANE (DoomPerf_NetLane peels the tail orb off an
++// overflowing gate, see DoomPerf_NetDrop), not off the drains here. All read the
 +// per-lock/lane fills the browser feeds (live AND sim). Sector tags mirror
-+// network-wing.mjs (registry.mjs 700-block); floors lerp in MAP UNITS then * FRACUNIT
-+// so a >32-unit span can't wrap ([[fixed-point-lerp-overflow]]).
++// network-wing.mjs (registry.mjs 700-block); the SYN column lerps in MAP UNITS then
++// * FRACUNIT so a >32-unit span can't wrap ([[fixed-point-lerp-overflow]]).
 +void DoomPerf_UpdateNetworkLocks (void)
 +{
 +    int		i;
@@ -4332,7 +4337,7 @@
  //
  // THINKERS
  // All thinkers should be allocated by Z_Malloc
-@@ -123,6 +4397,301 @@
+@@ -123,6 +4402,301 @@
  
  
  
@@ -4634,7 +4639,7 @@
  //
  // P_Ticker
  //
-@@ -130,11 +4699,11 @@
+@@ -130,11 +4704,11 @@
  void P_Ticker (void)
  {
      int		i;
@@ -4648,7 +4653,7 @@
      // pause if in menu and at least one tic has been run
      if ( !netgame
  	 && menuactive
-@@ -143,16 +4712,41 @@
+@@ -143,16 +4717,41 @@
      {
  	return;
      }

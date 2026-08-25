@@ -199,7 +199,7 @@
  	
  	dest += SCREENWIDTH; 
  	frac += fracstep;
-@@ -514,6 +663,1081 @@
+@@ -514,6 +663,1132 @@
  // just for profiling
  int			dscount;
  
@@ -535,6 +535,28 @@
 +static const int doomperf_pad_u[8] = { -96, 0, 96, 96, 96, 0, -96, -96 };
 +static const int doomperf_pad_v[8] = { 1024, 1024, 1024, 1120, 1216, 1216, 1216, 1120 };
 +
++// Run-queue SATURATION heat pool: a radial pool welling up through the core-ring
++// floor between the pillars, centred on the ring (world 0,1120). Its radius grows
++// with the runnable-queue pressure (the same sim-aware signal the run-queue subway
++// reads), so an idle scheduler shows only a calm ember at the centre while an
++// overcommitted one floods the ring up to the cores. The per-core pads
++// (utilization) paint ON TOP, so the central chamber floor now carries BOTH USE
++// axes: discrete pads = per-core %util, the pool = run-queue saturation. Colour
++// bands with pressure (calm blue .. red overload, R_DoomPerfCpuPressureColor, the
++// run-queue subway's own ramp) and a bright rim marks the advancing fill-line. All
++// squared-distance (no sqrt: R_DoomPerfISqrt is defined further down); a hard square
++// clip keeps the disc off the flanking courtyard floors that share this display
++// (frame light 160 == the core-pad sentinel), and it never reaches CLIP anyway
++// (max fill 116 < 118) so no square corners show. World-locked + time-free so it
++// stays centred on the ring and never reads as drifting with the player.
++#define DOOMPERF_RQPOOL_CX	0
++#define DOOMPERF_RQPOOL_CY	1120
++#define DOOMPERF_RQPOOL_MINFILL	16	// always-present calm ember (everpresent)
++#define DOOMPERF_RQPOOL_SPAN	100	// idle 16 .. saturated 116 (just inside the ring)
++#define DOOMPERF_RQPOOL_CLIP	118	// world half-extent of the ring floor (safety clip)
++#define DOOMPERF_RQPOOL_EYE	4	// dark drain dot at the centre
++#define DOOMPERF_RQPOOL_RIM	4	// bright advancing fill-line width
++
 +static byte
 +R_DoomPerfCpuCorePixel
 +( fixed_t		xfrac,
@@ -570,7 +592,36 @@
 +	    return R_DoomPerfCpuColor(util);
 +	return DOOMPERF_CPU_CORE_DARK;
 +    }
-+    return background;
++
++    // No core pad here: paint the run-queue heat pool background.
++    {
++	int	dx = worldx - DOOMPERF_RQPOOL_CX;
++	int	dy = worldy - DOOMPERF_RQPOOL_CY;
++	int	r2, fillr, inner, pressure;
++
++	if (R_DoomPerfAbs(dx) > DOOMPERF_RQPOOL_CLIP
++	    || R_DoomPerfAbs(dy) > DOOMPERF_RQPOOL_CLIP)
++	    return background;			// off the ring floor entirely
++
++	pressure = R_DoomPerfRunQueuePermille();
++	if (pressure < 0)
++	    pressure = 0;
++	else if (pressure > 1000)
++	    pressure = 1000;
++
++	fillr = DOOMPERF_RQPOOL_MINFILL + (DOOMPERF_RQPOOL_SPAN * pressure) / 1000;
++	r2 = dx * dx + dy * dy;
++	if (r2 > fillr * fillr)
++	    return background;			// beyond the pool: plain floor
++	if (r2 < DOOMPERF_RQPOOL_EYE * DOOMPERF_RQPOOL_EYE)
++	    return DOOMPERF_CPU_CORE_DARK;	// central drain dot
++	inner = fillr - DOOMPERF_RQPOOL_RIM;
++	if (inner < 0)
++	    inner = 0;
++	if (r2 > inner * inner)
++	    return DOOMPERF_CPU_CORE_FRAME;	// bright advancing fill-line
++	return R_DoomPerfCpuPressureColor(pressure);
++    }
 +}
 +
 +static byte
@@ -1281,7 +1332,7 @@
  
  //
  // Draws the actual span.
-@@ -553,7 +1777,24 @@
+@@ -553,7 +1828,24 @@
  
  	// Lookup pixel from flat texture tile,
  	//  re-index using light/colormap.
@@ -1307,7 +1358,7 @@
  
  	// Next step in u,v.
  	xfrac += ds_xstep; 
-@@ -676,8 +1917,22 @@
+@@ -676,8 +1968,22 @@
  	spot = ((yfrac>>(16-6))&(63*64)) + ((xfrac>>16)&63);
  	// Lowres/blocky mode does it twice,
  	//  while scale is adjusted appropriately.
