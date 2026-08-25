@@ -35,6 +35,7 @@
 #         orb hits a full MAXQ-deep queue (so every drop has a red line), and it DISSIPATES
 #         upward in a lane-coloured spark spray (DoomPerf_NetDrop), not a downward fall
 #   (+)   network-qdisc-disc (publish qdisc flow/sat for r_draw + DPNQDG<->DPNQDX placard swap)
+#   (+)   network-ethernet-leds (tunnel-mouth RJ45 link/activity LEDs)
 # Order-independent: this is the only Doom Perf patch that touches p_tick.c.
 # Regenerate by diffing a clean tree against the staged build tree;
 # see scripts/build-doom-wasm.sh.
@@ -47,7 +48,7 @@
  //-----------------------------------------------------------------------------
  //
  // $Id:$
-@@ -30,9 +30,4254 @@
+@@ -30,9 +30,4283 @@
  
  #include "doomstat.h"
  
@@ -2916,6 +2917,33 @@
 +#define DOOMPERF_NET_DRAIN_TAG	720	// 720 + level*2 + lane : (retired -- overspill plops at the cliffs)
 +#define DOOMPERF_NET_SYN_TAG	730	//                        SYN-RECV backlog column
 +#define DOOMPERF_NET_SIG_TAG	740	// 740 + level*2 + lane : trackside block-signal post
++// ===== Tunnel-mouth ETHERNET PORT LEDs. The switchyard-head TRAIN TUNNEL reads as an
++// oversized RJ45 jack (network-wing.mjs: stepped arch mouth at local v=V_PORTAL=4416 ->
++// world x=-4416, spanning u=+/-112 -> world y). Two small glowing lamps float at the top
++// corners of the mouth, like the link/activity LEDs on a real jack:
++//   LINK LED     (screen-LEFT, world y<0): solid GREEN -- the wire is up (never changes).
++//   ACTIVITY LED (screen-RIGHT, world y>0): BLINKS with packet traffic -- green while
++//     flowing, YELLOW when a slowdown (loss / softnet squeeze / qdisc backpressure) is
++//     detected, dark between blinks. Screen handedness is pinned off the RX lane (world
++//     y=-68 = screen-left, cyan RX) -- do NOT re-derive it from rotation math
++//     ([[disk-wing-screen-orientation]]).
++// The blink is a deliberate exception to the wing's everpresent-not-flicker rule
++// ([[prefer-everpresent-over-flicker]]): a blinking activity lamp is the ONE instrument
++// whose real-world behaviour IS to blink. Runtime-spawned (no map thing); world coords
++// hardcoded here per the RING_PITCH rule and tunable by eye. The LEDs float just in FRONT
++// of the grey headwall (portal plane x=-4416), up at the TOP CORNERS of the tunnel's
++// bounding rectangle -- out near the outer wall edge (|u|~112) and high (bottom ~= the
++// tunnel's topmost element z=-64), clear of the jagged stepped arch below.
++#define DOOMPERF_NET_LED_X	(-4412)	// just in front of the blue headwall (portal=4416)
++#define DOOMPERF_NET_LED_Y	92	// |world y| of each LED (top corners of the stepped-arch mouth)
++#define DOOMPERF_NET_LED_Z	(-44)	// LED centre z: high at the arch's top corners, against the blue field
++#define DOOMPERF_NET_LED_SLOW	120	// slowdown metric (permille) above which the activity LED lights YELLOW
++// The ACTIVITY LED flickers on ORB PASSAGE: it lights whenever a packet orb (RX or TX) is
++// crossing the tunnel-mouth plane, in ANY mode -- so it tracks the orbs the player sees
++// (occasional at idle chatter, rapid under load) rather than a throughput threshold.
++#define DOOMPERF_NET_LED_MOUTH_X (-4416)	// tunnel-mouth plane (portal); orbs cross here in/out
++#define DOOMPERF_NET_LED_BAND	32		// +/- band (map units) around the mouth counted as a crossing
++#define DOOMPERF_NET_LED_HOLD	2		// extra tics the flash lingers after the orb clears the band
 +// ===== Trackside GATE model. Each stage's transformer is a metered GATE the packets
 +// queue at: orbs flow FREE along the lane, then a CLOSED gate halts them and they back up
 +// (car-following) into a visible line; when the gate opens it releases the front clump and
@@ -2988,6 +3016,8 @@
 +// bursty after each spawn so packets travel in clumps rather than an even train.
 +static int	doomperf_netpkt_rxgap;
 +static int	doomperf_netpkt_txgap;
++// Tunnel-mouth ethernet port LEDs: [0]=link (solid green, static), [1]=activity (blinks).
++static mobj_t*	doomperf_netled[2];
 +
 +// The orb ride-height TARGET at world x: flat at each level's walk-16 (down IN the
 +// channel, above the full water surface), dropping sharply at the two waterfall lines
@@ -4302,7 +4332,7 @@
  //
  // THINKERS
  // All thinkers should be allocated by Z_Malloc
-@@ -123,6 +4368,194 @@
+@@ -123,6 +4397,301 @@
  
  
  
@@ -4493,11 +4523,118 @@
 +}
 +
 +
++// Doom Perf: TUNNEL-MOUTH ETHERNET PORT LEDs. Two square glowing lamps at the top corners
++// of the switchyard-head tunnel mouth (which reads as an oversized RJ45 jack). The LINK
++// LED (screen-left) burns solid green -- the wire is up. The ACTIVITY LED (screen-right)
++// flickers on ORB PASSAGE: it lights whenever a packet orb (RX or TX) is crossing the
++// tunnel-mouth plane -- in ANY mode -- green normally, YELLOW when a slowdown (loss /
++// softnet squeeze / qdisc backpressure) is detected. So it tracks the orbs the player
++// actually sees stream through the mouth (occasional at idle chatter, rapid under load),
++// not a throughput threshold. Frame poke on the activity lamp only: 0=green, 1=yellow,
++// 2=dark, all fullbright (0x8000).
++static void DoomPerf_UpdateNetLeds (void)
++{
++    static int	act_hold = 0;	// tics the activity flash stays lit (re-armed while an orb crosses)
++    int		i;
++    int		crossing;	// a packet orb is over the mouth plane this tic?
++    fixed_t	mouth;
++    fixed_t	band;
++    int		slow;		// worst loss/backpressure metric (permille)
++    int		l;
++    int		frame;
++
++    // Level reload frees every mobj; drop the dangling refs so the pair re-spawns.
++    if (leveltime == 0)
++    {
++	doomperf_netled[0] = NULL;
++	doomperf_netled[1] = NULL;
++    }
++
++    // (Re)spawn the pair once. z == floorz + momz 0 makes P_MobjThinker skip
++    // P_ZMovement, so a floating lamp never falls or gets ceiling-snapped
++    // ([[hand-positioned-mobj-floorz]]).
++    if (!doomperf_netled[0] || !doomperf_netled[1])
++    {
++	int	side;
++	for (side = 0; side < 2; side++)
++	{
++	    mobj_t*	led;
++	    fixed_t	y;
++
++	    if (doomperf_netled[side])
++		continue;
++	    y = (side ? DOOMPERF_NET_LED_Y : -DOOMPERF_NET_LED_Y) * FRACUNIT;
++	    led = P_SpawnMobj (DOOMPERF_NET_LED_X * FRACUNIT, y,
++			       DOOMPERF_NET_LED_Z * FRACUNIT, MT_DP_NETLED);
++	    if (led)
++	    {
++		led->floorz = led->z;
++		led->momz = 0;
++	    }
++	    doomperf_netled[side] = led;
++	}
++    }
++
++    // LINK LED (index 0): left untouched -- rests on its green spawn frame (link up).
++    if (!doomperf_netled[1])
++	return;
++
++    // Is any packet orb (RX or TX) crossing the tunnel-mouth plane right now? The orbs
++    // stream through the mouth in every mode (a MINTARGET baseline of chatter even on an
++    // idle host), so this flickers the lamp in step with the traffic the player can see.
++    mouth = DOOMPERF_NET_LED_MOUTH_X * FRACUNIT;
++    band = DOOMPERF_NET_LED_BAND * FRACUNIT;
++    crossing = 0;
++    for (i = 0; i < DOOMPERF_NET_CAP; i++)
++    {
++	mobj_t*	o;
++	fixed_t	d;
++
++	o = doomperf_netpkt_rx[i];
++	if (o)
++	{
++	    d = o->x - mouth;
++	    if (d < 0) d = -d;
++	    if (d <= band) { crossing = 1; break; }
++	}
++	o = doomperf_netpkt_tx[i];
++	if (o)
++	{
++	    d = o->x - mouth;
++	    if (d < 0) d = -d;
++	    if (d <= band) { crossing = 1; break; }
++	}
++    }
++
++    if (crossing)
++	act_hold = DOOMPERF_NET_LED_HOLD;	// (re-)arm the flash while an orb is over the mouth
++    else if (act_hold > 0)
++	act_hold--;				// let it linger a couple tics, then go dark
++
++    // Worst loss / backpressure across the sources the wing already tracks (no new signal).
++    slow = doomperf_net_softnet_drops;
++    if (doomperf_net_softnet_squeeze > slow)	slow = doomperf_net_softnet_squeeze;
++    if (doomperf_net_qdisc_sat > slow)		slow = doomperf_net_qdisc_sat;
++    for (l = 0; l < 3; l++)
++    {
++	if (doomperf_net_lock_drops[l][0] > slow)	slow = doomperf_net_lock_drops[l][0];
++	if (doomperf_net_lock_drops[l][1] > slow)	slow = doomperf_net_lock_drops[l][1];
++    }
++
++    if (act_hold <= 0)
++	frame = 2;					// dark (no orb over the mouth)
++    else if (slow > DOOMPERF_NET_LED_SLOW)
++	frame = 1;					// yellow (slowdown detected)
++    else
++	frame = 0;					// green (healthy passage)
++    doomperf_netled[1]->frame = frame | 0x8000;		// FF_FULLBRIGHT
++}
++
 +
  //
  // P_Ticker
  //
-@@ -130,11 +4563,11 @@
+@@ -130,11 +4699,11 @@
  void P_Ticker (void)
  {
      int		i;
@@ -4511,7 +4648,7 @@
      // pause if in menu and at least one tic has been run
      if ( !netgame
  	 && menuactive
-@@ -143,16 +4576,39 @@
+@@ -143,16 +4712,41 @@
      {
  	return;
      }
@@ -4537,6 +4674,8 @@
 +    DoomPerf_UpdateRunQueueParticles ();
 +    DoomPerf_UpdateNetworkPackets ();
 +    DoomPerf_UpdateNetworkLocks ();
++    // After UpdateNetworkLocks so the activity lamp reads this tic's fresh qdisc_sat.
++    DoomPerf_UpdateNetLeds ();
 +    DoomPerf_UpdateNetQdiscCap ();
 +    DoomPerf_UpdateNetworkMachines ();
 +    // Before P_PlayerThink so this tic's lane scale drags THIS tic's P_MovePlayer.

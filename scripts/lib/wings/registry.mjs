@@ -149,8 +149,10 @@ export const reserved = {
     // is never spawned in a combat-free lab, so the frames are free. BFE1 D/E -> socket-lock
     // travelling-current bead (MT_DP_NETCAP; A/B/C are the memory-fault SPRK spray, D/E free).
     // COLU A -> the authored capacitor-tower prop (MT_DP_NETCAPTWR); the lab places no stock
-    // COLU things, so overriding it is safe.
-    spriteReplacements: ["PINVA0", "PINVB0", "PINVC0", "PINVD0", "PMAPA0", "PMAPB0", "PMAPC0", "PMAPD0", "BLUDA0", "BLUDB0", "BLUDC0", "BFE1D0", "BFE1E0", "COLUA0"],
+    // COLU things, so overriding it is safe. FCAN A/B/C -> the tunnel-mouth ethernet PORT LEDs
+    // (MT_DP_NETLED): A green, B yellow, C dark/off. FCAN is the burning-barrel decoration
+    // (thing 70), never placed in the lab, so overriding its frames is safe.
+    spriteReplacements: ["PINVA0", "PINVB0", "PINVC0", "PINVD0", "PMAPA0", "PMAPB0", "PMAPC0", "PMAPD0", "BLUDA0", "BLUDB0", "BLUDC0", "BFE1D0", "BFE1E0", "COLUA0", "FCANA0", "FCANB0", "FCANC0"],
   },
 };
 

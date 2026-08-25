@@ -22,6 +22,7 @@ const baseIwadPath = fileURLToPath(new URL("../public/wads/freedoom1.wad", impor
 const lineFlags = {
   blocking: 1,
   twoSided: 4,
+  upperUnpegged: 8, // ML_DONTPEGTOP: peg the upper texture to the HIGHER ceiling (top-aligned)
   lowerUnpegged: 16,
 };
 
@@ -568,6 +569,11 @@ const buildTexture2 = () => {
 const lineFlagsFor = (front, back) => {
   let flags = back ? lineFlags.twoSided : lineFlags.blocking;
   let special = 0;
+  // A `pegTop` sector top-aligns its upper textures (ML_DONTPEGTOP) so worldZ maps
+  // linearly from the higher ceiling -- the network faceplate shader relies on this.
+  if (back && (front.pegTop || back.pegTop)) {
+    flags |= lineFlags.upperUnpegged;
+  }
   if (back && (front.kind === "outside" || back.kind === "outside")) {
     flags |= lineFlags.blocking | lineFlags.lowerUnpegged;
   }

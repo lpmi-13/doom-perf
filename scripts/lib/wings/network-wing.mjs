@@ -601,10 +601,7 @@ const V_PORTAL = V_TERM_WALL;    // 4416: portal plane -- the arched tunnel mout
 const V_ARCH = V_PORTAL + 24;    // 4440: stepped-arch headwall ring depth
 // Stepped horseshoe ARCH across the mouth: u-columns with a RAISED-CENTRE ceiling profile, so the
 // upper texture on the portal line reads as an arch cut into the headwall (tall centre, low sides).
-// The whole ceiling profile was dropped 160 (from 96/56/8) to make the mouth SHORTER -- a lower,
-// wider opening that reads more like an external ethernet port -- keeping the same horseshoe
-// silhouette, just brought down. The bore rings drop the same 160 so the ceiling never steps back
-// UP as you look into the tunnel; they still recede (each lower than the last) into the dark.
+// This is the "jagged sawtooth" ethernet-jack silhouette; the headwall around it is skinned blue.
 const archCols = [
   { u1: -112, u2: -72, ceil: -152 },
   { u1: -72, u2: -32, ceil: -104 },
@@ -621,6 +618,20 @@ const boreRings = [
 ];
 const V_BORE_END = V_ARCH + 700; // 5140: bore end cap (deep black); orbs fade at x=-5040 just short
 const TUNNEL_WALL = tex("TUN");  // authored cast-iron tunnel-liner wall texture (DPNTUN)
+
+// ===== Ethernet-jack FACEPLATE. The stepped-arch mouth (the "jagged sawtooth" jack silhouette)
+// sits in a GREY metal SHELL (a flat-topped rectangle hugging the top of the tunnel, SILVER1) on
+// a solid ELECTRIC-BLUE field (everything outside the shell). The grey->blue split is horizontal
+// and by COLOUR only (no geometry): a wall pixel-shader on the BED's upper texture paints the
+// normal grey wall BELOW RECT_TOP (the shell) and the blue field ABOVE. The walls flanking the
+// mouth (platform back walls) are the plain blue field. On-theme with the blue retheme
+// ([[network-canal-plan]]). Engine mirrors RECT_TOP/FACE_BLUE in r_draw.c (RING_PITCH).
+const RECT_TOP = -12;    // grey-shell top world-z: grey (shell) below, blue field above
+const FACE_TAG = ids.lineTags[0] + 10; // 770: TOP-shell shader tag (bed upper texture, surface 0)
+const FACE_SIDE_TAG = ids.lineTags[0] + 11; // 771: SIDE-border shader tag (border strip back wall, surface 1)
+const FACE_BLUE = 200;   // solid electric-blue field index (pure blue, RGB 0,0,255)
+const FACE_BLUE_TEX = wingName("network", "FACE"); // DPNFACE solid-blue field texture (flanking walls)
+const BORDER_W = 20;     // thin grey SIDE-border width just outside each tunnel edge (the shell's jambs)
 
 // ===== Walk floors (local z): 0 / -168 / -336, a deep descent. The bus drops the full
 // 168 through the STEP-DOWN TRANSFORMER at each stage; the catwalks take a 14-step stair.
@@ -1247,20 +1258,37 @@ const build = (ctx) => {
   // spandrel above the arch is an upper texture drawn by the higher-ceiling sector (the track bed),
   // so the bed also wears the accent; the arch jambs + bore stay on the liner (darkMat).
   const PORTAL_WALL = accent.wall; // SILVER1: matches the walls either side of the softnet terminal
-  const platMat = { ...hall, kind: "net-plaza", ceiling: HALL_CEIL, wall: PORTAL_WALL, floor: F2, light: 156 };
+  // Platform-flanking BACK wall (the `top`/portal-facing edge) wears the solid-blue FACEPLATE
+  // field (DPNFACE) so the wall either side of the grey mouth rectangle reads as the blue jack
+  // panel; the platform's other faces keep the grey accent.
+  // Platform-flanking BACK wall (`backWall` = the portal-facing edge; NOTE the WEST rotation maps
+  // local max-v to a world MIN-X edge, so this is NOT world "top") wears the solid-blue FACEPLATE
+  // field. light 132 matches the bed's headwall so the two blue faces read as ONE uniform panel.
+  const platMat = { ...hall, kind: "net-plaza", ceiling: HALL_CEIL, wall: PORTAL_WALL, floor: F2, light: 132, labelSide: backWall, labelTexture: FACE_BLUE_TEX };
   const darkMat = { ...conduit, kind: "net-tunnel", wall: TUNNEL_WALL, floor: BED_Z, floorFlat: groundFlatName, ceilingFlat: groundFlatName };
-  // Raised station PLATFORMS flanking the track bed (continue the ring catwalks at F2).
-  areaRect(direction, "tunnel-plat-l", { u1: -EDGEHW, v1: V_L2END, u2: -BEDHW, v2: V_PORTAL }, platMat);
-  areaRect(direction, "tunnel-plat-r", { u1: BEDHW, v1: V_L2END, u2: EDGEHW, v2: V_PORTAL }, platMat);
+  // Raised station PLATFORMS flanking the track bed (continue the ring catwalks at F2). Each side is
+  // split: a thin inner grey SIDE-BORDER strip (the jack shell's jamb) hugging the tunnel edge, and
+  // the wider outer platform carrying the blue field. The border strip's back wall is grey SILVER1
+  // + FACE_SIDE_TAG so the shader keeps it grey below RECT_TOP and blue above -- capping at the same
+  // height as the TOP shell, so the grey reads as one rectangular frame around the tunnel. (Its
+  // one-sided back wall is top-pegged by default, so worldZ = HALL_CEIL - ty as the shader expects;
+  // no pegTop needed.) The internal strip<->outer seam is coplanar (same heights) so it never draws.
+  const borderMat = { ...hall, kind: "net-plaza", ceiling: HALL_CEIL, wall: PORTAL_WALL, floor: F2, light: 132, lineTag: FACE_SIDE_TAG };
+  areaRect(direction, "tunnel-plat-l", { u1: -EDGEHW, v1: V_L2END, u2: -BEDHW - BORDER_W, v2: V_PORTAL }, platMat);
+  areaRect(direction, "tunnel-plat-r", { u1: BEDHW + BORDER_W, v1: V_L2END, u2: EDGEHW, v2: V_PORTAL }, platMat);
+  areaRect(direction, "tunnel-border-l", { u1: -BEDHW - BORDER_W, v1: V_L2END, u2: -BEDHW, v2: V_PORTAL }, borderMat);
+  areaRect(direction, "tunnel-border-r", { u1: BEDHW, v1: V_L2END, u2: BEDHW + BORDER_W, v2: V_PORTAL }, borderMat);
   // Sunken TRACK BED between the platforms: blockEdge (look down over the platform lip, can't step
-  // in; the NOCLIP orbs ride through). Dark ballast floor, open to the room ceiling; its lip wears
-  // the steel bus housing so it reads as a raised platform edge. `wall` is the OUTSIDE accent so the
-  // spandrel above the arch mouth reads as headwall, not tunnel interior.
+  // in; the NOCLIP orbs ride through). Its UPPER texture (the wall ABOVE the stepped arch) is the
+  // grey jack SHELL: grey SILVER1 base + pegTop(ML_DONTPEGTOP) + FACE_TAG hand it to the shader,
+  // which keeps the grey below RECT_TOP (the shell) and paints the blue field above.
   areaRect(direction, "tunnel-bed", { u1: -BEDHW, v1: V_L2END, u2: BEDHW, v2: V_PORTAL }, {
     ...hall, kind: "net-plaza", floor: BED_Z, ceiling: HALL_CEIL, light: 132,
     floorFlat: groundFlatName, wall: PORTAL_WALL, riserWall: BUS_HOUSING, blockEdge: true,
+    lineTag: FACE_TAG, pegTop: true,
   });
-  // Stepped horseshoe ARCH cut into the headwall at the portal (raised-centre ceiling profile).
+  // Stepped horseshoe ARCH cut into the (blue) headwall at the portal -- the jagged jack silhouette.
+  // Dark cast-iron liner inside (darkMat); the bore behind narrows into the dark.
   archCols.forEach((c, k) => {
     areaRect(direction, `tunnel-arch${k}`, { u1: c.u1, v1: V_PORTAL, u2: c.u2, v2: V_ARCH }, {
       ...darkMat, ceiling: c.ceil, light: 96,
@@ -1315,6 +1343,9 @@ const textures = [
   { texture: signalScreens.stop, patch: tex("PSST"), width: SIGTEX_W, height: SIGTEX_H, build: () => buildSignalPatch({ redLit: true }) },
   // Train-tunnel cast-iron liner wall (the switchyard-head tube tunnel).
   { texture: TUNNEL_WALL, patch: tex("PTUN"), width: 128, height: 128, build: () => buildTunnelLinerPatch() },
+  // Faceplate FIELD: a flat solid electric-blue wall (single index FACE_BLUE) for the jack-panel
+  // wall flanking the mouth; the shader paints the SAME index above the grey rectangle so they match.
+  { texture: FACE_BLUE_TEX, patch: tex("PFACE"), width: 64, height: 128, build: () => buildPatch(new Uint8Array(64 * 128).fill(FACE_BLUE), 64, 128) },
 ];
 
 const flats = [
@@ -1333,6 +1364,38 @@ const cyanRamp = [4, 4, 192, 194, 195, 196]; // white core -> electric-blue rim 
 const cyanFlash = [4, 4, 4, 192, 194, 196];
 const violetRamp = [4, 4, 250, 251, 251, 252]; // white core -> hot-violet rim (207,0,207)
 const violetFlash = [4, 4, 250, 251, 252, 252];
+
+// ===== Tunnel-mouth ETHERNET PORT LED (MT_DP_NETLED, spawned by p_tick.c). A large SQUARE
+// indicator in a dark bezel housing: a bright core shading out (square iso-contours) to a
+// coloured rim, so it reads as a chunky lit LED at the top corners of the RJ45-jack tunnel
+// mouth. Three fullbright frames the engine pokes between -- A green (link / healthy
+// activity), B yellow (activity during a slowdown), C dark (the unlit gap between activity
+// blinks). Overrides the FCAN burning-barrel sprite (thing 70, never placed in the lab).
+// [[pwad-sprite-override-constraint]]
+const ledGreenRamp = [4, 112, 114, 117, 120]; //  white core -> bright green -> deep green (matches the GO signal)
+const ledYellowRamp = [4, 231, 165, 163, 161]; // white core -> gold -> amber (the storage-wing amber family)
+const ledOffRamp = [125, 126, 127, 127];       // unlit: a deep dark-green bulb (no glow)
+const LED_SIZE = 44;  // world units square (bigger, reads at tunnel distance)
+const buildNetLedSprite = (ramp) => {
+  const S = LED_SIZE, T = 247, HOUSING = 8, BORDER = 3; // dark bezel thickness
+  const px = new Uint8Array(S * S).fill(T);
+  const c = (S - 1) / 2;
+  const half = S / 2;             // to the sprite edge
+  const lens = half - BORDER;     // inner coloured-lens half-extent
+  for (let y = 0; y < S; y += 1) {
+    for (let x = 0; x < S; x += 1) {
+      const cheb = Math.max(Math.abs(x - c), Math.abs(y - c)); // square iso-contours
+      if (cheb > half) continue;                              // (sub-pixel corner trim)
+      if (cheb > lens) { px[y * S + x] = HOUSING; continue; }  // bezel housing border
+      const k = Math.min(ramp.length - 1, Math.floor((cheb / lens) * ramp.length));
+      px[y * S + x] = ramp[k];
+    }
+  }
+  // Centre the billboard on the mobj origin (leftOffset/topOffset = S/2) so p_tick.c
+  // can place the lamp centre exactly at DOOMPERF_NET_LED_Z.
+  return buildPatch(px, S, S, { transparent: T, leftOffset: S / 2, topOffset: S / 2 });
+};
+
 const sprites = [
   { name: "PINVA0", build: () => buildOrbPatch(cyanRamp) },
   { name: "PINVB0", build: () => buildFxPatch({ size: 22, ramp: cyanRamp, outerFrac: 0.78 }) },
@@ -1358,6 +1421,10 @@ const sprites = [
   // (The send-q battery is 3D geometry + a wall shader now, not a billboard sprite.)
   { name: "SMITA0", build: () => buildTurbineSprite() },
   { name: "SMT2A0", build: () => buildDynamoSprite() },
+  // Tunnel-mouth ethernet PORT LEDs (MT_DP_NETLED): A green, B yellow, C dark/off.
+  { name: "FCANA0", build: () => buildNetLedSprite(ledGreenRamp) },
+  { name: "FCANB0", build: () => buildNetLedSprite(ledYellowRamp) },
+  { name: "FCANC0", build: () => buildNetLedSprite(ledOffRamp) },
 ];
 
 const terminals = ({ terminalHalfWidth }) => {

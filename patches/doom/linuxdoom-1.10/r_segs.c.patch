@@ -16,7 +16,7 @@
 
 --- a/r_segs.c
 +++ b/r_segs.c
-@@ -40,6 +40,74 @@
+@@ -40,6 +40,82 @@
  #include "r_sky.h"
  
  
@@ -82,6 +82,14 @@
 +	// Gating on surface keeps the two pegging anchors (well floor vs ceiling)
 +	// separate and keeps the tag off the upper seal above the risers.
 +	doomperf_cpu_column_display = (surface == 2) ? 37 : 38;
++    else if ((surface == 0 && tag == 770) || (surface == 1 && tag == 771))
++	// Network ethernet-jack GREY SHELL: the same shader paints the shell TOP (tag 770, the bed's
++	// UPPER texture above the stepped-arch mouth, DONTPEGTOP) and the two thin SIDE borders (tag
++	// 771, the border strips' one-sided back walls, top-pegged) -- grey SILVER1 shell below
++	// RECT_TOP, solid blue field above, so the grey reads as one rectangular frame around the
++	// tunnel. Each gate is surface-specific so the tag drives only that face, not the strips'
++	// front/riser seals.
++	doomperf_cpu_column_display = 40;
 +    else
 +	doomperf_cpu_column_display = 0;
 +    doomperf_cpu_column_texture_x = texturecolumn;
@@ -91,7 +99,7 @@
  // OPTIMIZE: closed two sided lines as single sided
  
  // True if any of the segs textures might be visible.
-@@ -121,12 +189,13 @@
+@@ -121,12 +197,13 @@
  	
      lightnum = (frontsector->lightlevel >> LIGHTSEGSHIFT)+extralight;
  
@@ -110,7 +118,7 @@
  	walllights = scalelight[0];
      else if (lightnum >= LIGHTLEVELS)
  	walllights = scalelight[LIGHTLEVELS-1];
-@@ -284,7 +353,9 @@
+@@ -284,7 +361,9 @@
  	    dc_yh = yh;
  	    dc_texturemid = rw_midtexturemid;
  	    dc_source = R_GetColumn(midtexture,texturecolumn);
@@ -120,7 +128,7 @@
  	    ceilingclip[rw_x] = viewheight;
  	    floorclip[rw_x] = -1;
  	}
-@@ -306,7 +377,9 @@
+@@ -306,7 +385,9 @@
  		    dc_yh = mid;
  		    dc_texturemid = rw_toptexturemid;
  		    dc_source = R_GetColumn(toptexture,texturecolumn);
@@ -130,7 +138,7 @@
  		    ceilingclip[rw_x] = mid;
  		}
  		else
-@@ -336,7 +409,9 @@
+@@ -336,7 +417,9 @@
  		    dc_texturemid = rw_bottomtexturemid;
  		    dc_source = R_GetColumn(bottomtexture,
  					    texturecolumn);
@@ -140,7 +148,7 @@
  		    floorclip[rw_x] = mid;
  		}
  		else
-@@ -643,12 +718,10 @@
+@@ -643,12 +726,10 @@
  	{
  	    lightnum = (frontsector->lightlevel >> LIGHTSEGSHIFT)+extralight;
  

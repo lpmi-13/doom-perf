@@ -7,13 +7,14 @@
 #   (+)   network-packets (cyan RX / violet TX packet orbs)
 #   (+)   memory-well-spire (green/blue book fill on the central spire)
 #
+#   (+)   network-ethernet-leds (tunnel-mouth RJ45 link/activity LEDs)
 # Order-independent: this is the only Doom Perf patch that touches info.h.
 # Regenerate by diffing a clean tree against the staged build tree;
 # see scripts/build-doom-wasm.sh.
 
 --- a/info.h
 +++ b/info.h
-@@ -1140,6 +1140,189 @@
+@@ -1140,6 +1140,192 @@
      S_TECH2LAMP2,
      S_TECH2LAMP3,
      S_TECH2LAMP4,
@@ -200,10 +201,13 @@
 +    S_DP_NETSPIN,
 +    S_DP_NETSPIN_V,
 +    S_DP_NETVENT,
++    // Tunnel-mouth ethernet PORT LEDs (one static frame; the engine pokes the
++    // activity LED's frame directly for the green/yellow/off blink).
++    S_DP_NETLED,
      NUMSTATES
  } statenum_t;
  
-@@ -1298,6 +1481,26 @@
+@@ -1298,6 +1484,27 @@
      MT_MISC84,
      MT_MISC85,
      MT_MISC86,
@@ -227,6 +231,7 @@
 +    MT_DP_NETDYN,	// NIC TX ring dynamo drum (solid prop, doomednum 3013)
 +    MT_DP_NETBATT,	// send-q battery bank (solid prop, doomednum 3014)
 +    MT_DP_NETSPIN,	// orbiting spin / charge / vent mote (runtime-spawned, no collision)
++    MT_DP_NETLED,	// tunnel-mouth ethernet PORT LED (runtime-spawned pair, no collision)
      NUMMOBJTYPES
  
  } mobjtype_t;

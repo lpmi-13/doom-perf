@@ -20,7 +20,7 @@
 
 --- a/r_draw.c
 +++ b/r_draw.c
-@@ -95,6 +95,52 @@
+@@ -95,14 +95,70 @@
  // just for profiling 
  int			dccount;
  
@@ -71,9 +71,29 @@
 +static byte R_DoomPerfPistonPixel (int tx, int ty, int lane);
 +
  //
++// Doom Perf: network ethernet-jack GREY SHELL (display 40). The wall above the stepped-arch
++// mouth reads as an RJ45 jack: a grey metal SHELL (a flat-topped rectangle hugging the top of
++// the tunnel) on a solid electric-blue field. The bed's upper texture is pegged ML_DONTPEGTOP,
++// so a pixel's world z is FACE_CEIL - (frac>>FRACBITS): below FACE_TOP it keeps the normal grey
++// SILVER1 wall (the shell), above it becomes the solid blue field. Mirrors network-wing.mjs
++// (RING_PITCH): FACE_CEIL = HALL_CEIL, FACE_TOP = RECT_TOP, FACE_BLUE = FACE_BLUE.
++#define DOOMPERF_NET_FACE_CEIL	176	// switchyard-head ceiling (HALL_CEIL)
++#define DOOMPERF_NET_FACE_TOP	(-12)	// grey-shell top world-z (grey shell below, blue field above)
++#define DOOMPERF_NET_FACE_BLUE	200	// solid electric-blue field palette index
++
  // A column is a vertical slice/span from a wall texture that,
  //  given the DOOM style restrictions on the view orientation,
-@@ -137,9 +183,92 @@
+ //  will always have constant z depth.
+ // Thus a special case loop for very fast rendering can
+ //  be used. It has also been used with Wolfenstein 3D.
+-// 
+-void R_DrawColumn (void) 
++//
++void R_DrawColumn (void)
+ { 
+     int			count; 
+     byte*		dest; 
+@@ -137,9 +193,102 @@
      // This is as fast as it gets.
      do 
      {
@@ -154,6 +174,16 @@
 +	    else if (level > DOOMPERF_ABYSS_LEVEL_MAX) level = DOOMPERF_ABYSS_LEVEL_MAX;
 +	    *dest = colormaps[level*256 + dc_source[(frac>>FRACBITS)&127]];
 +	}
++	else if (doomperf_cpu_column_display == 40)
++	{
++	    // Ethernet-jack grey shell: normal grey SILVER1 wall below the shell top, solid
++	    // blue field above. worldZ = FACE_CEIL - ty (bed upper texture is DONTPEGTOP).
++	    int	ty = frac>>FRACBITS;
++	    if (DOOMPERF_NET_FACE_CEIL - ty < DOOMPERF_NET_FACE_TOP)
++		*dest = dc_colormap[dc_source[ty & 127]];
++	    else
++		*dest = dc_colormap[DOOMPERF_NET_FACE_BLUE];
++	}
 +	else if (doomperf_cpu_column_display >= 20)
 +	    *dest = dc_colormap[R_DoomPerfDiskGaugePixel(doomperf_cpu_column_display - 20,
 +							 (frac>>FRACBITS)&127)];
@@ -169,7 +199,7 @@
  	
  	dest += SCREENWIDTH; 
  	frac += fracstep;
-@@ -514,6 +643,1081 @@
+@@ -514,6 +663,1081 @@
  // just for profiling
  int			dscount;
  
@@ -1251,7 +1281,7 @@
  
  //
  // Draws the actual span.
-@@ -553,7 +1757,24 @@
+@@ -553,7 +1777,24 @@
  
  	// Lookup pixel from flat texture tile,
  	//  re-index using light/colormap.
@@ -1277,7 +1307,7 @@
  
  	// Next step in u,v.
  	xfrac += ds_xstep; 
-@@ -676,8 +1897,22 @@
+@@ -676,8 +1917,22 @@
  	spot = ((yfrac>>(16-6))&(63*64)) + ((xfrac>>16)&63);
  	// Lowres/blocky mode does it twice,
  	//  while scale is adjusted appropriately.

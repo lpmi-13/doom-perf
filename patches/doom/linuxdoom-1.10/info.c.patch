@@ -8,6 +8,7 @@
 #   (+)   network-packets (cyan RX / violet TX packet orbs)
 #   (+)   memory-well-spire (green/blue book fill on the central spire)
 #
+#   (+)   network-ethernet-leds (tunnel-mouth RJ45 link/activity LEDs)
 # Order-independent: this is the only Doom Perf patch that touches info.c.
 # Regenerate by diffing a clean tree against the staged build tree;
 # see scripts/build-doom-wasm.sh.
@@ -40,7 +41,7 @@
      {SPR_SMBT,32768,4,{NULL},S_BTORCHSHRT2,0,0},	// S_BTORCHSHRT
      {SPR_SMBT,32769,4,{NULL},S_BTORCHSHRT3,0,0},	// S_BTORCHSHRT2
      {SPR_SMBT,32770,4,{NULL},S_BTORCHSHRT4,0,0},	// S_BTORCHSHRT3
-@@ -1099,7 +1110,176 @@
+@@ -1099,7 +1110,181 @@
      {SPR_TLP2,32768,4,{NULL},S_TECH2LAMP2,0,0},	// S_TECH2LAMP
      {SPR_TLP2,32769,4,{NULL},S_TECH2LAMP3,0,0},	// S_TECH2LAMP2
      {SPR_TLP2,32770,4,{NULL},S_TECH2LAMP4,0,0},	// S_TECH2LAMP3
@@ -214,11 +215,16 @@
 +    {SPR_BFE1,32771,-1,{NULL},S_NULL,0,0},	// S_DP_NETSPIN   (blue mote, fullbright, static)
 +    {SPR_PMAP,32769,-1,{NULL},S_NULL,0,0},	// S_DP_NETSPIN_V (violet mote, fullbright, static)
 +    // Overcharge boil-off: a blue mote that rises briefly off a full battery, then self-removes.
-+    {SPR_BFE1,32771,16,{NULL},S_NULL,0,0}	// S_DP_NETVENT (blue mote, fullbright, ~16 tics)
++    {SPR_BFE1,32771,16,{NULL},S_NULL,0,0},	// S_DP_NETVENT (blue mote, fullbright, ~16 tics)
++    // Tunnel-mouth ethernet PORT LED: one static fullbright frame. Both LEDs rest here
++    // (frame A = green); the engine pokes the ACTIVITY LED's frame each tic between A
++    // (green), B (yellow) and C (dark/off) for the traffic blink. Art overrides FCAN
++    // (burning barrel, thing 70 -- never placed in the lab), see registry.mjs.
++    {SPR_FCAN,32768,-1,{NULL},S_NULL,0,0}	// S_DP_NETLED (frame A = green, fullbright, static)
  };
  
  
-@@ -4665,6 +4845,538 @@
+@@ -4665,6 +4850,564 @@
  	sfx_None,		// activesound
  	MF_NOBLOCKMAP,		// flags
  	S_NULL		// raisestate
@@ -749,6 +755,32 @@
 +	0,		// speed
 +	2*FRACUNIT,		// radius
 +	2*FRACUNIT,		// height
++	100,		// mass
++	0,		// damage
++	sfx_None,		// activesound
++	MF_NOGRAVITY|MF_NOBLOCKMAP|MF_NOCLIP,		// flags
++	S_NULL		// raisestate
++    },
++
++    {		// MT_DP_NETLED -- tunnel-mouth ethernet PORT LED (runtime-spawned pair, no collision)
++	-1,		// doomednum (runtime-spawned only)
++	S_DP_NETLED,		// spawnstate (static green frame; engine pokes the activity LED)
++	1000,		// spawnhealth
++	S_NULL,		// seestate
++	sfx_None,		// seesound
++	8,		// reactiontime
++	sfx_None,		// attacksound
++	S_NULL,		// painstate
++	0,		// painchance
++	sfx_None,		// painsound
++	S_NULL,		// meleestate
++	S_NULL,		// missilestate
++	S_NULL,		// deathstate
++	S_NULL,		// xdeathstate
++	sfx_None,		// deathsound
++	0,		// speed
++	2*FRACUNIT,		// radius
++	4*FRACUNIT,		// height
 +	100,		// mass
 +	0,		// damage
 +	sfx_None,		// activesound
