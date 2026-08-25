@@ -52,10 +52,10 @@ export const mapManifest = {
       "sign": "memory-rss",
       "segments": [
         {
-          "ax": 2149,
-          "ay": 304,
-          "bx": 2405,
-          "by": 304
+          "ax": 2139,
+          "ay": 400,
+          "bx": 2395,
+          "by": 400
         }
       ]
     },
@@ -63,10 +63,10 @@ export const mapManifest = {
       "sign": "memory-oom",
       "segments": [
         {
-          "ax": 2149,
-          "ay": -304,
-          "bx": 2405,
-          "by": -304
+          "ax": 2139,
+          "ay": -400,
+          "bx": 2395,
+          "by": -400
         }
       ]
     },

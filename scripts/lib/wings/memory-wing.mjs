@@ -88,8 +88,15 @@ const TERM_HALF = terminalTextureSize.width / 2; // 128
 // ===== Pod / vestibule extents (local u,v) =====
 const VEST = { u1: -256, u2: 256, v1: 704, v2: wellOct[5][1] }; // near, v2 = near well face (1083)
 const VEST_TC = 896; // free -m recess centre v
-const FAR = { u1: -288, u2: 288, v1: wellOct[1][1], v2: wellOct[1][1] + 320 }; // far well face (2117) .. 2437
-const FAR_TC = Math.round((FAR.v1 + FAR.v2) / 2); // 2277
+// Widened (±384, was ±288) and deepened (v2 = v1+440, was +320) so the OOM room
+// stops crowding its side terminals: the wider pod leaves a full 128-wide walkway
+// down each side, past the ends of the barrel row (which stays at u ±256). The
+// depth lets the barrel row sit back by the baron cage (a hazard pile the OOM
+// killer reaches out to) with the terminals standing clear in the open entry apron
+// IN FRONT of it — approached across open floor, never past the barrels. See the
+// FAR POD build block below.
+const FAR = { u1: -384, u2: 384, v1: wellOct[1][1], v2: wellOct[1][1] + 440 }; // far well face (2117) .. 2557
+const FAR_TC = FAR.v1 + 150; // 2267 — terminal recess centre, in the apron in FRONT of the (pushed-back) barrel row
 // The sluice pod is deeper (u) and longer to the south (v) than the other pods: the
 // south wall has to carry the vent duct, the SWAP plate and the inflow spout side by
 // side, and the outlet needs room to be a wide spillway rather than a slot. It is also
@@ -1345,8 +1352,15 @@ const build = (ctx) => {
   // barrels (top-RSS processes, tags 551..555, glow by per-process oom_score) that
   // the OOM-killer BARON stalks from a gated dais at the deep end. The ps/RSS and
   // OOM terminals are recessed into the side walls. =====
-  const barrelRowV = FAR.v1 + 63;
+  // Barrel row sits at the DEEP end, stacked in front of the baron's gate/dais
+  // (barrelRowV pushed back from the old FAR.v1+63): the player enters into a long
+  // open apron, the ps/RSS + OOM side terminals stand on the side walls in front of
+  // the barrels (recesses centred at FAR_TC), and the barrels read as a pile the
+  // OOM killer reaches out to from its cage a short step behind them.
+  const barrelRowV = FAR.v1 + 196; // barrel-row front (back edge FAR.v1+260, ~40 short of the gate)
   const barrelPadDepth = 64;
+  const gateFrontV = FAR.v1 + 300; // baron gate front / back wall behind the barrel row
+  const daisFrontV = gateFrontV + 32; // dais front (the gate sill is 32 deep)
   areaRect(direction, "far-plaza-front", { u1: FAR.u1, v1: FAR.v1, u2: FAR.u2, v2: barrelRowV }, { ...podStyle, light: 178 });
   [-224, -112, 0, 112, 224].forEach((cx, slot) => {
     areaRect(direction, `rss-pad-${slot}`, { u1: cx - 32, v1: barrelRowV, u2: cx + 32, v2: barrelRowV + barrelPadDepth }, {
@@ -1363,11 +1377,11 @@ const build = (ctx) => {
   });
   areaRect(direction, "far-plaza-lead-l", { u1: FAR.u1, v1: barrelRowV, u2: -256, v2: barrelRowV + barrelPadDepth }, { ...podStyle, light: 178 });
   areaRect(direction, "far-plaza-lead-r", { u1: 256, v1: barrelRowV, u2: FAR.u2, v2: barrelRowV + barrelPadDepth }, { ...podStyle, light: 178 });
-  areaRect(direction, "far-plaza-back", { u1: FAR.u1, v1: barrelRowV + barrelPadDepth, u2: FAR.u2, v2: FAR.v1 + 183 }, { ...podStyle, light: 176 });
+  areaRect(direction, "far-plaza-back", { u1: FAR.u1, v1: barrelRowV + barrelPadDepth, u2: FAR.u2, v2: gateFrontV }, { ...podStyle, light: 176 });
   // Baron gate (waist-high sill, tag 556) + raised dais/pen (tag 548). The engine
   // holds the gate up at rest so the dormant baron reads as caged, and drops it on
   // an OOM kill so the baron walks out to detonate the fattest tenant.
-  areaRect(direction, "oom-gate", { u1: -160, v1: FAR.v1 + 183, u2: 160, v2: FAR.v1 + 215 }, {
+  areaRect(direction, "oom-gate", { u1: -160, v1: gateFrontV, u2: 160, v2: daisFrontV }, {
     ...podStyle,
     kind: "memory-oom-gate",
     floor: 64,
@@ -1375,7 +1389,7 @@ const build = (ctx) => {
     light: 150,
     tag: memoryTags.gate,
   });
-  areaRect(direction, "oom-dais", { u1: -160, v1: FAR.v1 + 215, u2: 160, v2: FAR.v2 }, {
+  areaRect(direction, "oom-dais", { u1: -160, v1: daisFrontV, u2: 160, v2: FAR.v2 }, {
     ...podStyle,
     kind: "memory-oom-pen",
     floor: 40,
@@ -1384,10 +1398,10 @@ const build = (ctx) => {
     light: 120,
     tag: memoryTags.oomPen,
   });
-  addAreaThing(direction, 3003, 0, FAR.v1 + 250); // Baron of Hell = the OOM killer
+  addAreaThing(direction, 3003, 0, Math.round((daisFrontV + FAR.v2) / 2)); // Baron of Hell = the OOM killer (dais centre)
   // Flanks beside the dais keep the far pod rectangular for the side-wall screens.
-  areaRect(direction, "far-flank-l", { u1: FAR.u1, v1: FAR.v1 + 183, u2: -160, v2: FAR.v2 }, { ...podStyle, light: 168 });
-  areaRect(direction, "far-flank-r", { u1: 160, v1: FAR.v1 + 183, u2: FAR.u2, v2: FAR.v2 }, { ...podStyle, light: 168 });
+  areaRect(direction, "far-flank-l", { u1: FAR.u1, v1: gateFrontV, u2: -160, v2: FAR.v2 }, { ...podStyle, light: 168 });
+  areaRect(direction, "far-flank-r", { u1: 160, v1: gateFrontV, u2: FAR.u2, v2: FAR.v2 }, { ...podStyle, light: 168 });
   terminalRecess("rss", { u1: FAR.u1 - REC, v1: FAR_TC - TERM_HALF, u2: FAR.u1, v2: FAR_TC + TERM_HALF }, memoryScreens.rss, "left", 184);
   terminalRecess("oom", { u1: FAR.u2, v1: FAR_TC - TERM_HALF, u2: FAR.u2 + REC, v2: FAR_TC + TERM_HALF }, memoryScreens.oom, "right", 150);
 
