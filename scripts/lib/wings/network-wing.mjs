@@ -203,6 +203,44 @@ const buildNetLightningBig = () => {
   return buildPatch(px, W, H, { transparent: T, leftOffset: 15, topOffset: H - 2 });
 };
 
+// Socket-lock capacitor-bank ARC FRAGMENT (SPR_BFE2 A-D, MT_DP_NETCAP): a small fullbright
+// bolt-fragment. The engine strings a chain of these along a fresh RANDOM jagged polyline
+// between the two capacitor tops every time an arc leaps (endpoints pinned to the towers), so
+// the fragments only need to read as bright jagged sparks, not a whole bolt. Four differently-
+// kinked frames so adjacent fragments never look identical -> the chain reads as one ragged arc.
+const buildNetArcSegment = (frame) => {
+  const W = 26, H = 26, T = 247;
+  const px = new Uint8Array(W * H).fill(T);
+  const plot = (x, y, c) => {
+    if (x >= 0 && x < W && y >= 0 && y < H && (px[y * W + x] === T || c === 4)) px[y * W + x] = c;
+  };
+  // Four short jagged strokes crossing the ~26px cell, each kinked differently (/, \, Z, Y-fork),
+  // drawn wide enough that consecutive fragments overlap into a continuous ragged line.
+  const paths = [
+    [[[2, 20], [10, 12], [7, 6], [16, 2]]],                       // A: rising / with a kink
+    [[[2, 4], [11, 12], [8, 18], [23, 22]]],                      // B: falling \ with a kink
+    [[[2, 8], [10, 6], [8, 14], [17, 12], [15, 20], [24, 18]]],   // C: tight Z zigzag
+    [[[3, 22], [12, 13], [22, 4]], [[12, 13], [21, 15]]],         // D: main slash + a short fork
+  ];
+  const stroke = (pts) => {
+    for (let s = 0; s < pts.length - 1; s += 1) {
+      const [x0, y0] = pts[s];
+      const [x1, y1] = pts[s + 1];
+      const steps = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0));
+      for (let t = 0; t <= steps; t += 1) {
+        const x = Math.round(x0 + ((x1 - x0) * t) / steps);
+        const y = Math.round(y0 + ((y1 - y0) * t) / steps);
+        plot(x - 1, y, 196); plot(x + 1, y, 196); // electric-blue glow
+        plot(x, y - 1, 196); plot(x, y + 1, 196);
+        plot(x, y, 4); // white-hot core
+      }
+    }
+  };
+  paths[frame].forEach(stroke);
+  // Centred on the mobj origin so the engine can drop each fragment exactly on a path node.
+  return buildPatch(px, W, H, { transparent: T, leftOffset: Math.floor(W / 2), topOffset: Math.floor(H / 2) });
+};
+
 // ===== Socket-lock CAPACITOR BANKS, take 3: authored SUBSTATION CAPACITOR TOWERS. Rather
 // than reuse the coils' glowing-rod vocabulary, each level-0 socket bay now stands TWO
 // hand-drawn capacitor towers -- a steel rack of stacked white capacitor units on dark-brown
@@ -210,13 +248,13 @@ const buildNetLightningBig = () => {
 // PROPS (MT_DP_NETCAPTWR, doomednum 3011, sprite SPR_COL2 frame A -- an unused single-frame IWAD
 // decoration. (SPR_COLU is the FLOOR-LAMP thing 2028, which the hub + memory wing DO place, so
 // reusing it repainted those lamps into towers; SPR_COL2's thing 31 is never placed.)
-// The live signal reads as the TRAVELLING BUS CURRENT the player picked: a bright bead
-// (SPR_BFE1 D/E round mote) runs along the wire between the two tower tops, spawned faster as
-// the lane's queue fills, plus an ambient charge glow on the bay floor. No jagged bolts -- the
-// current running BETWEEN towers is the socket bank's signature, distinct from the coils'
-// outward crackle. [[pwad-sprite-override-constraint]] [[prefer-everpresent-over-flicker]]
-const capMoteRamp = [4, 4, 192, 194, 196]; // white core -> electric blue (115,115,255)
-const capMoteFlash = [4, 4, 4, 192, 196];  // whiter, for the flicker frame
+// The live signal reads as DISCRETE LEAPING ARCS: at a rate set by the (smoothed) recv-q fill,
+// a lightning arc leaps between the two capacitor tops -- a chain of small fullbright bolt
+// fragments (SPR_BFE2 A-D) strung along a fresh RANDOM jagged polyline whose two ends are pinned
+// to the tower tops, so the route varies every leap but always starts/ends on a capacitor. The
+// arc marches B->A (tunnel side -> hub side == the RX +x flow direction), plus an ambient charge
+// glow on the bay floor. Distinct from the coils' outward tip-crackle: this jumps tower-to-tower.
+// [[pwad-sprite-override-constraint]] [[network-trackside-signals]]
 // The capacitor TOWER billboard (overrides IWAD COL2A0): a steel rack of five tiers of white
 // capacitor cans, top insulator bushings, standing on three ribbed brown porcelain posts over
 // a dark base pad. Floor-standing offset (feet at origin: leftOffset W/2, topOffset H).
@@ -1419,11 +1457,14 @@ const sprites = [
   { name: "BLUDA0", build: () => buildNetLightningSprite(0) },
   { name: "BLUDB0", build: () => buildNetLightningSprite(1) },
   { name: "BLUDC0", build: () => buildNetLightningBig() },
-  // Socket-lock capacitor charge effect (MT_DP_NETCAP): D/E rising charge motes, F flashover.
-  // Travelling-bus-current bead (round electric-blue mote, MT_DP_NETCAP D/E) + the authored
-  // capacitor-tower prop (SPR_COLU frame A, MT_DP_NETCAPTWR).
-  { name: "BFE1D0", build: () => buildFxPatch({ size: 14, ramp: capMoteRamp, outerFrac: 0.85 }) },
-  { name: "BFE1E0", build: () => buildFxPatch({ size: 12, ramp: capMoteFlash, outerFrac: 0.8 }) },
+  // Socket-lock capacitor bank LEAPING ARC (MT_DP_NETCAP): four jagged bolt-fragment frames
+  // (SPR_BFE2 A-D, fullbright) the engine strings along a random jagged path between the two
+  // capacitor tops. BFE2 is the BFG-ball burst -- no BFG in the lab, so nothing else renders it.
+  // (This freed the old BFE1 D/E travelling bead; the tower prop stays on SPR_COL2 A.)
+  { name: "BFE2A0", build: () => buildNetArcSegment(0) },
+  { name: "BFE2B0", build: () => buildNetArcSegment(1) },
+  { name: "BFE2C0", build: () => buildNetArcSegment(2) },
+  { name: "BFE2D0", build: () => buildNetArcSegment(3) },
   { name: "COL2A0", build: () => buildCapTowerSprite() },
   // Ring-buffer (L2) instrument props: turbine wheel (RX), dynamo drum (TX). Authored over UNUSED
   // single-frame IWAD decorations -- NOT ones whose stock thing the map places (SMIT=47, SMT2 are

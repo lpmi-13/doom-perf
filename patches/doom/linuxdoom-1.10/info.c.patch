@@ -41,7 +41,7 @@
      {SPR_SMBT,32768,4,{NULL},S_BTORCHSHRT2,0,0},	// S_BTORCHSHRT
      {SPR_SMBT,32769,4,{NULL},S_BTORCHSHRT3,0,0},	// S_BTORCHSHRT2
      {SPR_SMBT,32770,4,{NULL},S_BTORCHSHRT4,0,0},	// S_BTORCHSHRT3
-@@ -1099,7 +1110,181 @@
+@@ -1099,7 +1110,183 @@
      {SPR_TLP2,32768,4,{NULL},S_TECH2LAMP2,0,0},	// S_TECH2LAMP
      {SPR_TLP2,32769,4,{NULL},S_TECH2LAMP3,0,0},	// S_TECH2LAMP2
      {SPR_TLP2,32770,4,{NULL},S_TECH2LAMP4,0,0},	// S_TECH2LAMP3
@@ -194,13 +194,15 @@
 +    // The tall branchy bolt fired at very high saturation: one big frame, a touch longer
 +    // lived so the escalation reads (BLUD C, fullbright), then gone.
 +    {SPR_BLUD,32770,5,{NULL},S_NULL,0,0},	// S_DP_NETARC_BIG (bolt frame C, fullbright)
-+    // Socket-lock capacitor bank: the travelling BUS-CURRENT bead (SPR_BFE1 D/E round mote,
-+    // fullbright, ~50 tics so it crosses tower-to-tower then self-removes) and the static
-+    // capacitor TOWER prop (SPR_COLU A, NOT fullbright so the bay-floor charge glow lights it).
-+    // BFE1 A/B/C are the memory-fault SPRK spray; D/E free. The tower rides SPR_COL2 (thing 31,
-+    // never placed) -- NOT SPR_COLU, which is the floor-lamp thing 2028 the hub + memory wing place.
-+    {SPR_BFE1,32771,25,{NULL},S_DP_NETCUR2,0,0},	// S_DP_NETCUR1 (bead D, fullbright)
-+    {SPR_BFE1,32772,25,{NULL},S_NULL,0,0},	// S_DP_NETCUR2 (bead E) -> gone at the far tower
++    // Socket-lock capacitor bank: the DISCRETE LEAPING ARC -- four fullbright bolt-fragment frames
++    // (SPR_BFE2 A-D). Each fragment flashes once (~7 tics) then self-removes; the engine strings a
++    // chain of them along a fresh random jagged path between the two capacitor tops each leap.
++    // BFE2 is the BFG-ball burst -- no BFG in the lab, so nothing else renders it. The tower prop
++    // rides SPR_COL2 (thing 31, never placed) -- NOT SPR_COLU (floor-lamp 2028, which IS placed).
++    {SPR_BFE2,32768,7,{NULL},S_NULL,0,0},	// S_DP_NETARC_SEG0 (fragment frame A, fullbright)
++    {SPR_BFE2,32769,7,{NULL},S_NULL,0,0},	// S_DP_NETARC_SEG1 (fragment frame B, fullbright)
++    {SPR_BFE2,32770,7,{NULL},S_NULL,0,0},	// S_DP_NETARC_SEG2 (fragment frame C, fullbright)
++    {SPR_BFE2,32771,7,{NULL},S_NULL,0,0},	// S_DP_NETARC_SEG3 (fragment frame D, fullbright)
 +    {SPR_COL2,0,-1,{NULL},S_NULL,0,0},	// S_DP_NETCAPTWR (capacitor tower, static, sector-lit)
 +    // Ring-buffer + send-q machine props: static, NOT fullbright, so the bay-floor glow (which
 +    // ramps with throughput / send-q) lights them. SMIT/SMT2/COL1 frame A are UNUSED IWAD frames
@@ -224,7 +226,7 @@
  };
  
  
-@@ -4665,6 +4850,564 @@
+@@ -4665,6 +4852,564 @@
  	sfx_None,		// activesound
  	MF_NOBLOCKMAP,		// flags
  	S_NULL		// raisestate
@@ -606,9 +608,9 @@
 +	S_NULL		// raisestate
 +    },
 +
-+    {		// MT_DP_NETCAP -- the socket-lock travelling bus-current bead (no collision)
++    {		// MT_DP_NETCAP -- a socket-lock leaping-arc bolt fragment (no collision, self-removes)
 +	-1,		// doomednum (runtime-spawned only)
-+	S_DP_NETCUR1,		// spawnstate
++	S_DP_NETARC_SEG0,		// spawnstate (engine overrides with a random SEG0..3 per fragment)
 +	1000,		// spawnhealth
 +	S_NULL,		// seestate
 +	sfx_None,		// seesound

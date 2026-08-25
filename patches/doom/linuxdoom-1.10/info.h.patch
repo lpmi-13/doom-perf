@@ -14,7 +14,7 @@
 
 --- a/info.h
 +++ b/info.h
-@@ -1140,6 +1140,192 @@
+@@ -1140,6 +1140,194 @@
      S_TECH2LAMP2,
      S_TECH2LAMP3,
      S_TECH2LAMP4,
@@ -181,11 +181,13 @@
 +    S_DP_NETARC1,
 +    S_DP_NETARC2,
 +    S_DP_NETARC_BIG,
-+    // Socket-lock capacitor bank: the TRAVELLING BUS-CURRENT bead (SPR_BFE1 D/E round mote,
-+    // fullbright, long-lived) that glides along the wire between the two capacitor towers, and
-+    // the static capacitor-TOWER prop (SPR_COLU A, sector-lit) that stands in each socket bay.
-+    S_DP_NETCUR1,
-+    S_DP_NETCUR2,
++    // Socket-lock capacitor bank: the DISCRETE LEAPING ARC -- four fullbright bolt-fragment
++    // frames (SPR_BFE2 A-D) the engine strings along a fresh RANDOM jagged path between the two
++    // capacitor tops each leap, and the static capacitor-TOWER prop (SPR_COL2 A, sector-lit).
++    S_DP_NETARC_SEG0,
++    S_DP_NETARC_SEG1,
++    S_DP_NETARC_SEG2,
++    S_DP_NETARC_SEG3,
 +    S_DP_NETCAPTWR,
 +    // Ring-buffer (level 2) + send-q (level 0) machines. Three static, sector-lit billboard
 +    // props (turbine wheel over ELEC A, dynamo drum over SMT2 A, battery bank over COL1 A) plus
@@ -207,7 +209,7 @@
      NUMSTATES
  } statenum_t;
  
-@@ -1298,6 +1484,27 @@
+@@ -1298,6 +1486,27 @@
      MT_MISC84,
      MT_MISC85,
      MT_MISC86,

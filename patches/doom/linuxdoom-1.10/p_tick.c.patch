@@ -48,7 +48,7 @@
  //-----------------------------------------------------------------------------
  //
  // $Id:$
-@@ -30,9 +30,4288 @@
+@@ -30,9 +30,4325 @@
  
  #include "doomstat.h"
  
@@ -2988,8 +2988,10 @@
 +// between their tops. Mirrored from network-wing.mjs (RING_PITCH discipline). West maps local
 +// (u,v) -> world (-v,u), so the two towers (local u=+/-412, v=1162/1462) sit at world
 +// x=-1162/-1462; the bead runs at world y +/-384 (face-front, so it reads in front of them).
-+#define DOOMPERF_NET_CAP_TOPZ	140	// tower-top wire height where the current bead runs (level 0, F0=0)
++#define DOOMPERF_NET_CAP_TOPZ	140	// tower-top wire height where the leaping arc is strung (level 0, F0=0)
 +#define DOOMPERF_NET_CANL_TAG	752	// 752 + lane : socket bay floor (glow ramps with fill)
++#define DOOMPERF_NET_ARC_SEGS	6	// interior joints of the jagged arc polyline (tower B -> tower A)
++#define DOOMPERF_NET_ARC_SUB	2	// bolt fragments laid per leg (chain -> continuous ragged bolt)
 +static const int doomperf_net_cap_x[2] = {-1162, -1462};	// the two towers' world x (A / B)
 +static const int doomperf_net_cap_y[2] = {-384, 384};		// RX (left) / TX (right) bay, face-front
 +// ===== RING-BUFFER (level 2) TURBINE + DYNAMO wheels and SEND-Q (level 0) BATTERY banks ("more
@@ -4060,23 +4062,58 @@
 +	}
 +    }
 +
-+    // Socket-lock CAPACITOR BANK (RECV-Q, lane 0 only): the TRAVELLING BUS CURRENT. A bright bead
-+    // is launched A->B along the wire between the two capacitor towers at a rate set by the
-+    // smoothed recv-q fill, and glides tower-to-tower (its ~50-tic life crosses the 300-unit span,
-+    // then it self-removes). The SEND-Q bay (lane 1) is now a BATTERY bank -- its charge column
-+    // and vent are driven in DoomPerf_UpdateNetworkMachines, not a travelling bead.
-+    for (lane = 0; lane < 1; lane++)
++    // Socket-lock CAPACITOR BANK (RECV-Q, lane 0 only): the DISCRETE LEAPING ARC. At a rate set by
++    // the smoothed recv-q fill, a lightning arc leaps between the two capacitor tops. Each leap is a
++    // chain of small fullbright bolt fragments (MT_DP_NETCAP, SPR_BFE2 A-D) strung along a fresh
++    // RANDOM jagged polyline: it marches tower B (tunnel side, -x) -> tower A (hub side, +x) == the
++    // RX +x flow direction, its interior joints jitter in height/depth so the route differs every
++    // leap, and its two END fragments are PINNED to the tower tops so the arc always starts/ends on
++    // a capacitor. All the fragments flash together for ~7 tics then self-remove. (SEND-Q, lane 1,
++    // is a BATTERY bank -- driven in DoomPerf_UpdateNetworkMachines, not here.)
++    if (P_Random () < 2 + (cap_glow[0] * 90) / 1000)	// idle: rare zap .. saturated: near-continuous
 +    {
-+	int	g = cap_glow[lane];
++	int	bx = doomperf_net_cap_x[1];		// tower B world x (-1462, tunnel side, -x)
++	int	ax = doomperf_net_cap_x[0];		// tower A world x (-1162, hub side, +x)
++	int	ay = doomperf_net_cap_y[0];		// recv-q bay world y (-384)
++	int	az = DOOMPERF_NET_CAP_TOPZ;		// tower-top wire height
++	int	prevx = bx, prevy = ay, prevz = az;
++	int	seg;
++	mobj_t*	mo;
 +
-+	if (P_Random () < 3 + (g * 130) / 1000)		// idle trickle .. steady stream
++	// A fragment pinned exactly on tower B's top -- the arc root (RX enters from the tunnel side).
++	mo = P_SpawnMobj (bx << FRACBITS, ay << FRACBITS, az << FRACBITS, MT_DP_NETCAP);
++	P_SetMobjState (mo, S_DP_NETARC_SEG0 + (P_Random () & 3));
++
++	for (seg = 1; seg <= DOOMPERF_NET_ARC_SEGS; seg++)
 +	{
-+	    mobj_t*	mo = P_SpawnMobj (doomperf_net_cap_x[0] << FRACBITS,
-+				      doomperf_net_cap_y[lane] << FRACBITS,
-+				      DOOMPERF_NET_CAP_TOPZ << FRACBITS,
-+				      MT_DP_NETCAP);
-+	    P_SetMobjState (mo, S_DP_NETCUR1);
-+	    mo->momx = -6 * FRACUNIT;			// 300 units over ~50 tics, tower A -> tower B
++	    int	end = (seg == DOOMPERF_NET_ARC_SEGS);
++	    int	nx = bx + ((ax - bx) * seg) / DOOMPERF_NET_ARC_SEGS;	// march +x, tower B -> tower A
++	    int	ny = ay;
++	    int	nz = az;
++	    int	k;
++
++	    if (!end)						// jitter interior joints only (jagged path)
++	    {
++		nz += ((P_Random () - 128) * 44) / 128;		// +/- ~44 units up/down
++		ny += ((P_Random () - 128) * 22) / 128;		// +/- ~22 units in depth
++	    }
++	    // Lay DOOMPERF_NET_ARC_SUB fragments per leg so the chain reads as one continuous ragged
++	    // bolt; k == SUB lands exactly on this joint (and, on the last leg, exactly on tower A's
++	    // top). Each fragment picks a random kinked frame so neighbours never look identical.
++	    for (k = 1; k <= DOOMPERF_NET_ARC_SUB; k++)
++	    {
++		int	px = prevx + ((nx - prevx) * k) / DOOMPERF_NET_ARC_SUB;
++		int	py = prevy + ((ny - prevy) * k) / DOOMPERF_NET_ARC_SUB;
++		int	pz = prevz + ((nz - prevz) * k) / DOOMPERF_NET_ARC_SUB;
++
++		mo = P_SpawnMobj (px << FRACBITS, py << FRACBITS, pz << FRACBITS, MT_DP_NETCAP);
++		P_SetMobjState (mo, S_DP_NETARC_SEG0 + (P_Random () & 3));
++		// Interior fragments drift a touch toward the hub (+x) so the crackle reads as flowing
++		// B->A with RX; the two PINNED end fragments (tower B root above, tower A here) stay put.
++		if (!(end && k == DOOMPERF_NET_ARC_SUB))
++		    mo->momx = 2 * FRACUNIT;
++	    }
++	    prevx = nx; prevy = ny; prevz = nz;
 +	}
 +    }
 +}
@@ -4337,7 +4374,7 @@
  //
  // THINKERS
  // All thinkers should be allocated by Z_Malloc
-@@ -123,6 +4402,301 @@
+@@ -123,6 +4439,301 @@
  
  
  
@@ -4639,7 +4676,7 @@
  //
  // P_Ticker
  //
-@@ -130,11 +4704,11 @@
+@@ -130,11 +4741,11 @@
  void P_Ticker (void)
  {
      int		i;
@@ -4653,7 +4690,7 @@
      // pause if in menu and at least one tic has been run
      if ( !netgame
  	 && menuactive
-@@ -143,16 +4717,41 @@
+@@ -143,16 +4754,41 @@
      {
  	return;
      }
