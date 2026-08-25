@@ -1,0 +1,38 @@
+# Doom Perf engine patch: r_bsp.c
+#
+# Doom Perf change to r_bsp.c: raise MAXSEGS (the solidsegs clip-range table) so
+# the resource wings' dense single-view geometry can never overflow it. Vanilla
+# MAXSEGS is 32 and R_ClipSolidWallSegment has NO overflow guard -- past the
+# array it corrupts adjacent globals (silent BSS corruption -> intermittent,
+# turn-/view-dependent hard crash / black canvas). Companion to the
+# MAXVISPLANES / MAXOPENINGS (r_plane.c) and MAXDRAWSEGS (r_defs.h) bumps.
+#
+# Order-independent: this is the only Doom Perf patch that touches r_bsp.c.
+# Regenerate by diffing a clean tree against the staged build tree;
+# see scripts/build-doom-wasm.sh.
+
+--- a/r_bsp.c
++++ b/r_bsp.c
+@@ -85,7 +85,21 @@
+ } cliprange_t;
+
+
+-#define MAXSEGS		32
++// Doom Perf: raised from the vanilla 32. R_ClipSolidWallSegment inserts one
++// solidsegs entry per DISJOINT fully-occluding wall span on screen and has NO
++// overflow guard -- past solidsegs[MAXSEGS] it scribbles over the globals laid
++// out after the array (silent BSS corruption). Because the terminating sentinel
++// can be pushed out of range too, the "while (start->last < first-1) start++"
++// scans then run off into memory: the symptom is an intermittent, turn- and
++// view-dependent hard crash / black canvas, NOT a clean I_Error. The resource
++// wings put many separated solid structures in one sightline (the network
++// hall's pillars, bus housings, alcove edges and edge-on stair risers down its
++// full length), which pushed the disjoint-span count past 32. The count is
++// provably bounded by viewwidth/2 + 2 sentinels (<= 162 at SCREENWIDTH 320)
++// since every entry needs a >= 1px visible gap to the next, so 256 can NEVER
++// overflow for ANY view or geometry; it costs ~2 KB of BSS. Same class of fix
++// as MAXVISPLANES / MAXVISSPRITES / MAXDRAWSEGS.
++#define MAXSEGS		256
+
+ // newend is one past the last valid seg
+ cliprange_t*	newend;
