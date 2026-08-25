@@ -16,7 +16,7 @@
 
 --- a/r_segs.c
 +++ b/r_segs.c
-@@ -40,6 +40,82 @@
+@@ -40,6 +40,97 @@
  #include "r_sky.h"
  
  
@@ -25,6 +25,11 @@
 +// display globals consumed by R_DrawColumn.
 +extern int doomperf_cpu_column_display;
 +extern int doomperf_cpu_column_texture_x;
++// Network faceplate FIELD: a COMPTILE wall column handed to R_DrawColumn so the
++// switchyard-head field (above the grey shell) is the wing's blue computer-tile
++// wall rather than a flat colour. Set below for the display-40 columns; read by
++// R_DrawColumn. NULL when COMPTILE is somehow absent (drawer falls back to grey).
++extern byte* doomperf_net_field_col;
 +
 +// surface identifies which tier of the seg this column belongs to:
 +//   0 = top (two-sided upper), 1 = mid (one-sided wall), 2 = bottom (two-sided
@@ -83,13 +88,23 @@
 +	// separate and keeps the tag off the upper seal above the risers.
 +	doomperf_cpu_column_display = (surface == 2) ? 37 : 38;
 +    else if ((surface == 0 && tag == 770) || (surface == 1 && tag == 771))
-+	// Network ethernet-jack GREY SHELL: the same shader paints the shell TOP (tag 770, the bed's
-+	// UPPER texture above the stepped-arch mouth, DONTPEGTOP) and the two thin SIDE borders (tag
-+	// 771, the border strips' one-sided back walls, top-pegged) -- grey SILVER1 shell below
-+	// RECT_TOP, solid blue field above, so the grey reads as one rectangular frame around the
-+	// tunnel. Each gate is surface-specific so the tag drives only that face, not the strips'
-+	// front/riser seals.
++    {
++	// Network ethernet-jack GREY SHELL + tiled field: the shader paints the grey SILVER1 shell
++	// (dc_source, unchanged) below RECT_TOP and the wing's COMPTILE blue computer-tile wall
++	// ABOVE, so the switchyard-head faceplate matches the rest of the network wing's walls
++	// (was a flat electric-blue field). The COMPTILE column is fetched HERE and handed to
++	// R_DrawColumn via doomperf_net_field_col -- dc_source stays SILVER1 so the grey frame is
++	// byte-identical. tag 770 = the bed's UPPER texture above the stepped-arch mouth
++	// (DONTPEGTOP); tag 771 = the two thin SIDE border strips (top-pegged). Both anchor row 0
++	// at HALL_CEIL, so the COMPTILE field tiles in step with the platform walls flanking the
++	// mouth. Each gate is surface-specific so the tag drives only that face.
++	static int comptile = -1;
++	if (comptile < 0)
++	    comptile = R_CheckTextureNumForName ("COMPTILE");
 +	doomperf_cpu_column_display = 40;
++	doomperf_net_field_col =
++	    (comptile >= 0) ? R_GetColumn (comptile, texturecolumn) : NULL;
++    }
 +    else
 +	doomperf_cpu_column_display = 0;
 +    doomperf_cpu_column_texture_x = texturecolumn;
@@ -99,7 +114,7 @@
  // OPTIMIZE: closed two sided lines as single sided
  
  // True if any of the segs textures might be visible.
-@@ -121,12 +197,13 @@
+@@ -121,12 +212,13 @@
  	
      lightnum = (frontsector->lightlevel >> LIGHTSEGSHIFT)+extralight;
  
@@ -118,7 +133,7 @@
  	walllights = scalelight[0];
      else if (lightnum >= LIGHTLEVELS)
  	walllights = scalelight[LIGHTLEVELS-1];
-@@ -284,7 +361,9 @@
+@@ -284,7 +376,9 @@
  	    dc_yh = yh;
  	    dc_texturemid = rw_midtexturemid;
  	    dc_source = R_GetColumn(midtexture,texturecolumn);
@@ -128,7 +143,7 @@
  	    ceilingclip[rw_x] = viewheight;
  	    floorclip[rw_x] = -1;
  	}
-@@ -306,7 +385,9 @@
+@@ -306,7 +400,9 @@
  		    dc_yh = mid;
  		    dc_texturemid = rw_toptexturemid;
  		    dc_source = R_GetColumn(toptexture,texturecolumn);
@@ -138,7 +153,7 @@
  		    ceilingclip[rw_x] = mid;
  		}
  		else
-@@ -336,7 +417,9 @@
+@@ -336,7 +432,9 @@
  		    dc_texturemid = rw_bottomtexturemid;
  		    dc_source = R_GetColumn(bottomtexture,
  					    texturecolumn);
@@ -148,7 +163,7 @@
  		    floorclip[rw_x] = mid;
  		}
  		else
-@@ -643,12 +726,10 @@
+@@ -643,12 +741,10 @@
  	{
  	    lightnum = (frontsector->lightlevel >> LIGHTSEGSHIFT)+extralight;
  

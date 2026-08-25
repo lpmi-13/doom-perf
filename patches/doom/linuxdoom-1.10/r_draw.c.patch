@@ -14,13 +14,14 @@
 #   0035  disk-platter-spindle
 #
 #   (+)   network-qdisc-disc (kernel-TX qdisc occupancy disc + enqueue/dequeue flow-line shaders)
+#   (+)   network-faceplate-comptile (switchyard-head faceplate field = wing COMPTILE wall; was solid index 200)
 # Order-independent: this is the only Doom Perf patch that touches r_draw.c.
 # Regenerate by diffing a clean tree against the staged build tree;
 # see scripts/build-doom-wasm.sh.
 
 --- a/r_draw.c
 +++ b/r_draw.c
-@@ -95,14 +95,70 @@
+@@ -95,14 +95,78 @@
  // just for profiling 
  int			dccount;
  
@@ -30,6 +31,11 @@
 +// the other R_DoomPerfCpu* functions.
 +int			doomperf_cpu_column_display = 0;
 +int			doomperf_cpu_column_texture_x = 0;
++// Doom Perf: network faceplate FIELD column. r_segs.c fetches the wing's COMPTILE
++// wall column for each display-40 column; R_DrawColumn samples it for the field
++// ABOVE the grey shell so the switchyard-head faceplate reads as the same blue
++// computer-tile wall as the rest of the network wing.
++byte*			doomperf_net_field_col = 0;
 +
 +// Doom Perf: memory-well SHAFT depth-darkening (displays 37/38). The catwalk
 +// overlooks a well that drops from z=0 to the -2048 floor; both faces the eye
@@ -73,13 +79,16 @@
  //
 +// Doom Perf: network ethernet-jack GREY SHELL (display 40). The wall above the stepped-arch
 +// mouth reads as an RJ45 jack: a grey metal SHELL (a flat-topped rectangle hugging the top of
-+// the tunnel) on a solid electric-blue field. The bed's upper texture is pegged ML_DONTPEGTOP,
-+// so a pixel's world z is FACE_CEIL - (frac>>FRACBITS): below FACE_TOP it keeps the normal grey
-+// SILVER1 wall (the shell), above it becomes the solid blue field. Mirrors network-wing.mjs
-+// (RING_PITCH): FACE_CEIL = HALL_CEIL, FACE_TOP = RECT_TOP, FACE_BLUE = FACE_BLUE.
++// the tunnel) framed by the wing's blue computer-tile wall. The bed's upper texture is pegged
++// ML_DONTPEGTOP, so a pixel's world z is FACE_CEIL - (frac>>FRACBITS): below FACE_TOP it keeps
++// the normal grey SILVER1 wall (the shell, dc_source), above it becomes the FIELD. The field
++// was formerly a flat electric-blue index (200 = (0,0,255)); it now samples the wing's COMPTILE
++// wall (doomperf_net_field_col, fetched per-column in r_segs.c) so it matches the rest of the
++// network wing's walls. Row 0 anchors at FACE_CEIL for both the shell and the COMPTILE field, so
++// the field tiles in step with the DPNFACE-free platform walls (also COMPTILE) flanking the
++// mouth. Mirrors network-wing.mjs (RING_PITCH): FACE_CEIL = HALL_CEIL, FACE_TOP = RECT_TOP.
 +#define DOOMPERF_NET_FACE_CEIL	176	// switchyard-head ceiling (HALL_CEIL)
-+#define DOOMPERF_NET_FACE_TOP	(-12)	// grey-shell top world-z (grey shell below, blue field above)
-+#define DOOMPERF_NET_FACE_BLUE	200	// solid electric-blue field palette index
++#define DOOMPERF_NET_FACE_TOP	(-12)	// grey-shell top world-z (grey shell below, tiled field above)
 +
  // A column is a vertical slice/span from a wall texture that,
  //  given the DOOM style restrictions on the view orientation,
@@ -93,7 +102,7 @@
  { 
      int			count; 
      byte*		dest; 
-@@ -137,9 +193,102 @@
+@@ -137,9 +201,107 @@
      // This is as fast as it gets.
      do 
      {
@@ -176,13 +185,18 @@
 +	}
 +	else if (doomperf_cpu_column_display == 40)
 +	{
-+	    // Ethernet-jack grey shell: normal grey SILVER1 wall below the shell top, solid
-+	    // blue field above. worldZ = FACE_CEIL - ty (bed upper texture is DONTPEGTOP).
++	    // Ethernet-jack grey shell: normal grey SILVER1 wall (dc_source) below the shell top,
++	    // the wing's COMPTILE blue computer-tile wall (doomperf_net_field_col, fetched in
++	    // r_segs.c) above so the field matches the rest of the network wing. worldZ =
++	    // FACE_CEIL - ty (bed upper texture is DONTPEGTOP); both are masked &127 like any wall.
++	    // If COMPTILE is somehow missing, fall back to the grey shell rather than deref NULL.
 +	    int	ty = frac>>FRACBITS;
 +	    if (DOOMPERF_NET_FACE_CEIL - ty < DOOMPERF_NET_FACE_TOP)
 +		*dest = dc_colormap[dc_source[ty & 127]];
++	    else if (doomperf_net_field_col)
++		*dest = dc_colormap[doomperf_net_field_col[ty & 127]];
 +	    else
-+		*dest = dc_colormap[DOOMPERF_NET_FACE_BLUE];
++		*dest = dc_colormap[dc_source[ty & 127]];
 +	}
 +	else if (doomperf_cpu_column_display >= 20)
 +	    *dest = dc_colormap[R_DoomPerfDiskGaugePixel(doomperf_cpu_column_display - 20,
@@ -199,7 +213,7 @@
  	
  	dest += SCREENWIDTH; 
  	frac += fracstep;
-@@ -514,6 +663,1132 @@
+@@ -514,6 +676,1132 @@
  // just for profiling
  int			dscount;
  
@@ -1332,7 +1346,7 @@
  
  //
  // Draws the actual span.
-@@ -553,7 +1828,24 @@
+@@ -553,7 +1841,24 @@
  
  	// Lookup pixel from flat texture tile,
  	//  re-index using light/colormap.
@@ -1358,7 +1372,7 @@
  
  	// Next step in u,v.
  	xfrac += ds_xstep; 
-@@ -676,8 +1968,22 @@
+@@ -676,8 +1981,22 @@
  	spot = ((yfrac>>(16-6))&(63*64)) + ((xfrac>>16)&63);
  	// Lowres/blocky mode does it twice,
  	//  while scale is adjusted appropriately.

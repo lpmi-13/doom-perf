@@ -620,17 +620,21 @@ const V_BORE_END = V_ARCH + 700; // 5140: bore end cap (deep black); orbs fade a
 const TUNNEL_WALL = tex("TUN");  // authored cast-iron tunnel-liner wall texture (DPNTUN)
 
 // ===== Ethernet-jack FACEPLATE. The stepped-arch mouth (the "jagged sawtooth" jack silhouette)
-// sits in a GREY metal SHELL (a flat-topped rectangle hugging the top of the tunnel, SILVER1) on
-// a solid ELECTRIC-BLUE field (everything outside the shell). The grey->blue split is horizontal
-// and by COLOUR only (no geometry): a wall pixel-shader on the BED's upper texture paints the
-// normal grey wall BELOW RECT_TOP (the shell) and the blue field ABOVE. The walls flanking the
-// mouth (platform back walls) are the plain blue field. On-theme with the blue retheme
-// ([[network-canal-plan]]). Engine mirrors RECT_TOP/FACE_BLUE in r_draw.c (RING_PITCH).
-const RECT_TOP = -12;    // grey-shell top world-z: grey (shell) below, blue field above
+// sits in a GREY metal SHELL (a flat-topped rectangle hugging the top of the tunnel, SILVER1)
+// framed by the wing's ordinary blue COMPTILE computer-tile wall (everything outside the shell).
+// Formerly this field was a flat electric-blue index (200 = (0,0,255)); it now reads as the SAME
+// blue circuit-tile wall as the rest of the network wing, so the switchyard head blends in rather
+// than glaring. The grey->field split is horizontal and by COLOUR only (no geometry): a wall
+// pixel-shader on the BED's upper texture paints the normal grey wall BELOW RECT_TOP (the shell)
+// and the COMPTILE field ABOVE. The walls flanking the mouth (platform back walls) are plain
+// COMPTILE. Both the shell and the field anchor texture row 0 at HALL_CEIL, so the shader-drawn
+// field (r_segs.c fetches a COMPTILE column for it) and the texture-drawn platform walls tile in
+// step. On-theme with the blue retheme ([[network-canal-plan]]). Engine mirrors RECT_TOP in
+// r_draw.c (RING_PITCH); the field texture is COMPTILE on both sides (no bespoke lump).
+const RECT_TOP = -12;    // grey-shell top world-z: grey (shell) below, COMPTILE field above
 const FACE_TAG = ids.lineTags[0] + 10; // 770: TOP-shell shader tag (bed upper texture, surface 0)
 const FACE_SIDE_TAG = ids.lineTags[0] + 11; // 771: SIDE-border shader tag (border strip back wall, surface 1)
-const FACE_BLUE = 200;   // solid electric-blue field index (pure blue, RGB 0,0,255)
-const FACE_BLUE_TEX = wingName("network", "FACE"); // DPNFACE solid-blue field texture (flanking walls)
+const FACE_FIELD_TEX = "COMPTILE"; // faceplate field = the wing's standard blue computer-tile wall
 const BORDER_W = 20;     // thin grey SIDE-border width just outside each tunnel edge (the shell's jambs)
 
 // ===== Walk floors (local z): 0 / -168 / -336, a deep descent. The bus drops the full
@@ -1263,13 +1267,14 @@ const build = (ctx) => {
   // spandrel above the arch is an upper texture drawn by the higher-ceiling sector (the track bed),
   // so the bed also wears the accent; the arch jambs + bore stay on the liner (darkMat).
   const PORTAL_WALL = accent.wall; // SILVER1: matches the walls either side of the softnet terminal
-  // Platform-flanking BACK wall (the `top`/portal-facing edge) wears the solid-blue FACEPLATE
-  // field (DPNFACE) so the wall either side of the grey mouth rectangle reads as the blue jack
-  // panel; the platform's other faces keep the grey accent.
-  // Platform-flanking BACK wall (`backWall` = the portal-facing edge; NOTE the WEST rotation maps
-  // local max-v to a world MIN-X edge, so this is NOT world "top") wears the solid-blue FACEPLATE
-  // field. light 132 matches the bed's headwall so the two blue faces read as ONE uniform panel.
-  const platMat = { ...hall, kind: "net-plaza", ceiling: HALL_CEIL, wall: PORTAL_WALL, floor: F2, light: 132, labelSide: backWall, labelTexture: FACE_BLUE_TEX };
+  // Platform-flanking BACK wall (the `top`/portal-facing edge) wears the FACEPLATE field texture
+  // (COMPTILE, the wing's standard blue computer-tile wall) so the wall either side of the grey
+  // mouth rectangle reads as the same wall as the rest of the wing; the platform's other faces
+  // keep the grey accent.
+  // (`backWall` = the portal-facing edge; NOTE the WEST rotation maps local max-v to a world
+  // MIN-X edge, so this is NOT world "top".) light 132 matches the bed's headwall so the flanking
+  // walls and the shader-drawn field above the shell read as one continuous COMPTILE panel.
+  const platMat = { ...hall, kind: "net-plaza", ceiling: HALL_CEIL, wall: PORTAL_WALL, floor: F2, light: 132, labelSide: backWall, labelTexture: FACE_FIELD_TEX };
   const darkMat = { ...conduit, kind: "net-tunnel", wall: TUNNEL_WALL, floor: BED_Z, floorFlat: groundFlatName, ceilingFlat: groundFlatName };
   // Raised station PLATFORMS flanking the track bed (continue the ring catwalks at F2). Each side is
   // split: a thin inner grey SIDE-BORDER strip (the jack shell's jamb) hugging the tunnel edge, and
@@ -1348,9 +1353,9 @@ const textures = [
   { texture: signalScreens.stop, patch: tex("PSST"), width: SIGTEX_W, height: SIGTEX_H, build: () => buildSignalPatch({ redLit: true }) },
   // Train-tunnel cast-iron liner wall (the switchyard-head tube tunnel).
   { texture: TUNNEL_WALL, patch: tex("PTUN"), width: 128, height: 128, build: () => buildTunnelLinerPatch() },
-  // Faceplate FIELD: a flat solid electric-blue wall (single index FACE_BLUE) for the jack-panel
-  // wall flanking the mouth; the shader paints the SAME index above the grey rectangle so they match.
-  { texture: FACE_BLUE_TEX, patch: tex("PFACE"), width: 64, height: 128, build: () => buildPatch(new Uint8Array(64 * 128).fill(FACE_BLUE), 64, 128) },
+  // (The faceplate FIELD is the stock COMPTILE wall now -- no bespoke lump. The flanking platform
+  // walls reference it directly and r_segs.c hands R_DrawColumn a COMPTILE column for the
+  // shader-drawn field above the grey shell.)
 ];
 
 const flats = [
