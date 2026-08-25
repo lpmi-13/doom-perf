@@ -935,7 +935,12 @@ const build = (ctx) => {
       return;
     }
     const lopt = (flat) => ({ ...hall, kind: "net-walk", floor: walk, ceiling, light: 176, floorFlat: flat });
-    const vc = Math.round((sv1 + cv2) / 2);
+    // 64-ALIGN the label band. These are WEST-facing floor inscriptions, so their glyph-HEIGHT
+    // axis runs along local v (reading direction along u); if the split point vc isn't a multiple
+    // of 64 the 64-tall line bands straddle a flat tile boundary and every letter wraps top<->bottom
+    // (the world-mod-64 floor sampling). The raw stage midpoint is ~32 off-grid, so snap it.
+    // [[doom-wall-texture-128-tiling]] [[angled-floor-label-technique]]
+    const vc = Math.round((sv1 + cv2) / 2 / 64) * 64;
     const vT = vc - 64, vB = vc + 64;
     // Label cells hug the outer wall (name0 at the smaller |u| of the pair); the fill
     // strip carries the plain catwalk between the label and the bus edge.
