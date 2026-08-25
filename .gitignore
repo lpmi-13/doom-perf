@@ -27,3 +27,5 @@ public/wads/*.WAD
 playwright-*
 
 notes.txt
+
+*.md
