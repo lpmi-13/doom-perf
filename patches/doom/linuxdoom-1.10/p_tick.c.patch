@@ -2996,13 +2996,13 @@
 +static const int doomperf_net_cap_y[2] = {-384, 384};		// RX (left) / TX (right) bay, face-front
 +// ===== RING-BUFFER (level 2) TURBINE + DYNAMO wheels and SEND-Q (level 0) BATTERY banks ("more
 +// alive network instruments"). Mirrored from network-wing.mjs (RING_PITCH discipline). West maps
-+// local (u,v) -> world (-v,u). The two ring bays sit at level-2 vc=3872 (props at v=3722/4022,
-+// u=+/-412 -> world x=-3722/-4022). The wheels SPIN via a ring of orbiting motes hand-positioned
++// local (u,v) -> world (-v,u). The two ring bays sit at level-2 vc=3872 (props at v=3648/4096,
++// u=+/-412 -> world x=-3648/-4096, RING_SPREAD=224 apart). The wheels SPIN via a ring of orbiting motes hand-positioned
 +// around each hub at an angular rate set by the live RX/TX throughput; overrun/brush SPARKS fire
 +// off the rim on ring drops. (The send-q BATTERY banks are 3D cell-column geometry with a
 +// segmented fill shader -- R_DoomPerfNetBatteryPixel, tags 762-763 -- not mobjs, so they're not
 +// driven here.)
-+static const int doomperf_net_wheel_x[2] = {-3722, -4022};	// the two flanking wheels' world x
++static const int doomperf_net_wheel_x[2] = {-3648, -4096};	// the two flanking wheels' world x
 +#define DOOMPERF_NET_TURB_Y	(-388)	// RX ring bay (left): motes ride in front of the wheels
 +#define DOOMPERF_NET_DYN_Y	388	// TX ring bay (right)
 +#define DOOMPERF_NET_TURB_Z	(-246)	// turbine hub height (walk F2=-336 + 90 map units)

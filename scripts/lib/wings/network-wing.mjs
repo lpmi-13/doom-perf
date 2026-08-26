@@ -700,6 +700,13 @@ const CAP_BAY_TAG = ids.sectorTags[0] + 52; // 752 recv bay / 753 send bay (floo
 const TURB_EDNUM = 3012;  // MT_DP_NETTURB -- NIC RX ring turbine wheel
 const DYN_EDNUM = 3013;   // MT_DP_NETDYN  -- NIC TX ring dynamo drum
 const RING_BAY_TAG = ids.sectorTags[0] + 54; // 754 turbine (RX) bay / 755 dynamo (TX) bay glow
+// The NIC-ring (level-2) bays open WIDER than the generic BAY_HW window and stand their two
+// turbine wheels FURTHER apart than the socket bays' CAP_SPREAD, so the ring terminal reads with
+// clear air either side of it (user: "more space either side of the NIC buffer-ring terminals").
+// The wider spread is mirrored in p_tick.c as doomperf_net_wheel_x (RING_PITCH discipline): the
+// orbiting spin-motes are hand-positioned around each wheel's world x = -(vc +/- RING_SPREAD).
+const RING_BAY_HW = 304;  // ring bay half-width in v (vs BAY_HW 256) -- a wider recess
+const RING_SPREAD = 224;  // |v - vc| of the two turbine wheels (vs CAP_SPREAD 150) -- pushed apart
 const BATT_LINE_TAG = ids.lineTags[0] + 2;   // 762 red (+) cell column / 763 blue (-) cell column
 const BATT_HW = 32;       // battery cell-column half-width (64x64 footprint, all faces 64 wide)
 const BATT_H = 40;        // battery height: a low block (cap band + 2 cell rows) with its TOP at
@@ -1060,15 +1067,17 @@ const build = (ctx) => {
   const ringInstrumentBay = (side, lane, propEdnum, sc) => {
     const lvl = levels[2];
     const vc = Math.round((lvl.sv1 + lvl.cv2) / 2);
-    const bv1 = vc - BAY_HW, bv2 = vc + BAY_HW; // fixed 512-wide alcove window (plain catwalk outside)
+    const bv1 = vc - RING_BAY_HW, bv2 = vc + RING_BAY_HW; // WIDER (608) alcove window: more air either side of the terminal
     const sgn = side === "left" ? -1 : 1;
     const inner = sgn * EDGEHW; //  catwalk-side opening
     const outer = sgn * ALCHW; //   deep wall
     areaRect(direction, `ring-${side}-floor`, uv(outer, inner, bv1, bv2), {
       ...intake, kind: "net-alcove", floor: F2, ceiling: HALL_CEIL, light: 150, tag: RING_BAY_TAG + lane,
     });
-    addAreaThing(direction, propEdnum, sgn * CAP_COL_C, vc - CAP_SPREAD);
-    addAreaThing(direction, propEdnum, sgn * CAP_COL_C, vc + CAP_SPREAD);
+    // The two turbine wheels flank the walkway further apart than the socket bays (RING_SPREAD),
+    // clearing the terminal edges (vc +/- 128) with open air -- mirrored in p_tick.c wheel_x.
+    addAreaThing(direction, propEdnum, sgn * CAP_COL_C, vc - RING_SPREAD);
+    addAreaThing(direction, propEdnum, sgn * CAP_COL_C, vc + RING_SPREAD);
     areaRect(direction, `ring-${side}-term`, uv(sgn * (ALCHW + ALC_RECESS), outer, vc - terminalTextureSize.width / 2, vc + terminalTextureSize.width / 2), {
       ...conduit, kind: "terminal",
       floor: F2 + terminalPanelFloor,
