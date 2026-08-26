@@ -10,7 +10,7 @@ import {
 } from "./lib/textures.mjs";
 import { createMapBuilder } from "./lib/map-builder.mjs";
 import { controlPanelTexture } from "./lib/wings/registry.mjs";
-import { buildPerfTitlePic, buildPerfMenuTitle } from "./lib/titlepic.mjs";
+import { buildPerfTitlePic, buildPerfMenuTitle, decodePatch, readPalette, nearest } from "./lib/titlepic.mjs";
 import { cpuWing } from "./lib/wings/cpu-wing.mjs";
 import { memoryWing } from "./lib/wings/memory-wing.mjs";
 import { storageWing } from "./lib/wings/storage-wing.mjs";
@@ -515,6 +515,26 @@ const perfMenuTitle = buildPerfMenuTitle({
   playpalLump,
   buildPatch,
 });
+// Big VIOLET ring-mote for the TX NIC ring, an EXACT violet twin of the RX ring's blue mote.
+// The RX turbine's orbiting motes render freedoom's stock BFG-burst frame BFE1 D -- a large blue
+// blob, left unauthored -- so 8 of them overlap into the dense blue "rose". The TX mote must match
+// that size/shape (its old PMAP-B FX ring was a fraction of the size, reading as tiny dots). So we
+// recolour the SAME stock blob blue->violet -- copy each pixel's blue channel into red (blue->
+// magenta, the R==G core stays a light highlight) and quantise back to the palette, landing in the
+// project's own violet family (251/252/...) -- and host it on the free frame PLSE D, which
+// S_DP_NETSPIN_V points at. Same footprint + offsets as BFE1 D, so it orbits identically. [[pwad-sprite-override-constraint]]
+const perfVioletMote = (() => {
+  const pal = readPalette(playpalLump);
+  const { width, height, leftOffset, topOffset, idx, mask } = decodePatch(readWadLump(iwadBytes, "BFE1D0"));
+  const T = 247; // transparent sentinel (unused by the all-blue blob)
+  const px = new Uint8Array(width * height).fill(T);
+  for (let i = 0; i < px.length; i += 1) {
+    if (!mask[i]) continue;
+    const [, g, b] = pal[idx[i]];
+    px[i] = nearest(pal, b, g, b); // blue -> violet: R <- B
+  }
+  return buildPatch(px, width, height, { leftOffset, topOffset, transparent: T });
+})();
 const labelConfigs = Object.values(resourceConfigs);
 // The four shared door/label textures (one per wing) plus each wing's own
 // texture contributions, in `wings` order. Adding a texture is a single-file
@@ -620,6 +640,8 @@ const mapLumps = [
   // today): each PWAD-replaces an unused IWAD item sprite by name, resolved via
   // modifiedgame + W_GetNumForName.
   ...wings.flatMap((wing) => wing.sprites ?? []).map(({ name, build }) => lump(name, build())),
+  // TX ring's big violet mote (recoloured stock BFE1 D, hosted on PLSE D -- see perfVioletMote).
+  lump("PLSED0", perfVioletMote),
   lump("F_START"),
   ...iwadFlats,
   ...inscriptionFlats,

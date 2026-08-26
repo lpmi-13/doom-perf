@@ -48,7 +48,7 @@
  //-----------------------------------------------------------------------------
  //
  // $Id:$
-@@ -30,9 +30,4325 @@
+@@ -30,9 +30,4329 @@
  
  #include "doomstat.h"
  
@@ -3006,7 +3006,7 @@
 +#define DOOMPERF_NET_TURB_Y	(-388)	// RX ring bay (left): motes ride in front of the wheels
 +#define DOOMPERF_NET_DYN_Y	388	// TX ring bay (right)
 +#define DOOMPERF_NET_TURB_Z	(-246)	// turbine hub height (walk F2=-336 + 90 map units)
-+#define DOOMPERF_NET_DYN_Z	(-260)	// dynamo drum-centre height (F2 -336 + 76)
++#define DOOMPERF_NET_DYN_Z	(-246)	// TX ring hub height == turbine hub (F2 -336 + 90); the TX ring now reuses the RX turbine wheel
 +#define DOOMPERF_NET_WHEEL_R	40	// orbit radius (just inside the blade rim)
 +#define DOOMPERF_NET_SPIN_MOTES	8	// motes per wheel in the orbiting ring
 +// (The send-q BATTERY banks are 3D cell-column geometry with a segmented fill shader on their
@@ -4118,17 +4118,17 @@
 +    }
 +}
 +
-+// Doom Perf: RING-BUFFER TURBINES / DYNAMOS ("more alive network instruments"). The turbine (RX)
-+// and dynamo (TX) wheels each carry a ring of orbiting motes whose angular speed IS the live
-+// throughput -- an idle wheel barely creeps, a saturated NIC blurs; a ring DROP
-+// (doomperf_net_lock_drops[2][lane]) sheds a spark off the rim (turbine overrun) or cracks the
-+// commutator (dynamo brush-arc). (The send-q battery banks are 3D cell-column geometry with a
++// Doom Perf: RING-BUFFER TURBINES ("more alive network instruments"). Both NIC rings (RX + TX)
++// are the SAME turbine wheel now -- identical bar the orbiting-mote colour (blue RX / violet TX).
++// Each wheel carries a ring of orbiting motes whose angular speed IS the live throughput -- an
++// idle wheel barely creeps, a saturated NIC blurs; a ring DROP (doomperf_net_lock_drops[2][lane])
++// sheds a spark off the rim at a random blade tip. (The send-q battery banks are 3D cell-column geometry with a
 +// segmented fill shader, R_DoomPerfNetBatteryPixel -- not mobjs.) Every mote is hand-positioned
 +// (floorz==ceilingz==z skips P_ZMovement, the [[hand-positioned-mobj-floorz]] idiom). Reads only
 +// signals the engine already has (EffectiveNetworkRx/Tx + the level fills/drops); no new feed.
 +void DoomPerf_UpdateNetworkMachines (void)
 +{
-+    // spin[ring][wheel][mote]: ring 0 = RX turbine, 1 = TX dynamo. (The send-q battery banks
++    // spin[ring][wheel][mote]: ring 0 = RX turbine, 1 = TX turbine (same wheel). (The send-q battery banks
 +    // are now 3D cell-column GEOMETRY with a segmented fill shader on their faces -- see
 +    // R_DoomPerfNetBatteryPixel / tags 762-763 -- so they need no mobjs here.)
 +    static mobj_t*	spin[2][2][DOOMPERF_NET_SPIN_MOTES];
@@ -4156,7 +4156,7 @@
 +	else if (rate[i] > 1000) rate[i] = 1000;
 +    }
 +
-+    // --- Turbine (RX) + dynamo (TX) spin rings ---
++    // --- Turbine spin rings (RX + TX, same wheel) ---
 +    for (ring = 0; ring < 2; ring++)
 +    {
 +	int	drops = doomperf_net_lock_drops[2][ring];
@@ -4199,15 +4199,19 @@
 +		mo->floorz = mo->ceilingz = z;		// hand-positioned; skip P_ZMovement
 +	    }
 +
-+	    // Ring DROP -> a spark off the rim. Turbine (ring 0) sheds it at a RANDOM blade tip
-+	    // (overrun); dynamo (ring 1) cracks it at the COMMUTATOR (fixed rim point, world +x).
++	    // Ring DROP -> a spark off the rim at a RANDOM blade tip (overrun). Both NIC rings are
++	    // the same turbine wheel now, so both shed the spark identically -- only the COLOUR
++	    // differs: the RX bolt is blue (the MT_DP_NETARC spawnstate), the TX bolt violet (its
++	    // S_DP_NETARC_V1 twin), matching each ring's orbiting-mote colour.
 +	    if (drops > 0 && P_Random () < (drops * 200) / 1000)
 +	    {
-+		int	fa = ring ? 0 : ((P_Random () << 5) & FINEMASK);
++		int	fa = (P_Random () << 5) & FINEMASK;
 +		fixed_t	sx = (hubX << FRACBITS) + FixedMul (DOOMPERF_NET_WHEEL_R << FRACBITS, finecosine[fa]);
 +		fixed_t	sz = (hubZ << FRACBITS) + FixedMul (DOOMPERF_NET_WHEEL_R << FRACBITS, finesine[fa]);
++		mobj_t*	spk = P_SpawnMobj (sx, hubY << FRACBITS, sz, MT_DP_NETARC);
 +
-+		P_SpawnMobj (sx, hubY << FRACBITS, sz, MT_DP_NETARC);
++		if (ring)		// TX ring: recolour the bolt violet to match the violet motes
++		    P_SetMobjState (spk, S_DP_NETARC_V1);
 +	    }
 +	}
 +    }
@@ -4374,7 +4378,7 @@
  //
  // THINKERS
  // All thinkers should be allocated by Z_Malloc
-@@ -123,6 +4439,301 @@
+@@ -123,6 +4443,301 @@
  
  
  
@@ -4676,7 +4680,7 @@
  //
  // P_Ticker
  //
-@@ -130,11 +4741,11 @@
+@@ -130,11 +4745,11 @@
  void P_Ticker (void)
  {
      int		i;
@@ -4690,7 +4694,7 @@
      // pause if in menu and at least one tic has been run
      if ( !netgame
  	 && menuactive
-@@ -143,16 +4754,41 @@
+@@ -143,16 +4758,41 @@
      {
  	return;
      }

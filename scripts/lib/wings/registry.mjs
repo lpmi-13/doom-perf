@@ -146,13 +146,17 @@ export const reserved = {
     // fade FX; PMAP (A–D) -> violet TX packet + FX. Both unused by CPU (PINS/
     // SOUL/BON1/BON2). BLUD A/B/C -> softnet Tesla-coil lightning (MT_DP_NETARC): A/B a
     // small flickering bolt, C the tall branchy bolt fired at very high saturation. Blood
-    // is never spawned in a combat-free lab, so the frames are free. BFE1 D/E -> socket-lock
-    // travelling-current bead (MT_DP_NETCAP; A/B/C are the memory-fault SPRK spray, D/E free).
+    // is never spawned in a combat-free lab, so the frames are free. BFE1 (BFG-burst, no BFG in
+    // the lab): A/B/C are the memory-fault SPRK spray (memory wing); D = the blue orbiting/charge
+    // MOTE (stock frame D, rendered as-is); E/F -> the VIOLET twin of the drop-spark bolt for the
+    // TX ring (MT_DP_NETARC via S_DP_NETARC_V1/2) -- the SAME shape as BLUD A/B, violet rim.
     // COLU A -> the authored capacitor-tower prop (MT_DP_NETCAPTWR); the lab places no stock
     // COLU things, so overriding it is safe. FCAN A/B/C -> the tunnel-mouth ethernet PORT LEDs
     // (MT_DP_NETLED): A green, B yellow, C dark/off. FCAN is the burning-barrel decoration
-    // (thing 70), never placed in the lab, so overriding its frames is safe.
-    spriteReplacements: ["PINVA0", "PINVB0", "PINVC0", "PINVD0", "PMAPA0", "PMAPB0", "PMAPC0", "PMAPD0", "BLUDA0", "BLUDB0", "BLUDC0", "BFE1D0", "BFE1E0", "COLUA0", "FCANA0", "FCANB0", "FCANC0"],
+    // (thing 70), never placed in the lab, so overriding its frames is safe. PLSE D -> the TX
+    // ring's big VIOLET mote (S_DP_NETSPIN_V) -- a recolour of stock BFE1 D so it matches the RX
+    // blue mote's size; borrowed from PLSE (memory wing owns A/B/C), built in build-doomperf-map.mjs.
+    spriteReplacements: ["PINVA0", "PINVB0", "PINVC0", "PINVD0", "PMAPA0", "PMAPB0", "PMAPC0", "PMAPD0", "BLUDA0", "BLUDB0", "BLUDC0", "BFE1D0", "BFE1E0", "BFE1F0", "PLSED0", "COLUA0", "FCANA0", "FCANB0", "FCANC0"],
   },
 };
 

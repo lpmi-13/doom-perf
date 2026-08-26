@@ -25,7 +25,9 @@ import { fileURLToPath } from "node:url";
 const wordmarkAssetPath = fileURLToPath(new URL("../assets/perfdoom-wordmark.png", import.meta.url));
 
 // ---- Doom picture (patch) decode ----
-const decodePatch = (data) => {
+// (decodePatch / readPalette / nearest are generic Doom-graphic primitives, exported so other
+// build steps -- e.g. recolouring a stock IWAD sprite -- can reuse them.)
+export const decodePatch = (data) => {
   const width = data.readInt16LE(0);
   const height = data.readInt16LE(2);
   const leftOffset = data.readInt16LE(4);
@@ -47,13 +49,13 @@ const decodePatch = (data) => {
   return { width, height, leftOffset, topOffset, idx, mask };
 };
 
-const readPalette = (playpal) => {
+export const readPalette = (playpal) => {
   const pal = [];
   for (let i = 0; i < 256; i += 1) pal.push([playpal[i * 3], playpal[i * 3 + 1], playpal[i * 3 + 2]]);
   return pal;
 };
 
-const nearest = (pal, r, g, b) => {
+export const nearest = (pal, r, g, b) => {
   let best = 0, bd = Infinity;
   for (let i = 0; i < 256; i += 1) {
     const [pr, pg, pb] = pal[i];

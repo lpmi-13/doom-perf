@@ -41,7 +41,7 @@
      {SPR_SMBT,32768,4,{NULL},S_BTORCHSHRT2,0,0},	// S_BTORCHSHRT
      {SPR_SMBT,32769,4,{NULL},S_BTORCHSHRT3,0,0},	// S_BTORCHSHRT2
      {SPR_SMBT,32770,4,{NULL},S_BTORCHSHRT4,0,0},	// S_BTORCHSHRT3
-@@ -1099,7 +1110,183 @@
+@@ -1099,7 +1110,191 @@
      {SPR_TLP2,32768,4,{NULL},S_TECH2LAMP2,0,0},	// S_TECH2LAMP
      {SPR_TLP2,32769,4,{NULL},S_TECH2LAMP3,0,0},	// S_TECH2LAMP2
      {SPR_TLP2,32770,4,{NULL},S_TECH2LAMP4,0,0},	// S_TECH2LAMP3
@@ -194,6 +194,11 @@
 +    // The tall branchy bolt fired at very high saturation: one big frame, a touch longer
 +    // lived so the escalation reads (BLUD C, fullbright), then gone.
 +    {SPR_BLUD,32770,5,{NULL},S_NULL,0,0},	// S_DP_NETARC_BIG (bolt frame C, fullbright)
++    // Violet twin of the RX drop-spark for the TX ring: the SAME two-frame flicker as NETARC1/2,
++    // rendered violet (BFE1 E/F, fullbright) -- so the TX overrun spark mirrors the RX one bar the
++    // colour. BFE1 is the BFG burst (no BFG in the lab); E/F are otherwise unused frames.
++    {SPR_BFE1,32772,3,{NULL},S_DP_NETARC_V2,0,0},	// S_DP_NETARC_V1 (violet bolt frame E, fullbright)
++    {SPR_BFE1,32773,3,{NULL},S_NULL,0,0},	// S_DP_NETARC_V2 (violet bolt frame F, fullbright)
 +    // Socket-lock capacitor bank: the DISCRETE LEAPING ARC -- four fullbright bolt-fragment frames
 +    // (SPR_BFE2 A-D). Each fragment flashes once (~7 tics) then self-removes; the engine strings a
 +    // chain of them along a fresh random jagged path between the two capacitor tops each leap.
@@ -212,10 +217,13 @@
 +    {SPR_SMIT,0,-1,{NULL},S_NULL,0,0},	// S_DP_NETTURB (turbine wheel, static, sector-lit)
 +    {SPR_SMT2,0,-1,{NULL},S_NULL,0,0},	// S_DP_NETDYN  (dynamo drum, static, sector-lit)
 +    {SPR_COL1,0,-1,{NULL},S_NULL,0,0},	// S_DP_NETBATT (battery bank, static, sector-lit)
-+    // Hand-positioned motes (tics -1: the engine owns their motion). BFE1 D = electric-blue
-+    // orbiting spin / rising charge mote; PMAP B = its violet twin for the dynamo output ring.
++    // Hand-positioned motes (tics -1: the engine owns their motion). BFE1 D = the electric-blue
++    // orbiting spin / rising charge mote (stock BFG-burst blob) for the RX ring + send-q battery.
++    // PLSE D = its VIOLET twin for the TX ring -- the SAME blob recoloured blue->violet (built in
++    // build-doomperf-map.mjs), so the TX ring reads identically to RX bar the colour. (Was PMAP B,
++    // a much smaller FX ring, which made the TX motes tiny next to the big blue RX rose.)
 +    {SPR_BFE1,32771,-1,{NULL},S_NULL,0,0},	// S_DP_NETSPIN   (blue mote, fullbright, static)
-+    {SPR_PMAP,32769,-1,{NULL},S_NULL,0,0},	// S_DP_NETSPIN_V (violet mote, fullbright, static)
++    {SPR_PLSE,32771,-1,{NULL},S_NULL,0,0},	// S_DP_NETSPIN_V (violet mote = recoloured BFE1 D on PLSE D, fullbright, static)
 +    // Overcharge boil-off: a blue mote that rises briefly off a full battery, then self-removes.
 +    {SPR_BFE1,32771,16,{NULL},S_NULL,0,0},	// S_DP_NETVENT (blue mote, fullbright, ~16 tics)
 +    // Tunnel-mouth ethernet PORT LED: one static fullbright frame. Both LEDs rest here
@@ -226,7 +234,7 @@
  };
  
  
-@@ -4665,6 +4852,564 @@
+@@ -4665,6 +4860,564 @@
  	sfx_None,		// activesound
  	MF_NOBLOCKMAP,		// flags
  	S_NULL		// raisestate

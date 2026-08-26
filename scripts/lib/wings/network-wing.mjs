@@ -142,7 +142,9 @@ const qdiscPlacards = {
 // Tesla-coil lightning bolt (SPR_BLUD A/B, MT_DP_NETARC): a jagged white-core / electric-
 // blue arc that the engine crackles around the electrode tips. Two frames wobble so a bolt
 // flickers over its brief life; the arc DENSITY (spawn rate) carries the load, not the art.
-const buildNetLightningSprite = (frame) => {
+// `glow` is the rim colour (196 = electric blue, default); the TX ring's drop-spark reuses this
+// same shape with a violet rim (251) on BFE1 E/F, so it mirrors the RX spark bar the colour.
+const buildNetLightningSprite = (frame, glow = 196) => {
   const W = 20, H = 26, T = 247;
   const px = new Uint8Array(W * H).fill(T);
   const plot = (x, y, c) => {
@@ -160,8 +162,8 @@ const buildNetLightningSprite = (frame) => {
       for (let t = 0; t <= steps; t += 1) {
         const x = Math.round(x0 + ((x1 - x0) * t) / steps);
         const y = Math.round(y0 + ((y1 - y0) * t) / steps);
-        plot(x - 1, y, 196); plot(x + 1, y, 196); // electric-blue glow
-        plot(x, y - 1, 196); plot(x, y + 1, 196);
+        plot(x - 1, y, glow); plot(x + 1, y, glow); // rim glow (blue 196 / violet 251)
+        plot(x, y - 1, glow); plot(x, y + 1, glow);
         plot(x, y, 4); // white-hot core
       }
     }
@@ -320,7 +322,8 @@ const buildCapTowerSprite = () => {
 // TURBINE WHEEL (overrides SMITA0 -- an unused single-frame IWAD decoration; do NOT use ELEC,
 // whose thing 48 the hub places to flank the network entrance): an axial-flow turbine rotor -- a pale steel shroud ring
 // around a wheel of dark swept blades on a bright steel hub, bolted to a dark machine pedestal.
-// The RX ring's signature; the engine orbits bright motes around the hub so it reads as spin.
+// BOTH NIC rings' signature (RX + TX -- see the SMT2A0 registration); the engine orbits motes
+// around the hub so it reads as spin (blue motes on RX, violet on TX).
 const buildTurbineSprite = () => {
   const W = 100, H = 144, T = 247;
   const px = new Uint8Array(W * H).fill(T);
@@ -350,39 +353,10 @@ const buildTurbineSprite = () => {
   return buildPatch(px, W, H, { transparent: T, leftOffset: Math.floor(W / 2), topOffset: H });
 };
 
-// DYNAMO (overrides SMT2A0): a Victorian ring-dynamo after the Siemens engraving -- a big banded
-// field-magnet DRUM with a dark wound bore and a violet commutator/brush stub, a smaller EXCITER
-// box at its side, bolted to a riveted base with two cables snaking off. The TX ring's signature;
-// the engine orbits violet output motes and cracks a brush-arc at the commutator on TX drops.
-const buildDynamoSprite = () => {
-  const W = 116, H = 128, T = 247;
-  const px = new Uint8Array(W * H).fill(T);
-  const put = (x, y, c) => { if (x >= 0 && x < W && y >= 0 && y < H) px[y * W + x] = c; };
-  const rect = (x0, y0, x1, y1, c) => { for (let y = y0; y < y1; y += 1) for (let x = x0; x < x1; x += 1) put(x, y, c); };
-  const DRUM = 96, DRUM_HI = 84, BAND = 80;            // grey field drum + pale pole-shoe band
-  const CORE = 6, WIND = 15, WIND2 = 68;               // dark wound bore + copper winding bars
-  const STEEL = 99, DK = 5, BOLT = 8;
-  const VIO = 251, VIO_HI = 4;                         // commutator violet glow
-  const cx = 72, cy = 52, R = 50;
-  for (let y = 0; y < 106; y += 1) {
-    for (let x = 0; x < W; x += 1) {
-      const dx = x - cx, dy = y - cy, r = Math.hypot(dx, dy);
-      if (r > R + 0.5) continue;
-      if (r > R - 10) { put(x, y, dx < 0 ? DRUM_HI : DRUM); continue; }   // outer yoke ring
-      if (r > R - 16) { put(x, y, BAND); continue; }                     // pale pole band
-      put(x, y, (y % 4 === 0) ? WIND2 : (r > R - 28 ? WIND : CORE));      // wound bore
-    }
-  }
-  rect(cx + R - 12, cy - 8, cx + R + 6, cy + 8, STEEL);  // commutator housing
-  rect(cx + R - 4, cy - 4, cx + R + 2, cy + 4, VIO); put(cx + R - 1, cy, VIO_HI);
-  rect(4, 58, 40, 102, STEEL); rect(4, 58, 40, 60, DRUM_HI);            // exciter box
-  rect(10, 66, 34, 94, CORE);
-  for (let y = 68; y < 94; y += 4) rect(10, y, 34, y + 1, WIND2);
-  rect(0, 102, W, 128, DK); rect(0, 102, W, 104, STEEL);               // bolted base plate
-  for (let x = 6; x < W; x += 12) put(x, 114, BOLT);
-  for (let x = cx; x < W; x += 1) { const yy = 116 + Math.round(4 * Math.sin((x - cx) * 0.3)); put(x, yy, CORE); put(x, yy + 3, CORE); }
-  return buildPatch(px, W, H, { transparent: T, leftOffset: Math.floor(W / 2), topOffset: H });
-};
+// (The TX ring formerly stood a distinct DYNAMO drum here (SMT2A0). It now reuses the RX
+// TURBINE wheel so both NIC rings read IDENTICALLY -- only the orbiting-mote colour distinguishes
+// direction (blue RX / violet TX, chosen in p_tick.c). See the SMT2A0 registration below and
+// DoomPerf_UpdateNetworkMachines: TX hub-Z + drop-spark were aligned to the turbine to match.)
 
 
 // ===== Trackside SIGNAL HEAD (railway block signal) beside each bus lane. A dark
@@ -1080,8 +1054,8 @@ const build = (ctx) => {
   };
   // ===== RING-BUFFER (level 2) INSTRUMENT BAYS: the two NIC-ring stations become instrument
   // bays (like the socket capacitor banks), each standing TWO authored machines flanking a clear
-  // walkway to the ring terminal on the deep wall -- TURBINE WHEELS on the RX (left) ring, DYNAMO
-  // drums on the TX (right) ring. One open floor tagged for the throughput glow; the machines are
+  // walkway to the ring terminal on the deep wall -- TURBINE WHEELS on BOTH rings (RX left, TX
+  // right), identical bar mote colour. One open floor tagged for the throughput glow; the machines are
   // things (no pillar tiling). The engine spins them (orbiting motes) at the live RX/TX rate.
   const ringInstrumentBay = (side, lane, propEdnum, sc) => {
     const lvl = levels[2];
@@ -1225,7 +1199,7 @@ const build = (ctx) => {
     });
   };
   // Level 1 RIGHT (kernel-TX) = the qdisc disc bay; level 0 = recv CAPACITOR bay (left) +
-  // send BATTERY cell-columns (right); level 2 = ring turbine (RX) / dynamo (TX) instrument bays.
+  // send BATTERY cell-columns (right); level 2 = ring turbine instrument bays (RX + TX, same wheel).
   stations.filter((st) => st.level === 1).forEach((st) => qdiscBay(st.side));
   stations.filter((st) => st.level === 0 && st.side === "left").forEach((st) => socketCapBay(st.side, 0, st.screen));
   stations.filter((st) => st.level === 0 && st.side === "right").forEach((st) => batteryBay(st.side, st.screen));
@@ -1457,6 +1431,11 @@ const sprites = [
   { name: "BLUDA0", build: () => buildNetLightningSprite(0) },
   { name: "BLUDB0", build: () => buildNetLightningSprite(1) },
   { name: "BLUDC0", build: () => buildNetLightningBig() },
+  // VIOLET twin of the A/B bolt for the TX ring's drop-spark (S_DP_NETARC_V1/2): the SAME two
+  // shapes, violet rim (251) instead of blue -- so the TX overrun spark mirrors the RX one bar
+  // colour. Rides free BFG-burst frames BFE1 E/F (no BFG in the lab; E was reserved-but-unbuilt).
+  { name: "BFE1E0", build: () => buildNetLightningSprite(0, 251) },
+  { name: "BFE1F0", build: () => buildNetLightningSprite(1, 251) },
   // Socket-lock capacitor bank LEAPING ARC (MT_DP_NETCAP): four jagged bolt-fragment frames
   // (SPR_BFE2 A-D, fullbright) the engine strings along a random jagged path between the two
   // capacitor tops. BFE2 is the BFG-ball burst -- no BFG in the lab, so nothing else renders it.
@@ -1466,12 +1445,13 @@ const sprites = [
   { name: "BFE2C0", build: () => buildNetArcSegment(2) },
   { name: "BFE2D0", build: () => buildNetArcSegment(3) },
   { name: "COL2A0", build: () => buildCapTowerSprite() },
-  // Ring-buffer (L2) instrument props: turbine wheel (RX), dynamo drum (TX). Authored over UNUSED
-  // single-frame IWAD decorations -- NOT ones whose stock thing the map places (SMIT=47, SMT2 are
-  // never placed; ELEC=48 and COLU=2028 ARE, so overriding them leaks into the hub / other wings).
-  // (The send-q battery is 3D geometry + a wall shader now, not a billboard sprite.)
+  // Ring-buffer (L2) instrument props: the TURBINE wheel on BOTH NIC rings (RX left, TX right) --
+  // the two rings are identical bar the orbiting-mote colour (blue RX / violet TX). Authored over
+  // UNUSED single-frame IWAD decorations -- NOT ones whose stock thing the map places (SMIT=47,
+  // SMT2 are never placed; ELEC=48 and COLU=2028 ARE, so overriding them leaks into the hub /
+  // other wings). (The send-q battery is 3D geometry + a wall shader now, not a billboard sprite.)
   { name: "SMITA0", build: () => buildTurbineSprite() },
-  { name: "SMT2A0", build: () => buildDynamoSprite() },
+  { name: "SMT2A0", build: () => buildTurbineSprite() },   // TX ring: same wheel art as RX
   // Tunnel-mouth ethernet PORT LEDs (MT_DP_NETLED): A green, B yellow, C dark/off.
   { name: "FCANA0", build: () => buildNetLedSprite(ledGreenRamp) },
   { name: "FCANB0", build: () => buildNetLedSprite(ledYellowRamp) },

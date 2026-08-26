@@ -14,7 +14,7 @@
 
 --- a/info.h
 +++ b/info.h
-@@ -1140,6 +1140,194 @@
+@@ -1140,6 +1140,198 @@
      S_TECH2LAMP2,
      S_TECH2LAMP3,
      S_TECH2LAMP4,
@@ -181,6 +181,10 @@
 +    S_DP_NETARC1,
 +    S_DP_NETARC2,
 +    S_DP_NETARC_BIG,
++    // Violet twin of the blue A/B bolt (BFE1 E/F, fullbright): the TX ring's drop-spark, an
++    // exact mirror of the RX spark bar colour (same two-frame flicker-then-die).
++    S_DP_NETARC_V1,
++    S_DP_NETARC_V2,
 +    // Socket-lock capacitor bank: the DISCRETE LEAPING ARC -- four fullbright bolt-fragment
 +    // frames (SPR_BFE2 A-D) the engine strings along a fresh RANDOM jagged path between the two
 +    // capacitor tops each leap, and the static capacitor-TOWER prop (SPR_COL2 A, sector-lit).
@@ -189,13 +193,13 @@
 +    S_DP_NETARC_SEG2,
 +    S_DP_NETARC_SEG3,
 +    S_DP_NETCAPTWR,
-+    // Ring-buffer (level 2) + send-q (level 0) machines. Three static, sector-lit billboard
-+    // props (turbine wheel over ELEC A, dynamo drum over SMT2 A, battery bank over COL1 A) plus
-+    // the live motes the engine hand-positions around/over them (turbine=SMIT A, dynamo=SMT2 A,
-+    // battery=COL1 A -- unused IWAD frames; ELEC/COLU are placed things, so avoided):
-+    // S_DP_NETSPIN is the electric-
-+    // blue orbiting/charge mote (BFE1 D, fullbright, tics -1) for the RX turbine ring and the
-+    // send-q battery column; S_DP_NETSPIN_V its violet twin (PMAP B) for the TX dynamo ring;
++    // Ring-buffer (level 2) + send-q (level 0) machines. Three static, sector-lit billboard props
++    // (the TURBINE wheel over SMIT A on BOTH NIC rings -- SMT2 A wears the same turbine art now --
++    // and the battery bank over COL1 A -- unused IWAD frames; ELEC/COLU are placed things, so
++    // avoided) plus the live motes the engine hand-positions around them. S_DP_NETSPIN is the
++    // electric-blue orbiting/charge mote (BFE1 D, the stock BFG-burst blob, fullbright, tics -1) for
++    // the RX ring + send-q battery column; S_DP_NETSPIN_V is its VIOLET twin -- the SAME blob
++    // recoloured (PLSE D, built in build-doomperf-map.mjs) so the TX ring matches RX bar the colour;
 +    // S_DP_NETVENT a brief rising boil-off mote fired off a full battery at overcharge.
 +    S_DP_NETTURB,
 +    S_DP_NETDYN,
@@ -209,7 +213,7 @@
      NUMSTATES
  } statenum_t;
  
-@@ -1298,6 +1486,27 @@
+@@ -1298,6 +1490,27 @@
      MT_MISC84,
      MT_MISC85,
      MT_MISC86,
