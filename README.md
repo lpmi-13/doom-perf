@@ -356,6 +356,52 @@ npm run build:map
 | `npm run test:go` | Run Go telemetry service tests. |
 | `npm run typecheck` | Run TypeScript checking. This is stricter than the supported esbuild bundle path. |
 | `npm run check` | Run typecheck, Go tests, and the browser bundle build. |
+| `npm run perf` | Profile the running tab (see Profiling Harness); pass flags after `--`. |
+
+## Profiling Harness
+
+`scripts/perf-harness.mjs` measures the tab's CPU, render, and memory cost so a
+change can be checked *before and after* on a working copy without committing
+anything. It drives the app in a real browser (Playwright + Chrome DevTools
+Protocol), samples metrics, and writes a JSON snapshot to the gitignored
+`perf-results/`. Run it twice around a change and `--compare` the two files.
+
+The app exposes two hooks the harness relies on:
+
+- `?perf-bench=1` attaches a passive in-page probe (`window.__perfProbe`,
+  `src/perf_probe.ts`) that samples `requestAnimationFrame` cadence, long tasks,
+  JS/WASM heap, DOM node count, and the engine's rendered-frame counter. It only
+  attaches with the flag, so it costs nothing otherwise.
+- `?scenario=NAME` boots straight into a fixed data source for a reproducible
+  load, instead of live host jitter. Names: `live`, `cpu` / `cpu-sat`,
+  `disk` / `disk-sat` / `disk-sat-deep`, `mem` / `mem-sat` / `mem-noswap`,
+  `net` / `net-rx` / `net-tx` / `net-recvq` / `net-sendq`.
+
+Serve the app first (`npm run dev:telemetry`, or `npm run dev`), then:
+
+```bash
+# Automated before/after (headless, scripted camera motion):
+node scripts/perf-harness.mjs --mode tour --label before --scenario cpu-load --duration 30
+#   …make a change, rebuild (npm run build / npm run build:engine)…
+node scripts/perf-harness.mjs --mode tour --label after  --scenario cpu-load --duration 30
+node scripts/perf-harness.mjs --compare perf-results/before-*.json perf-results/after-*.json
+
+# Manual: opens a real GPU-composited window; drive it by hand; Ctrl-C stops + flushes:
+node scripts/perf-harness.mjs --mode manual --label hand-tuning --scenario cpu-load
+
+# Attach to your own Chrome (started with --remote-debugging-port=9222 --user-data-dir=…):
+node scripts/perf-harness.mjs --mode attach --label real-chrome --endpoint http://localhost:9222
+
+# All flags:
+node scripts/perf-harness.mjs --help
+```
+
+`--compare` prints a delta table with a pass/fail against a 5% regression
+threshold and a one-line commit summary. Headless runs (the `tour` default)
+composite with software GL and have no real vsync, so absolute fps is only
+*indicative* — relative before/after deltas are the source of truth. Use
+`--headed` or `--mode manual` for real GPU-composited fps, and `--repeat N` to
+take the median of N tour runs against per-run noise.
 
 ## Repository Map
 
@@ -368,6 +414,8 @@ npm run build:map
 | `src/ui/movementPad.ts` | Touch movement controls. |
 | `src/ui/menuControls.ts` | Touch menu controls. |
 | `src/engine_bootstrap.ts` | WASM engine bootstrap and data file mounting. |
+| `src/perf_probe.ts` | In-page profiling probe (`window.__perfProbe`) behind `?perf-bench=1`. |
+| `scripts/perf-harness.mjs` | Playwright + CDP profiling harness (tour/manual/attach + compare). |
 | `cmd/telemetry/main.go` | Linux SSE telemetry service. |
 | `scripts/build-doomperf-map.mjs` | Project PWAD generator. |
 | `scripts/lib/wings/` | Self-contained CPU, memory, storage, and network wing builders. |

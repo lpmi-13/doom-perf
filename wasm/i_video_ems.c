@@ -83,6 +83,15 @@ int doomperf_net_qdisc_flow = 0;
 int doomperf_net_qdisc_sat = 0;
 int doomperf_sim_mode = 0;
 
+// Doom Perf: profiling harness (PERF_TUNE_PLAN.md Part 0). A monotonically
+// increasing count of frames the software renderer has actually presented,
+// incremented once per I_FinishUpdate (the SDL present path below). The perf
+// probe reads it via DoomPerf_GetRenderFrameCount() to tell *rendered* engine
+// frames from *presented* rAF ticks — the whole point being that the Asyncify
+// loop renders ~60x/sec unconditionally, so this is the number a visibility /
+// idle-gating change is meant to bring down.
+static uint32_t doomperf_render_frames = 0;
+
 // Doom Perf: title wordmark "oo" live-load pulse (see doom_emscripten_compat.h).
 // The oo is drawn with reserved palette indices DOOMPERF_OO_TAG[]; while
 // doomperf_title_remap is set (V_DrawPatch, around the TITLEPIC/M_DOOM draws) those
@@ -596,6 +605,16 @@ EMSCRIPTEN_KEEPALIVE
 int DoomPerf_GetSimMode(void)
 {
     return doomperf_sim_mode;
+}
+
+// Doom Perf: profiling harness render-frame counter (PERF_TUNE_PLAN.md Part 0).
+// Returns the running total of frames the software renderer has presented since
+// boot; the perf probe samples it at the start and end of a run to derive the
+// engine's real render rate, independent of the browser's rAF present cadence.
+EMSCRIPTEN_KEEPALIVE
+unsigned int DoomPerf_GetRenderFrameCount(void)
+{
+    return doomperf_render_frames;
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -1279,6 +1298,7 @@ void I_FinishUpdate(void)
     SDL_RenderClear(renderer);
     SDL_RenderCopy(renderer, texture, 0, 0);
     SDL_RenderPresent(renderer);
+    doomperf_render_frames++;   // profiling harness: count presented engine frames
 
     // Yield to the browser and cap the *render* rate. Game logic is still paced
     // to 35 Hz by TryRunTics (real-time I_GetTime); D_DoomLoop renders multiple

@@ -13,6 +13,9 @@ public/dist/
 # Staged Doom source for the patch-based engine build
 .build/
 
+# Perf-harness output (scripts/perf-harness.mjs writes JSON snapshots here)
+perf-results/
+
 # Local base IWADs. Doom Perf map PWADs under public/maps/ are authored here.
 public/wads/*.wad
 public/wads/*.WAD

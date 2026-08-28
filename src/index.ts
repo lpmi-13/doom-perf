@@ -15,6 +15,7 @@ import { createMenuControls, type MenuAction } from "./ui/menuControls";
 import { createMenuButton } from "./ui/menuButton";
 import { mapManifest } from "./doomperf-map-manifest";
 import { playAssetSound, preloadAssetSound } from "./asset_sounds";
+import { installPerfProbe } from "./perf_probe";
 
 // Cache-bust versions injected at build time by scripts/build-web.mjs (content
 // hashes of the WAD / engine). Under `--watch` they arrive as the "dev" sentinel,
@@ -206,6 +207,37 @@ const applySwapOverride = (telemetry: TelemetrySnapshot): TelemetrySnapshot =>
 // these reach the ENGINE feed, since they change which lock inputs are "known".
 const ringDisabled = new URLSearchParams(window.location.search).get("ring") === "off";
 const qdiscDisabled = new URLSearchParams(window.location.search).get("qdisc") === "off";
+
+// --- Perf harness hooks (PERF_TUNE_PLAN.md Part 0) --------------------------
+// ?perf-bench=1 attaches the in-page profiling probe (window.__perfProbe) the
+// harness reads. It is a passive rAF/longtask/heap observer, so install it as
+// early as possible to capture from the very first frame. ?scenario=NAME picks a
+// fixed sim/demo data source for a reproducible load pattern (resolved to a menu
+// mode number below and driven through the data-source menu once the engine is
+// up), so before/after runs see the same work instead of live host jitter.
+const perfBenchEnabled = new URLSearchParams(window.location.search).get("perf-bench") === "1";
+if (perfBenchEnabled) {
+  installPerfProbe();
+}
+// Scenario name -> data-source menu index (== engine sim mode == DOWN presses
+// from the top of the list). Mirrors scenarioTelemetry()/m_menu.c ordering:
+// 0 live, 1/2 CPU util/sat, 3/4/5 disk util/sat-shallow/sat-deep, 6/7/8 memory
+// util/sat-swap/sat-noswap, 9/10/11/12/13 network util/rx-sat/tx-sat/recvq/sendq.
+const SCENARIO_MODES: Record<string, number> = {
+  live: 0,
+  cpu: 1, "cpu-load": 1, "cpu-util": 1, "cpu-sat": 2,
+  disk: 3, "disk-util": 3, "disk-sat": 4, "disk-sat-shallow": 4, "disk-sat-deep": 5,
+  mem: 6, memory: 6, "mem-util": 6, "mem-sat": 7, "mem-sat-swap": 7, "mem-noswap": 8,
+  net: 9, network: 9, "net-util": 9, "net-rx": 10, "net-tx": 11, "net-recvq": 12, "net-sendq": 13,
+};
+const resolveScenarioMode = (name: string | null): number | null => {
+  if (!name) return null;
+  const key = name.trim().toLowerCase();
+  if (key in SCENARIO_MODES) return SCENARIO_MODES[key];
+  const numeric = Number(key);
+  return Number.isInteger(numeric) && numeric >= 0 && numeric <= 13 ? numeric : null;
+};
+const scenarioMode = resolveScenarioMode(new URLSearchParams(window.location.search).get("scenario"));
 
 const wadParam = new URLSearchParams(window.location.search).get("wad")?.toLowerCase();
 const wadMap: Record<string, string> = {
@@ -1827,6 +1859,47 @@ const start = async () => {
     // Hold the veil until that frame paints, then reveal the game.
     await waitForFirstFrame();
     finishLoading();
+
+    // Perf harness: with ?scenario=NAME, boot straight into a fixed data source
+    // (deterministic load) instead of sitting on the menu. Drive the existing
+    // data-source menu exactly as the touch UI does — ESC opens the main menu,
+    // ENTER picks NEW GAME (the data-source list), DOWN steps to the requested
+    // mode, ENTER starts it — then confirm via the engine's sim-mode +
+    // player-active getters, retrying the sequence if the level didn't come up.
+    // No dedicated engine entry point is needed; this reuses the proven path.
+    if (scenarioMode !== null) {
+      const wait = (ms: number) => new Promise<void>((r) => window.setTimeout(r, ms));
+      const dispatchKey = (type: "keydown" | "keyup", code: string, keyCode: number) => {
+        const event = new KeyboardEvent(type, { key: code, code, bubbles: true, cancelable: true });
+        Object.defineProperty(event, "keyCode", { get: () => keyCode });
+        Object.defineProperty(event, "which", { get: () => keyCode });
+        document.dispatchEvent(event);
+      };
+      const tapKey = async (code: string, keyCode: number, gapMs = 140) => {
+        dispatchKey("keydown", code, keyCode);
+        await wait(90);
+        dispatchKey("keyup", code, keyCode);
+        await wait(gapMs);
+      };
+      const confirmed = () => {
+        const engine = getEngine();
+        return (engine?._DoomPerf_GetSimMode?.() ?? -1) === scenarioMode && !!engine?._DoomPerf_PlayerActive?.();
+      };
+      void (async () => {
+        for (let attempt = 0; attempt < 3 && !confirmed(); attempt++) {
+          await tapKey("Escape", 27, 320); // title -> main menu
+          await tapKey("Enter", 13, 320); // NEW GAME -> data-source list
+          for (let i = 0; i < scenarioMode; i++) await tapKey("ArrowDown", 40, 90);
+          await tapKey("Enter", 13, 0); // M_ChooseMode(mode): set sim + start level
+          for (let waited = 0; waited < 4000 && !confirmed(); waited += 120) await wait(120);
+        }
+        console[confirmed() ? "log" : "warn"](
+          `[perf] scenario mode ${scenarioMode} ${confirmed() ? "active" : "NOT confirmed"} ` +
+            `(sim=${getEngine()?._DoomPerf_GetSimMode?.() ?? "?"})`
+        );
+      })();
+      return;
+    }
 
     // Bring the main menu up automatically so neither desktop nor mobile needs
     // an initial click to dismiss the title screen. We synthesize one ESC — the
