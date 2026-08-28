@@ -156,7 +156,13 @@ export const reserved = {
     // (thing 70), never placed in the lab, so overriding its frames is safe. PLSE D -> the TX
     // ring's big VIOLET mote (S_DP_NETSPIN_V) -- a recolour of stock BFE1 D so it matches the RX
     // blue mote's size; borrowed from PLSE (memory wing owns A/B/C), built in build-doomperf-map.mjs.
-    spriteReplacements: ["PINVA0", "PINVB0", "PINVC0", "PINVD0", "PMAPA0", "PMAPB0", "PMAPC0", "PMAPD0", "BLUDA0", "BLUDB0", "BLUDC0", "BFE1D0", "BFE1E0", "BFE1F0", "PLSED0", "COLUA0", "FCANA0", "FCANB0", "FCANC0"],
+    // BFE2 A-D (blue) + SAWG A-D (violet) -> the socket-lock crackle-bolt fragments used by the
+    // TRAVELING CURRENT (looping, MT_DP_NETCUR). BFE2 = the BFG-ball burst (no BFG in the lab);
+    // SAWG = the chainsaw weapon view (no weapons placed) -- both free. SHTG A-D (blue) + MISF A-D
+    // (violet) -> the OVERFLOW FLASHOVER shooting-star COMETS (SOCKET_VIZ_REVAMP_PLAN.md): SHTG =
+    // shotgun view, MISF = rocket muzzle-flash -- weapon-view sprites the weaponless lab never draws
+    // (the player only ever holds fist/pistol, so PUNG/PISG are the only off-limits view sprites).
+    spriteReplacements: ["PINVA0", "PINVB0", "PINVC0", "PINVD0", "PMAPA0", "PMAPB0", "PMAPC0", "PMAPD0", "BLUDA0", "BLUDB0", "BLUDC0", "BFE1D0", "BFE1E0", "BFE1F0", "BFE2A0", "BFE2B0", "BFE2C0", "BFE2D0", "SAWGA0", "SAWGB0", "SAWGC0", "SAWGD0", "SHTGA0", "SHTGB0", "SHTGC0", "SHTGD0", "MISFA0", "MISFB0", "MISFC0", "MISFD0", "PLSED0", "COLUA0", "FCANA0", "FCANB0", "FCANC0"],
   },
 };
 

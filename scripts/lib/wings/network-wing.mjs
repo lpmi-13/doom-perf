@@ -205,12 +205,14 @@ const buildNetLightningBig = () => {
   return buildPatch(px, W, H, { transparent: T, leftOffset: 15, topOffset: H - 2 });
 };
 
-// Socket-lock capacitor-bank ARC FRAGMENT (SPR_BFE2 A-D, MT_DP_NETCAP): a small fullbright
-// bolt-fragment. The engine strings a chain of these along a fresh RANDOM jagged polyline
-// between the two capacitor tops every time an arc leaps (endpoints pinned to the towers), so
-// the fragments only need to read as bright jagged sparks, not a whole bolt. Four differently-
-// kinked frames so adjacent fragments never look identical -> the chain reads as one ragged arc.
-const buildNetArcSegment = (frame) => {
+// Socket-lock capacitor-bank ARC FRAGMENT (MT_DP_NETCAP): a small fullbright bolt-fragment. The
+// engine strings a chain of these along a fresh RANDOM jagged polyline between the two capacitor
+// tops every time an arc leaps (endpoints pinned to the towers), so the fragments only need to read
+// as bright jagged sparks, not a whole bolt. Four differently-kinked frames so adjacent fragments
+// never look identical -> the chain reads as one ragged arc. `glow` is the rim colour: blue 196
+// (RX recv-q, SPR_BFE2) is the default, violet 251 (TX send-q, SPR_SAWG) mirrors it bar the hue --
+// the same four frames also serve each lane's TRAVELING CURRENT bolt (motion/scale distinguish them).
+const buildNetArcSegment = (frame, glow = 196) => {
   const W = 26, H = 26, T = 247;
   const px = new Uint8Array(W * H).fill(T);
   const plot = (x, y, c) => {
@@ -232,8 +234,8 @@ const buildNetArcSegment = (frame) => {
       for (let t = 0; t <= steps; t += 1) {
         const x = Math.round(x0 + ((x1 - x0) * t) / steps);
         const y = Math.round(y0 + ((y1 - y0) * t) / steps);
-        plot(x - 1, y, 196); plot(x + 1, y, 196); // electric-blue glow
-        plot(x, y - 1, 196); plot(x, y + 1, 196);
+        plot(x - 1, y, glow); plot(x + 1, y, glow); // rim glow (blue 196 / violet 251)
+        plot(x, y - 1, glow); plot(x, y + 1, glow);
         plot(x, y, 4); // white-hot core
       }
     }
@@ -243,20 +245,57 @@ const buildNetArcSegment = (frame) => {
   return buildPatch(px, W, H, { transparent: T, leftOffset: Math.floor(W / 2), topOffset: Math.floor(H / 2) });
 };
 
-// ===== Socket-lock CAPACITOR BANKS, take 3: authored SUBSTATION CAPACITOR TOWERS. Rather
-// than reuse the coils' glowing-rod vocabulary, each level-0 socket bay now stands TWO
-// hand-drawn capacitor towers -- a steel rack of stacked white capacitor units on dark-brown
-// ribbed porcelain insulator posts (the classic HV shunt-capacitor bank) -- as solid billboard
-// PROPS (MT_DP_NETCAPTWR, doomednum 3011, sprite SPR_COL2 frame A -- an unused single-frame IWAD
-// decoration. (SPR_COLU is the FLOOR-LAMP thing 2028, which the hub + memory wing DO place, so
-// reusing it repainted those lamps into towers; SPR_COL2's thing 31 is never placed.)
-// The live signal reads as DISCRETE LEAPING ARCS: at a rate set by the (smoothed) recv-q fill,
-// a lightning arc leaps between the two capacitor tops -- a chain of small fullbright bolt
-// fragments (SPR_BFE2 A-D) strung along a fresh RANDOM jagged polyline whose two ends are pinned
-// to the tower tops, so the route varies every leap but always starts/ends on a capacitor. The
-// arc marches B->A (tunnel side -> hub side == the RX +x flow direction), plus an ambient charge
-// glow on the bay floor. Distinct from the coils' outward tip-crackle: this jumps tower-to-tower.
-// [[pwad-sprite-override-constraint]] [[network-trackside-signals]]
+// WORLD-SPACE-TRAIL comet for the socket-lock OVERFLOW FLASHOVER: a round glowing ORB. A billboard
+// circle has NO baked direction, so the comet's direction of travel comes ENTIRELY from the
+// world-space arrangement -- a fat bright HEAD leading a wake of smaller, dimmer TRAIL orbs the
+// engine drops at the head's passing positions and fades in place. Correct from every viewing angle
+// (unlike a baked tail, which pointed at the terminal from the read angle). buildNetCometOrb makes
+// one radial orb; the flashover uses a bright HEAD (frame A) + 3 shrinking/darkening TRAIL orbs
+// (frames B/C/D). Blue (RX) overrides the never-drawn shotgun-view SPR_SHTG A-D, violet (TX) the
+// never-drawn rocket-flash SPR_MISF A-D -- weapon-view sprites the weaponless lab never renders
+// ([[pwad-sprite-override-constraint]]). Head = white-hot core; trail shrinks + darkens down the
+// blue (192->200->204->206->207) / violet (250->252->253->254) family so the tail fades to the dark.
+const buildNetCometOrb = ({ size, ramp }) => {
+  const S = size, T = 247, c = (S - 1) / 2, R = S / 2;
+  const px = new Uint8Array(S * S).fill(T);
+  for (let y = 0; y < S; y += 1) {
+    for (let x = 0; x < S; x += 1) {
+      const d = Math.hypot(x - c, y - c) / R;              // 0 centre .. 1 edge
+      if (d > 1) continue;
+      px[y * S + x] = ramp[Math.min(ramp.length - 1, Math.floor(d * ramp.length))];
+    }
+  }
+  return buildPatch(px, S, S, { transparent: T, leftOffset: Math.floor(S / 2), topOffset: Math.floor(S / 2) });
+};
+// Head (bright, white-hot core) + three trail tiers (shrinking + darkening) per colour.
+const cometBlue = {
+  head: { size: 34, ramp: [4, 4, 192, 194, 196, 197] },
+  t1:   { size: 24, ramp: [192, 196, 197, 200, 204] },
+  t2:   { size: 17, ramp: [196, 200, 204, 206] },
+  t3:   { size: 11, ramp: [200, 204, 206, 207] },
+};
+const cometViolet = {
+  head: { size: 34, ramp: [4, 4, 250, 251, 251, 252] },
+  t1:   { size: 24, ramp: [251, 252, 252, 253] },
+  t2:   { size: 17, ramp: [252, 253, 253, 254] },
+  t3:   { size: 11, ramp: [253, 254, 254] },
+};
+
+// ===== Socket-lock CAPACITOR BANKS (SOCKET_VIZ_REVAMP_PLAN.md): authored SUBSTATION CAPACITOR
+// TOWERS, standardized across BOTH level-0 bays. Each socket bay (recv-q left / send-q right)
+// stands TWO hand-drawn capacitor towers -- a steel rack of stacked white capacitor units on
+// dark-brown ribbed porcelain insulator posts (the classic HV shunt-capacitor bank) -- as solid
+// billboard PROPS (MT_DP_NETCAPTWR, doomednum 3011, sprite SPR_COL2 frame A -- an unused single-
+// frame IWAD decoration. (SPR_COLU is the FLOOR-LAMP thing 2028, which the hub + memory wing DO
+// place, so reusing it repainted those lamps into towers; SPR_COL2's thing 31 is never placed.)
+// A charge backpressure reads as THREE layered signals on the tower-to-tower wire (engine, p_tick.c
+// DoomPerf_UpdateNetworkLocks): (1) a thin trickle of TRAVELING CURRENT crackle-bolts glides WITH
+// the lane's traffic at the live throughput (RX +x / TX -x); (2) an ambient bay-floor charge GLOW
+// rises with the queue fill; (3) an OVERFLOW FLASHOVER -- a full tower-to-tower arc -- SNAPS the
+// other way (against traffic) on a socket drop. The two bays are one instrument mirror-imaged,
+// blue RX (SPR_BFE2) vs violet TX (SPR_SAWG), like the RX/TX turbines. The bolts are a chain of
+// small fullbright fragments strung along a fresh RANDOM jagged polyline pinned to the tower tops.
+// [[pwad-sprite-override-constraint]] [[network-trackside-signals]] [[prefer-everpresent-over-flicker]]
 // The capacitor TOWER billboard (overrides IWAD COL2A0): a steel rack of five tiers of white
 // capacitor cans, top insulator bushings, standing on three ribbed brown porcelain posts over
 // a dark base pad. Floor-standing offset (feet at origin: leftOffset W/2, topOffset H).
@@ -693,10 +732,10 @@ const TOWER_EDNUM = 3011; // MT_DP_NETCAPTWR doomednum (solid billboard prop; se
 const CAP_BAY_TAG = ids.sectorTags[0] + 52; // 752 recv bay / 753 send bay (floor charge glow)
 // The ring-buffer (level 2) bays use the two-flanking-props pattern with authored billboard
 // machines (doomednums hardcoded like the capacitor tower's 3011, mirrored in info.c mobjinfo +
-// p_mobj.c allowlist); their floor glow tracks live throughput. The send-q bay instead uses 3D
-// GEOMETRY: two solid CELL-COLUMN pillars whose walkway faces carry a segmented charge gauge
-// (R_DoomPerfNetBatteryPixel, dispatched off lineTags 762/763 in r_segs.c) filling bottom-up
-// with the send-q depth -- no billboard, no floating motes.
+// p_mobj.c allowlist); their floor glow tracks live throughput. BOTH level-0 socket bays now use
+// the SAME capacitor-tower pattern (recv-q left / send-q right); the send-q bay's old 3D battery
+// cell-columns + wall-shader gauge (R_DoomPerfNetBatteryPixel, lineTags 762/763) were removed so
+// the two socket bays read as one instrument family (SOCKET_VIZ_REVAMP_PLAN.md).
 const TURB_EDNUM = 3012;  // MT_DP_NETTURB -- NIC RX ring turbine wheel
 const DYN_EDNUM = 3013;   // MT_DP_NETDYN  -- NIC TX ring dynamo drum
 const RING_BAY_TAG = ids.sectorTags[0] + 54; // 754 turbine (RX) bay / 755 dynamo (TX) bay glow
@@ -707,11 +746,6 @@ const RING_BAY_TAG = ids.sectorTags[0] + 54; // 754 turbine (RX) bay / 755 dynam
 // orbiting spin-motes are hand-positioned around each wheel's world x = -(vc +/- RING_SPREAD).
 const RING_BAY_HW = 304;  // ring bay half-width in v (vs BAY_HW 256) -- a wider recess
 const RING_SPREAD = 224;  // |v - vc| of the two turbine wheels (vs CAP_SPREAD 150) -- pushed apart
-const BATT_LINE_TAG = ids.lineTags[0] + 2;   // 762 red (+) cell column / 763 blue (-) cell column
-const BATT_HW = 32;       // battery cell-column half-width (64x64 footprint, all faces 64 wide)
-const BATT_H = 40;        // battery height: a low block (cap band + 2 cell rows) with its TOP at
-//                           eye level and OPEN AIR above it. MUST match H in
-//                           R_DoomPerfNetBatteryPixel (the riser the gauge shader fills).
 
 // Substation material kit (all verified exclusive to this wing -- no element shared with
 // the cpu/memory/storage wings; see NETWORK_POWERPLANT_PLAN.md). Every riser is named
@@ -1043,8 +1077,9 @@ const build = (ctx) => {
     areaRect(direction, `cap-${side}-floor`, uv(outer, inner, bv1, bv2), {
       ...intake, kind: "net-alcove", floor: F0, ceiling: HALL_CEIL, light: 150, tag: CAP_BAY_TAG + lane,
     });
-    // Two CAPACITOR towers at (u=+/-412, v = vc +/- CAP_SPREAD), flanking the walkway (recv only;
-    // the send-q bay is now the 3D battery cell-columns in batteryBay).
+    // Two CAPACITOR towers at (u=+/-412, v = vc +/- CAP_SPREAD), flanking the walkway to the socket
+    // terminal. BOTH level-0 bays use this now (recv-q left / send-q right) -- the SAME instrument
+    // mirror-imaged, differing only by the bolt colour the engine draws (blue RX / violet TX).
     addAreaThing(direction, TOWER_EDNUM, sgn * CAP_COL_C, vc - CAP_SPREAD);
     addAreaThing(direction, TOWER_EDNUM, sgn * CAP_COL_C, vc + CAP_SPREAD);
     // The socket terminal on the deep wall, centred behind the two towers (== coil-terminal).
@@ -1082,69 +1117,6 @@ const build = (ctx) => {
       ...conduit, kind: "terminal",
       floor: F2 + terminalPanelFloor,
       ceiling: F2 + terminalPanelFloor + terminalTextureSize.height,
-      light: 184,
-      labelSide: side === "left" ? leftWall : rightWall,
-      labelTexture: sc.texture,
-      controlPanel: true,
-      riserWall: BUS_HOUSING,
-    });
-  };
-  // ===== SEND-Q BATTERY BANK (level 0, right): two 3D BATTERY CELL-COLUMNS -- solid full-height
-  // pillars whose faces carry the segmented charge gauge (R_DoomPerfNetBatteryPixel via lineTags
-  // 762/763, filling bottom-up with the send-q depth). The near column is the red (+) terminal,
-  // the far the blue (-). The bay floor is TILED around the two pillars (the builder forbids
-  // overlapping sectors): full-depth front + deep bands flank the middle u-band, itself split in v
-  // into three floor gaps + the two pillar footprints.
-  const batteryBay = (side, sc) => {
-    const lvl = levels[0];
-    const vc = Math.round((lvl.sv1 + lvl.cv2) / 2);
-    const bv1 = vc - BAY_HW, bv2 = vc + BAY_HW; // fixed 512-wide alcove window (plain catwalk outside)
-    const sgn = side === "left" ? -1 : 1;
-    const uEdge = sgn * EDGEHW, uDeep = sgn * ALCHW;            // catwalk opening / deep wall
-    const uColLo = sgn * (CAP_COL_C - BATT_HW), uColHi = sgn * (CAP_COL_C + BATT_HW); // pillar u-band
-    const floorOpt = { ...intake, kind: "net-alcove", floor: F0, ceiling: HALL_CEIL, light: 150, tag: CAP_BAY_TAG + 1 };
-    const vcols = [vc - CAP_SPREAD, vc + CAP_SPREAD];
-    // Front (catwalk-side) + deep floor bands run the alcove window depth.
-    areaRect(direction, `batt-${side}-front`, uv(uEdge, uColLo, bv1, bv2), floorOpt);
-    areaRect(direction, `batt-${side}-deep`, uv(uColHi, uDeep, bv1, bv2), floorOpt);
-    // Middle u-band tiled in v: floor gap, pillar, floor gap, pillar, floor gap.
-    [[bv1, vcols[0] - BATT_HW], [vcols[0] + BATT_HW, vcols[1] - BATT_HW], [vcols[1] + BATT_HW, bv2]]
-      .forEach(([v1, v2], k) => areaRect(direction, `batt-${side}-gap${k}`, uv(uColLo, uColHi, v1, v2), floorOpt));
-    // Each ~1/3-height cell-column BLOCK (floor=BATT_H raised, ceiling=HALL_CEIL, OPEN AIR above so
-    // the player sees the top) wears the segmented charge gauge on its perimeter face (762 = red +,
-    // 763 = blue -; BATT_H must match H in R_DoomPerfNetBatteryPixel), and carries TWO short grey
-    // TERMINAL CONTACTS on top -- raised nubs (floor BATT_H+CT_H). The block top is TILED so the
-    // gauge lineTag stays on the four OUTER FRAME strips only; the two contacts sit in the UNtagged
-    // interior, never touching a tagged edge -- else lineTagFor would hand the tag to a contact
-    // riser and the shader would paint the gauge onto it instead of leaving it grey.
-    // (4 corner contacts were declined: they'd sit against the tagged perimeter and bleed.)
-    const uMin = Math.min(uColLo, uColHi), uMax = Math.max(uColLo, uColHi), uc = (uMin + uMax) / 2;
-    const FR = 4, CT_HW = 7, CT_H = 8, GAPHW = 4; // frame width; contact half-width; height; half-gap
-    const gaugeOpt = (tag) => ({ ...conduit, kind: "net-battery", wall: BUS_HOUSING, floor: BATT_H, ceiling: HALL_CEIL, floorFlat: groundFlatName, ceilingFlat: ceilingFlatName, light: 176, lineTag: tag });
-    const topOpt = { ...conduit, kind: "net-battery", wall: BUS_HOUSING, floor: BATT_H, ceiling: HALL_CEIL, floorFlat: groundFlatName, ceilingFlat: ceilingFlatName, light: 176 };
-    const nubOpt = { ...conduit, kind: "net-instrument", wall: BUS_HOUSING, floor: BATT_H + CT_H, ceiling: HALL_CEIL, floorFlat: groundFlatName, ceilingFlat: ceilingFlatName, light: 210 };
-    vcols.forEach((vcb, k) => {
-      const id = `batt-col-${side}-${k}`, tag = BATT_LINE_TAG + k, vLo = vcb - BATT_HW, vHi = vcb + BATT_HW;
-      // Four gauge FRAME strips (the perimeter faces the charge gauge renders on).
-      areaRect(direction, `${id}-fr-s`, uv(uMin, uMax, vLo, vLo + FR), gaugeOpt(tag));
-      areaRect(direction, `${id}-fr-n`, uv(uMin, uMax, vHi - FR, vHi), gaugeOpt(tag));
-      areaRect(direction, `${id}-fr-w`, uv(uMin, uMin + FR, vLo + FR, vHi - FR), gaugeOpt(tag));
-      areaRect(direction, `${id}-fr-e`, uv(uMax - FR, uMax, vLo + FR, vHi - FR), gaugeOpt(tag));
-      // Untagged interior floor flanking the central contact column (u).
-      areaRect(direction, `${id}-in-w`, uv(uMin + FR, uc - CT_HW, vLo + FR, vHi - FR), topOpt);
-      areaRect(direction, `${id}-in-e`, uv(uc + CT_HW, uMax - FR, vLo + FR, vHi - FR), topOpt);
-      // Central column (v): floor, contact 0, gap, contact 1, floor -- all untagged interior + 2 nubs.
-      areaRect(direction, `${id}-c-s`, uv(uc - CT_HW, uc + CT_HW, vLo + FR, vcb - GAPHW - 2 * CT_HW), topOpt);
-      areaRect(direction, `${id}-nub0`, uv(uc - CT_HW, uc + CT_HW, vcb - GAPHW - 2 * CT_HW, vcb - GAPHW), nubOpt);
-      areaRect(direction, `${id}-c-gap`, uv(uc - CT_HW, uc + CT_HW, vcb - GAPHW, vcb + GAPHW), topOpt);
-      areaRect(direction, `${id}-nub1`, uv(uc - CT_HW, uc + CT_HW, vcb + GAPHW, vcb + GAPHW + 2 * CT_HW), nubOpt);
-      areaRect(direction, `${id}-c-n`, uv(uc - CT_HW, uc + CT_HW, vcb + GAPHW + 2 * CT_HW, vHi - FR), topOpt);
-    });
-    // The send-q terminal on the deep wall, centred behind the two columns.
-    areaRect(direction, `batt-${side}-term`, uv(sgn * (ALCHW + ALC_RECESS), uDeep, vc - terminalTextureSize.width / 2, vc + terminalTextureSize.width / 2), {
-      ...conduit, kind: "terminal",
-      floor: F0 + terminalPanelFloor,
-      ceiling: F0 + terminalPanelFloor + terminalTextureSize.height,
       light: 184,
       labelSide: side === "left" ? leftWall : rightWall,
       labelTexture: sc.texture,
@@ -1207,11 +1179,11 @@ const build = (ctx) => {
       labelSide: frontWall, labelTexture: qdiscPlacards.depth.texture, labelWidth: SIGN_W,
     });
   };
-  // Level 1 RIGHT (kernel-TX) = the qdisc disc bay; level 0 = recv CAPACITOR bay (left) +
-  // send BATTERY cell-columns (right); level 2 = ring turbine instrument bays (RX + TX, same wheel).
+  // Level 1 RIGHT (kernel-TX) = the qdisc disc bay; level 0 = socket CAPACITOR bays (recv-q left /
+  // send-q right -- the SAME instrument mirror-imaged, blue RX / violet TX); level 2 = ring turbine
+  // instrument bays (RX + TX, same wheel). Lane 0 = recv-q (glow tag 752), lane 1 = send-q (753).
   stations.filter((st) => st.level === 1).forEach((st) => qdiscBay(st.side));
-  stations.filter((st) => st.level === 0 && st.side === "left").forEach((st) => socketCapBay(st.side, 0, st.screen));
-  stations.filter((st) => st.level === 0 && st.side === "right").forEach((st) => batteryBay(st.side, st.screen));
+  stations.filter((st) => st.level === 0).forEach((st) => socketCapBay(st.side, st.side === "left" ? 0 : 1, st.screen));
   stations.filter((st) => st.level === 2).forEach((st) => ringInstrumentBay(st.side, st.side === "left" ? 0 : 1, st.side === "left" ? TURB_EDNUM : DYN_EDNUM, st.screen));
 
   // ===== Kernel-RX softnet TESLA-COIL BAY off the kernel stage's LEFT (RX) catwalk. The
@@ -1445,14 +1417,32 @@ const sprites = [
   // colour. Rides free BFG-burst frames BFE1 E/F (no BFG in the lab; E was reserved-but-unbuilt).
   { name: "BFE1E0", build: () => buildNetLightningSprite(0, 251) },
   { name: "BFE1F0", build: () => buildNetLightningSprite(1, 251) },
-  // Socket-lock capacitor bank LEAPING ARC (MT_DP_NETCAP): four jagged bolt-fragment frames
-  // (SPR_BFE2 A-D, fullbright) the engine strings along a random jagged path between the two
-  // capacitor tops. BFE2 is the BFG-ball burst -- no BFG in the lab, so nothing else renders it.
-  // (This freed the old BFE1 D/E travelling bead; the tower prop stays on SPR_COL2 A.)
+  // Socket-lock capacitor bank crackle-bolt frames: four jagged fragments the engine uses BOTH for
+  // the tower-to-tower LEAPING ARC (flashover) and, looping + gliding, for the TRAVELING CURRENT.
+  // BLUE = SPR_BFE2 A-D (RX recv-q bay); the BFG-ball burst -- no BFG in the lab, so nothing else
+  // renders it. VIOLET = SPR_SAWG A-D (TX send-q bay); the chainsaw weapon view -- the lab places
+  // no weapons, so overriding it is invisible except where the bolts spawn. The two bays are one
+  // instrument mirror-imaged, blue vs violet, like the RX/TX turbines. [[pwad-sprite-override-constraint]]
   { name: "BFE2A0", build: () => buildNetArcSegment(0) },
   { name: "BFE2B0", build: () => buildNetArcSegment(1) },
   { name: "BFE2C0", build: () => buildNetArcSegment(2) },
   { name: "BFE2D0", build: () => buildNetArcSegment(3) },
+  { name: "SAWGA0", build: () => buildNetArcSegment(0, 251) },
+  { name: "SAWGB0", build: () => buildNetArcSegment(1, 251) },
+  { name: "SAWGC0", build: () => buildNetArcSegment(2, 251) },
+  { name: "SAWGD0", build: () => buildNetArcSegment(3, 251) },
+  // OVERFLOW FLASHOVER comets (world-space trail): frame A = the bright HEAD, frames B/C/D = the
+  // shrinking/darkening TRAIL orbs the engine drops behind it. Blue RX on the never-drawn shotgun-
+  // view SPR_SHTG A-D, violet TX on the never-drawn rocket-flash SPR_MISF A-D. Round orbs, so the
+  // travel direction reads correctly from every angle (it comes from the world-space wake, not the art).
+  { name: "SHTGA0", build: () => buildNetCometOrb(cometBlue.head) },
+  { name: "SHTGB0", build: () => buildNetCometOrb(cometBlue.t1) },
+  { name: "SHTGC0", build: () => buildNetCometOrb(cometBlue.t2) },
+  { name: "SHTGD0", build: () => buildNetCometOrb(cometBlue.t3) },
+  { name: "MISFA0", build: () => buildNetCometOrb(cometViolet.head) },
+  { name: "MISFB0", build: () => buildNetCometOrb(cometViolet.t1) },
+  { name: "MISFC0", build: () => buildNetCometOrb(cometViolet.t2) },
+  { name: "MISFD0", build: () => buildNetCometOrb(cometViolet.t3) },
   { name: "COL2A0", build: () => buildCapTowerSprite() },
   // Ring-buffer (L2) instrument props: the TURBINE wheel on BOTH NIC rings (RX left, TX right) --
   // the two rings are identical bar the orbiting-mote colour (blue RX / violet TX). Authored over

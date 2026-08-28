@@ -41,7 +41,7 @@
      {SPR_SMBT,32768,4,{NULL},S_BTORCHSHRT2,0,0},	// S_BTORCHSHRT
      {SPR_SMBT,32769,4,{NULL},S_BTORCHSHRT3,0,0},	// S_BTORCHSHRT2
      {SPR_SMBT,32770,4,{NULL},S_BTORCHSHRT4,0,0},	// S_BTORCHSHRT3
-@@ -1099,7 +1110,191 @@
+@@ -1099,7 +1110,224 @@
      {SPR_TLP2,32768,4,{NULL},S_TECH2LAMP2,0,0},	// S_TECH2LAMP
      {SPR_TLP2,32769,4,{NULL},S_TECH2LAMP3,0,0},	// S_TECH2LAMP2
      {SPR_TLP2,32770,4,{NULL},S_TECH2LAMP4,0,0},	// S_TECH2LAMP3
@@ -208,6 +208,39 @@
 +    {SPR_BFE2,32769,7,{NULL},S_NULL,0,0},	// S_DP_NETARC_SEG1 (fragment frame B, fullbright)
 +    {SPR_BFE2,32770,7,{NULL},S_NULL,0,0},	// S_DP_NETARC_SEG2 (fragment frame C, fullbright)
 +    {SPR_BFE2,32771,7,{NULL},S_NULL,0,0},	// S_DP_NETARC_SEG3 (fragment frame D, fullbright)
++    // Violet twin of the leaping-arc fragments (SPR_SAWG A-D, fullbright) for the TX send-q
++    // OVERFLOW FLASHOVER: the SAME one-shot flash-then-die as the blue SEG frags, rendered violet.
++    // SAWG is the chainsaw weapon view (no weapons placed in the lab), art-overridden per bay.
++    {SPR_SAWG,32768,7,{NULL},S_NULL,0,0},	// S_DP_NETARC_SEGV0 (violet fragment frame A, fullbright)
++    {SPR_SAWG,32769,7,{NULL},S_NULL,0,0},	// S_DP_NETARC_SEGV1 (violet fragment frame B, fullbright)
++    {SPR_SAWG,32770,7,{NULL},S_NULL,0,0},	// S_DP_NETARC_SEGV2 (violet fragment frame C, fullbright)
++    {SPR_SAWG,32771,7,{NULL},S_NULL,0,0},	// S_DP_NETARC_SEGV3 (violet fragment frame D, fullbright)
++    // TRAVELING CHARGING CURRENT: a small looping crackle-bolt gliding the tower-to-tower wire.
++    // The 4 frames loop (~3 tics each) for the shimmer while momx carries it across; the engine
++    // removes it once it passes the far tower, so the chain never terminates on its own. Blue =
++    // BFE2 A-D (RX, same frags as the flashover), violet = SAWG A-D (TX). Fullbright.
++    {SPR_BFE2,32768,3,{NULL},S_DP_NETCUR2,0,0},	// S_DP_NETCUR1 (blue traveling bolt frame A)
++    {SPR_BFE2,32769,3,{NULL},S_DP_NETCUR3,0,0},	// S_DP_NETCUR2 (frame B)
++    {SPR_BFE2,32770,3,{NULL},S_DP_NETCUR4,0,0},	// S_DP_NETCUR3 (frame C)
++    {SPR_BFE2,32771,3,{NULL},S_DP_NETCUR1,0,0},	// S_DP_NETCUR4 (frame D -> loops back to A)
++    {SPR_SAWG,32768,3,{NULL},S_DP_NETCUR_V2,0,0},	// S_DP_NETCUR_V1 (violet traveling bolt frame A)
++    {SPR_SAWG,32769,3,{NULL},S_DP_NETCUR_V3,0,0},	// S_DP_NETCUR_V2 (frame B)
++    {SPR_SAWG,32770,3,{NULL},S_DP_NETCUR_V4,0,0},	// S_DP_NETCUR_V3 (frame C)
++    {SPR_SAWG,32771,3,{NULL},S_DP_NETCUR_V1,0,0},	// S_DP_NETCUR_V4 (frame D -> loops back to A)
++    // OVERFLOW FLASHOVER "shooting-star" comets (WORLD-SPACE TRAIL): round glowing orbs. Frame A =
++    // the bright HEAD (static, tics -1; the engine glides it via momx and removes it past the far
++    // tower); frames B->C->D = the TRAIL orbs the engine drops at the head's passing positions, each
++    // fading in place (shrinking/darkening art) B(5t)->C(5t)->D(5t)->gone. Blue = SPR_SHTG A-D
++    // (shotgun view), violet = SPR_MISF A-D (rocket flash) -- weapon-view sprites the weaponless lab
++    // never draws (player holds only fist/pistol). Fullbright.
++    {SPR_SHTG,32768,-1,{NULL},S_NULL,0,0},	// S_DP_NETCOMET1 (blue HEAD, frame A, static)
++    {SPR_SHTG,32769,5,{NULL},S_DP_NETCOMET3,0,0},	// S_DP_NETCOMET2 (trail bright, frame B)
++    {SPR_SHTG,32770,5,{NULL},S_DP_NETCOMET4,0,0},	// S_DP_NETCOMET3 (trail mid, frame C)
++    {SPR_SHTG,32771,5,{NULL},S_NULL,0,0},	// S_DP_NETCOMET4 (trail dim, frame D -> fades out)
++    {SPR_MISF,32768,-1,{NULL},S_NULL,0,0},	// S_DP_NETCOMET_V1 (violet HEAD, frame A, static)
++    {SPR_MISF,32769,5,{NULL},S_DP_NETCOMET_V3,0,0},	// S_DP_NETCOMET_V2 (trail bright, frame B)
++    {SPR_MISF,32770,5,{NULL},S_DP_NETCOMET_V4,0,0},	// S_DP_NETCOMET_V3 (trail mid, frame C)
++    {SPR_MISF,32771,5,{NULL},S_NULL,0,0},	// S_DP_NETCOMET_V4 (trail dim, frame D -> fades out)
 +    {SPR_COL2,0,-1,{NULL},S_NULL,0,0},	// S_DP_NETCAPTWR (capacitor tower, static, sector-lit)
 +    // Ring-buffer + send-q machine props: static, NOT fullbright, so the bay-floor glow (which
 +    // ramps with throughput / send-q) lights them. SMIT/SMT2/COL1 frame A are UNUSED IWAD frames
@@ -234,7 +267,7 @@
  };
  
  
-@@ -4665,6 +4860,564 @@
+@@ -4665,6 +4893,590 @@
  	sfx_None,		// activesound
  	MF_NOBLOCKMAP,		// flags
  	S_NULL		// raisestate
@@ -619,6 +652,32 @@
 +    {		// MT_DP_NETCAP -- a socket-lock leaping-arc bolt fragment (no collision, self-removes)
 +	-1,		// doomednum (runtime-spawned only)
 +	S_DP_NETARC_SEG0,		// spawnstate (engine overrides with a random SEG0..3 per fragment)
++	1000,		// spawnhealth
++	S_NULL,		// seestate
++	sfx_None,		// seesound
++	8,		// reactiontime
++	sfx_None,		// attacksound
++	S_NULL,		// painstate
++	0,		// painchance
++	sfx_None,		// painsound
++	S_NULL,		// meleestate
++	S_NULL,		// missilestate
++	S_NULL,		// deathstate
++	S_NULL,		// xdeathstate
++	sfx_None,		// deathsound
++	0,		// speed
++	2*FRACUNIT,		// radius
++	2*FRACUNIT,		// height
++	100,		// mass
++	0,		// damage
++	sfx_None,		// activesound
++	MF_NOGRAVITY|MF_NOBLOCKMAP|MF_NOCLIP,		// flags
++	S_NULL		// raisestate
++    },
++
++    {		// MT_DP_NETCUR -- a traveling socket charging-current crackle-bolt (no collision, engine-removed)
++	-1,		// doomednum (runtime-spawned only)
++	S_DP_NETCUR1,		// spawnstate (blue looping crackle; the driver re-states it violet for TX)
 +	1000,		// spawnhealth
 +	S_NULL,		// seestate
 +	sfx_None,		// seesound

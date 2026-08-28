@@ -510,3 +510,62 @@ func TestReadScanStealCountersHandlesPerZoneAndTypeOnlySpellings(t *testing.T) {
 		t.Fatalf("type-only scan/steal = %d/%d, want 1000/600", scan, steal)
 	}
 }
+
+func TestReadProcNetColumnsParsesPairedLines(t *testing.T) {
+	dir := t.TempDir()
+	// /proc/net/snmp shape: per protocol a header line (names) then a value line, both
+	// prefixed with the same "PROTO:" tag. Two protocols so the header/value pairing is exercised.
+	content := "Ip: Forwarding DefaultTTL InReceives\n" +
+		"Ip: 2 64 12345\n" +
+		"Udp: InDatagrams NoPorts InErrors OutDatagrams RcvbufErrors SndbufErrors\n" +
+		"Udp: 1000 6 0 900 40 7\n"
+	snmp := filepath.Join(dir, "snmp")
+	if err := os.WriteFile(snmp, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cols := readProcNetColumns(snmp)
+	if got := cols["Udp"]["RcvbufErrors"]; got != 40 {
+		t.Fatalf("Udp.RcvbufErrors = %d, want 40", got)
+	}
+	if got := cols["Udp"]["SndbufErrors"]; got != 7 {
+		t.Fatalf("Udp.SndbufErrors = %d, want 7", got)
+	}
+	if got := cols["Ip"]["InReceives"]; got != 12345 {
+		t.Fatalf("Ip.InReceives = %d, want 12345", got)
+	}
+	// A missing proto/field reads the map zero value (0), never panics.
+	if got := cols["TcpExt"]["TCPRcvQDrop"]; got != 0 {
+		t.Fatalf("missing TcpExt.TCPRcvQDrop = %d, want 0", got)
+	}
+}
+
+func TestReadProcNetColumnsMissingFileIsEmpty(t *testing.T) {
+	cols := readProcNetColumns(filepath.Join(t.TempDir(), "does-not-exist"))
+	if got := cols["Udp"]["RcvbufErrors"]; got != 0 {
+		t.Fatalf("missing-file lookup = %d, want 0", got)
+	}
+}
+
+func TestSocketOverflowAggregatesAndRates(t *testing.T) {
+	dir := t.TempDir()
+	// TcpExt recv-side drops: TCPRcvQDrop + TCPBacklogDrop = the recv overflow aggregate.
+	netstat := filepath.Join(dir, "netstat")
+	content := "TcpExt: TCPRcvQDrop TCPBacklogDrop\n" +
+		"TcpExt: 30 12\n"
+	if err := os.WriteFile(netstat, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cols := readProcNetColumns(netstat)
+	recv := cols["TcpExt"]["TCPRcvQDrop"] + cols["TcpExt"]["TCPBacklogDrop"]
+	if recv != 42 {
+		t.Fatalf("recv overflow aggregate = %d, want 42", recv)
+	}
+	// Over 1s from a previous total of 40 -> 2 overflows/s (the *BufOverflowsPerSecond math).
+	if got := counterRate(recv, 40, 1.0); got != 2 {
+		t.Fatalf("counterRate(42,40,1s) = %v, want 2", got)
+	}
+	// First sample (no previous) reports 0, not a spike.
+	if got := counterRate(recv, 0, 1.0); got != 0 {
+		t.Fatalf("counterRate(42,0,1s) = %v, want 0 (first sample)", got)
+	}
+}

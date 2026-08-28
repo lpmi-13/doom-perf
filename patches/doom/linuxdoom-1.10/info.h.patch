@@ -14,7 +14,7 @@
 
 --- a/info.h
 +++ b/info.h
-@@ -1140,6 +1140,198 @@
+@@ -1140,6 +1140,229 @@
      S_TECH2LAMP2,
      S_TECH2LAMP3,
      S_TECH2LAMP4,
@@ -192,6 +192,37 @@
 +    S_DP_NETARC_SEG1,
 +    S_DP_NETARC_SEG2,
 +    S_DP_NETARC_SEG3,
++    // Violet twin of the leaping-arc fragments (SPR_SAWG A-D, fullbright) for the TX send-q
++    // OVERFLOW FLASHOVER -- an exact mirror of the blue SEG frags bar the colour. SAWG is the
++    // chainsaw weapon-view sprite; the lab places no weapons, so overriding it is invisible.
++    S_DP_NETARC_SEGV0,
++    S_DP_NETARC_SEGV1,
++    S_DP_NETARC_SEGV2,
++    S_DP_NETARC_SEGV3,
++    // TRAVELING CHARGING CURRENT: a small looping crackle-bolt that glides the tower-to-tower
++    // wire WITH the lane's traffic. Blue (BFE2 A-D, RX) / violet (SAWG A-D, TX); the 4 frames
++    // loop for the shimmer while momx carries the bolt across (the engine removes it past the
++    // far tower). Shares art with each lane's flashover -- motion/direction/scale distinguish them.
++    S_DP_NETCUR1,
++    S_DP_NETCUR2,
++    S_DP_NETCUR3,
++    S_DP_NETCUR4,
++    S_DP_NETCUR_V1,
++    S_DP_NETCUR_V2,
++    S_DP_NETCUR_V3,
++    S_DP_NETCUR_V4,
++    // OVERFLOW FLASHOVER "shooting-star" comets: a fat head + electric tail (baked sprite) glided
++    // along the TOP wire against traffic on a socket drop. Blue = SHTG A-D (shotgun view), violet =
++    // MISF A-D (rocket flash) -- weapon-view sprites the weaponless lab never draws. 4 looping frames
++    // shimmer the tail; the engine removes the comet past the far tower.
++    S_DP_NETCOMET1,
++    S_DP_NETCOMET2,
++    S_DP_NETCOMET3,
++    S_DP_NETCOMET4,
++    S_DP_NETCOMET_V1,
++    S_DP_NETCOMET_V2,
++    S_DP_NETCOMET_V3,
++    S_DP_NETCOMET_V4,
 +    S_DP_NETCAPTWR,
 +    // Ring-buffer (level 2) + send-q (level 0) machines. Three static, sector-lit billboard props
 +    // (the TURBINE wheel over SMIT A on BOTH NIC rings -- SMT2 A wears the same turbine art now --
@@ -213,7 +244,7 @@
      NUMSTATES
  } statenum_t;
  
-@@ -1298,6 +1490,27 @@
+@@ -1298,6 +1521,28 @@
      MT_MISC84,
      MT_MISC85,
      MT_MISC86,
@@ -232,6 +263,7 @@
 +    MT_DP_DISKRAIN,
 +    MT_DP_NETARC,
 +    MT_DP_NETCAP,
++    MT_DP_NETCUR,	// traveling socket charging-current crackle-bolt (runtime-spawned, no collision)
 +    MT_DP_NETCAPTWR,
 +    MT_DP_NETTURB,	// NIC RX ring turbine wheel (solid prop, doomednum 3012)
 +    MT_DP_NETDYN,	// NIC TX ring dynamo drum (solid prop, doomednum 3013)

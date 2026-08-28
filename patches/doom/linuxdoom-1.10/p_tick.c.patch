@@ -48,7 +48,7 @@
  //-----------------------------------------------------------------------------
  //
  // $Id:$
-@@ -30,9 +30,4329 @@
+@@ -30,9 +30,4502 @@
  
  #include "doomstat.h"
  
@@ -2988,10 +2988,30 @@
 +// between their tops. Mirrored from network-wing.mjs (RING_PITCH discipline). West maps local
 +// (u,v) -> world (-v,u), so the two towers (local u=+/-412, v=1162/1462) sit at world
 +// x=-1162/-1462; the bead runs at world y +/-384 (face-front, so it reads in front of them).
-+#define DOOMPERF_NET_CAP_TOPZ	140	// tower-top wire height where the leaping arc is strung (level 0, F0=0)
++#define DOOMPERF_NET_CAP_TOPZ	140	// TOP wire (tower-top): where the OVERFLOW FLASHOVER is strung (level 0, F0=0)
++#define DOOMPERF_NET_CUR_Z	76	// LOWER wire (~half the 152-tall tower): the steady traveling CURRENT
++//					   rides here so it stays visible when a flashover snaps across the top wire.
 +#define DOOMPERF_NET_CANL_TAG	752	// 752 + lane : socket bay floor (glow ramps with fill)
-+#define DOOMPERF_NET_ARC_SEGS	6	// interior joints of the jagged arc polyline (tower B -> tower A)
++#define DOOMPERF_NET_ARC_SEGS	6	// interior joints of the jagged arc polyline (start tower -> end tower)
 +#define DOOMPERF_NET_ARC_SUB	2	// bolt fragments laid per leg (chain -> continuous ragged bolt)
++#define DOOMPERF_NET_CUR_CAP	6	// max in-flight traveling charging-current bolts per bay
++#define DOOMPERF_NET_CUR_SPEED	(5 * FRACUNIT)	// bolt glide speed along the wire (a slow trickle)
++// OVERFLOW FLASHOVER: a "shooting-star" COMET -- a bright round HEAD orb (SPR_SHTG blue / SPR_MISF
++// violet) gliding a top wire against the traffic on a drop, trailing a world-space fading WAKE behind
++// it. Discrete + slow + a clear head/wake so the direction of travel reads at a glance. Rather than one
++// rigid evenly-spaced conveyor, comets launch on a BURSTY cadence (DoomPerf_NetFlashInt -> clumps and
++// lulls) and each rides its OWN slightly-scattered, gently-sloped path (a start-height jitter + a small
++// momz), so the stream reads as SPORADIC shooting stars; the mean launch rate still scales with
++// saturation and each self-removes past the far tower.
++#define DOOMPERF_NET_FLASH_CAP		8	// max in-flight flashover comet HEADS per bay (trail orbs self-remove)
++#define DOOMPERF_NET_FLASH_SPEED	(5 * FRACUNIT)	// comet glide speed (slow -> ~60 tics to cross, easy to follow)
++#define DOOMPERF_NET_FLASH_INT_MIN	12	// MEAN spawn interval (tics) at FULL saturation -> densest march
++#define DOOMPERF_NET_FLASH_INT_MAX	60	// MEAN spawn interval (tics) just above zero drops -> a lone comet
++#define DOOMPERF_NET_FLASH_ZBAND	20	// +/- start-height scatter (map units) off the top wire, so comets
++						//   ride a BAND of paths rather than one perfectly straight line
++#define DOOMPERF_NET_FLASH_ZDRIFT	3	// max per-comet |momz| in EIGHTHS of a unit/tic: a gentle sloped path
++						//   (the band sits under the 176 ceiling; a steep-up comet only grazes it)
++#define DOOMPERF_NET_TRAIL_EVERY	3	// drop a trail orb behind each head every N tics (the wake spacing)
 +static const int doomperf_net_cap_x[2] = {-1162, -1462};	// the two towers' world x (A / B)
 +static const int doomperf_net_cap_y[2] = {-384, 384};		// RX (left) / TX (right) bay, face-front
 +// ===== RING-BUFFER (level 2) TURBINE + DYNAMO wheels and SEND-Q (level 0) BATTERY banks ("more
@@ -3018,6 +3038,17 @@
 +// bursty after each spawn so packets travel in clumps rather than an even train.
 +static int	doomperf_netpkt_rxgap;
 +static int	doomperf_netpkt_txgap;
++// Socket-lock TRAVELING CHARGING CURRENT bolts (level-0 capacitor banks): a thin trickle of
++// looping crackle-bolts gliding each bay's tower-to-tower wire WITH the lane's traffic at the
++// live throughput. [0] = RX recv bay (blue, +x), [1] = TX send bay (violet, -x). Per-bay
++// "distance until the next spawn is allowed" gaps re-rolled bursty like the packet lanes.
++static mobj_t*	doomperf_netcur[2][DOOMPERF_NET_CUR_CAP];
++static int	doomperf_netcur_gap[2];
++// Socket-lock OVERFLOW FLASHOVER comets (level-0 capacitor banks): baked shooting-star comets glided
++// along each bay's TOP wire AGAINST the traffic on a socket drop. [0] = RX recv bay, [1] = TX send bay.
++// The per-bay timer counts tics toward the next comet; its target interval shrinks with saturation.
++static mobj_t*	doomperf_netflash[2][DOOMPERF_NET_FLASH_CAP];
++static int	doomperf_netflash_timer[2];
 +// Tunnel-mouth ethernet port LEDs: [0]=link (solid green, static), [1]=activity (blinks).
 +static mobj_t*	doomperf_netled[2];
 +
@@ -3124,6 +3155,17 @@
 +{
 +    int	g = (P_Random () < 154) ? (mean * 3) / 10 : (mean * 41) / 20;
 +    return (g < 32) ? 32 : g;
++}
++
++// The same bursty distribution as DoomPerf_NetGap but for the flashover comets' inter-LAUNCH
++// interval in TICS (so it needs a small tic floor, not the 32-map-unit one): ~60% a tight gap
++// (a burst of near-together comets) and ~40% a wide one (a lull), mean-preserving so the launch
++// rate still tracks saturation. This is what makes the comet stream read as sporadic rather than
++// an evenly-spaced march.
++static int DoomPerf_NetFlashInt (int mean)
++{
++    int	t = (P_Random () < 154) ? (mean * 3) / 10 : (mean * 41) / 20;
++    return (t < 5) ? 5 : t;
 +}
 +
 +// One lane: compact the pool, re-drive the live orbs (constant glide + gentle
@@ -3851,6 +3893,143 @@
 +		      DOOMPERF_NET_TX_EXIT_X, -1, 1, tx_target);
 +}
 +
++// Doom Perf: OVERFLOW FLASHOVER for a socket capacitor bay. When the socket queue OVERFLOWS (a
++// drop), a "shooting-star" COMET glides along the TOP wire from the flow's END tower toward its
++// START -- AGAINST the traffic -- so a rejection reads as bounce-back (the only thing moving the
++// wrong way). WORLD-SPACE TRAIL: the comet is a bright HEAD mobj (glided via momx) that DROPS a
++// smaller, dimmer TRAIL orb at its position every DOOMPERF_NET_TRAIL_EVERY tics; each trail orb
++// fades in place (B->C->D->gone) so the head leaves a shrinking wake BEHIND it in real world space.
++// Because the wake is world-positioned (not a baked billboard tail), the direction of travel reads
++// correctly from every angle. Comets launch on an EVEN cadence whose interval shrinks as the
++// saturation/drop level (`sat`, permille) climbs: higher saturation -> more comets marching at once.
++// Blue (SPR_SHTG, RX) / violet (SPR_MISF, TX). No idle baseline: sat 0 -> nothing. (startx,endx):
++// start = the flow's END tower, so the comet runs start -> end, opposite the lane's traffic. Only
++// the HEADS are pooled (for removal + trail deposition); trail orbs self-remove via S_NULL.
++// [[prefer-everpresent-over-flicker]] [[hand-positioned-mobj-floorz]]
++static void DoomPerf_NetFlashLane (mobj_t** pool, int* timer, int startx, int endx,
++				   int y, int violet, int sat)
++{
++    int		dir = (endx > startx) ? 1 : -1;
++    int		headstate = violet ? S_DP_NETCOMET_V1 : S_DP_NETCOMET1;
++    int		trailstate = violet ? S_DP_NETCOMET_V2 : S_DP_NETCOMET2;
++    int		i, slot, mean, zoff, slope;
++    mobj_t*	mo;
++
++    // Remove comet HEADS that have glided past the far tower.
++    for (i = 0; i < DOOMPERF_NET_FLASH_CAP; i++)
++	if (pool[i] && dir * ((pool[i]->x >> FRACBITS) - endx) >= 0)
++	{
++	    P_RemoveMobj (pool[i]);
++	    pool[i] = NULL;
++	}
++
++    // Drop a trail orb at each live head's current position on the wake cadence -- deposited at the
++    // head's PAST positions as it advances, so the fading orbs form a wake trailing behind it.
++    if ((leveltime % DOOMPERF_NET_TRAIL_EVERY) == 0)
++	for (i = 0; i < DOOMPERF_NET_FLASH_CAP; i++)
++	    if (pool[i])
++	    {
++		mo = P_SpawnMobj (pool[i]->x, pool[i]->y, pool[i]->z, MT_DP_NETCUR);
++		P_SetMobjState (mo, trailstate);	// static (no momx) -> fades in place
++	    }
++
++    // Density = the saturation/drop level: the MEAN interval shrinks from INT_MAX (a lone comet
++    // just above zero) to INT_MIN (the densest march) as sat climbs. No idle baseline: sat 0 -> the
++    // timer holds and nothing launches, so a healthy queue never flashes.
++    if (sat <= 0)
++	return;
++    if (sat > 1000) sat = 1000;
++    mean = DOOMPERF_NET_FLASH_INT_MIN
++	 + ((DOOMPERF_NET_FLASH_INT_MAX - DOOMPERF_NET_FLASH_INT_MIN) * (1000 - sat)) / 1000;
++    // Count the per-bay timer DOWN a BURSTY interval (not a fixed one): launch when it expires, then
++    // refill it with a fresh mean-preserving bursty gap, so comets arrive in clumps and lulls rather
++    // than at exactly even spacing. (timer resets to 0 -> the first drop launches immediately.)
++    if (--(*timer) > 0)
++	return;
++    *timer = DoomPerf_NetFlashInt (mean);
++
++    // Launch one comet HEAD from the START (the flow's END) tower.
++    slot = -1;
++    for (i = 0; i < DOOMPERF_NET_FLASH_CAP; i++)
++	if (!pool[i]) { slot = i; break; }
++    if (slot < 0)
++	return;						// pool full -> skip this launch
++
++    // Scatter this comet off the single top wire -- a random start height plus a gentle vertical drift
++    // (momz) -- so it rides its OWN path and the stream stops reading as one perfectly straight line.
++    // MF_NOCLIP|MF_NOGRAVITY -> free flight: the band clears the F0=0 floor with huge room and sits just
++    // under the 176 ceiling (a steep-up comet only grazes it, harmless). [[hand-positioned-mobj-floorz]]
++    zoff  = (P_Random () % (2 * DOOMPERF_NET_FLASH_ZBAND + 1)) - DOOMPERF_NET_FLASH_ZBAND;
++    slope = (P_Random () % (2 * DOOMPERF_NET_FLASH_ZDRIFT + 1)) - DOOMPERF_NET_FLASH_ZDRIFT;
++
++    mo = P_SpawnMobj (startx << FRACBITS, y << FRACBITS,
++		      (DOOMPERF_NET_CAP_TOPZ + zoff) << FRACBITS, MT_DP_NETCUR);
++    P_SetMobjState (mo, headstate);
++    mo->momx = dir * DOOMPERF_NET_FLASH_SPEED;
++    mo->momz = slope * (FRACUNIT / 8);		// gentle per-comet vertical slope
++    pool[slot] = mo;
++}
++
++// Doom Perf: TRAVELING CHARGING CURRENT for a socket capacitor bay. Small looping crackle-bolts
++// glide the LOWER wire (DOOMPERF_NET_CUR_Z, ~half the tower height) from the flow's START tower to
++// its END tower (dir toward endx), self-removing once momx carries them past the end tower. Riding
++// a separate, lower wire than the top-strung flashover keeps the steady flow VISIBLE even when a
++// saturated bay is snapping flashovers across the top (the [[disk-queue-circuit]] two-level idea).
++// The spawn cadence tracks the live throughput (`rate` permille) so an idle bay shows an occasional
++// spark and a busy lane a steady trickle -- the always-on "there is current here" read. Distinct
++// from the flashover: a single small gliding bolt running WITH traffic, not a full arc snapping
++// against it. Blue (RX) / violet (TX). The looping state chain never terminates on its own --
++// position is the removal signal.
++static void DoomPerf_NetCurrentLane (mobj_t** pool, int* gap, int startx, int endx,
++				     int y, int violet, int rate)
++{
++    int		dir = (endx > startx) ? 1 : -1;
++    int		span = (endx > startx) ? (endx - startx) : (startx - endx);
++    int		i, alive, minprog, spacing;
++    mobj_t*	mo;
++
++    // Remove bolts that have glided past the end tower; then repack the pool.
++    for (i = 0; i < DOOMPERF_NET_CUR_CAP; i++)
++    {
++	mo = pool[i];
++	if (mo && dir * ((mo->x >> FRACBITS) - endx) >= 0)
++	{
++	    P_RemoveMobj (mo);
++	    pool[i] = NULL;
++	}
++    }
++    alive = 0;
++    for (i = 0; i < DOOMPERF_NET_CUR_CAP; i++)
++	if (pool[i])
++	    pool[alive++] = pool[i];
++    for (i = alive; i < DOOMPERF_NET_CUR_CAP; i++)
++	pool[i] = NULL;
++
++    if (rate < 0) rate = 0; else if (rate > 1000) rate = 1000;
++    if (rate == 0)
++	return;
++    // A thin trickle even when busy so it never competes with the packet grove: the required
++    // progress-gap from the start tower shrinks as throughput climbs (more bolts on the wire).
++    spacing = span / (1 + (rate * (DOOMPERF_NET_CUR_CAP - 1)) / 1000);
++    minprog = span;
++    for (i = 0; i < alive; i++)
++    {
++	int	prog = dir * ((pool[i]->x >> FRACBITS) - startx);
++	if (prog < minprog)
++	    minprog = prog;
++    }
++    if (alive < DOOMPERF_NET_CUR_CAP && (alive == 0 || minprog >= *gap))
++    {
++	mo = P_SpawnMobj (startx << FRACBITS, y << FRACBITS,
++			  DOOMPERF_NET_CUR_Z << FRACBITS, MT_DP_NETCUR);	// LOWER wire (mid-tower)
++	if (violet)
++	    P_SetMobjState (mo, S_DP_NETCUR_V1);
++	mo->momx = dir * DOOMPERF_NET_CUR_SPEED;
++	pool[alive] = mo;
++	*gap = spacing / 2 + (P_Random () * spacing) / 255;	// bursty gap, like the packet lanes
++    }
++}
++
 +// Doom Perf: THE THREE LOCKS themselves. The lane POOLS are a CONSTANT channel now --
 +// frozen bed height + colour from the map, only a gentle smoothed brightness tracks
 +// each lock's queue fill (no floor move). Saturation reads instead via the gate
@@ -3888,6 +4067,24 @@
 +    {
 +	sig_go = R_CheckTextureNumForName ("DPNSIGGO");
 +	sig_stop = R_CheckTextureNumForName ("DPNSIGST");
++    }
++
++    // Level reload frees every mobj; drop the dangling traveling-current + flashover pool refs on
++    // the first tic (mirrors DoomPerf_UpdateNetworkPackets) before the lane drivers run.
++    if (leveltime == 0)
++    {
++	for (i = 0; i < DOOMPERF_NET_CUR_CAP; i++)
++	{
++	    doomperf_netcur[0][i] = NULL;
++	    doomperf_netcur[1][i] = NULL;
++	}
++	doomperf_netcur_gap[0] = doomperf_netcur_gap[1] = 0;
++	for (i = 0; i < DOOMPERF_NET_FLASH_CAP; i++)
++	{
++	    doomperf_netflash[0][i] = NULL;
++	    doomperf_netflash[1][i] = NULL;
++	}
++	doomperf_netflash_timer[0] = doomperf_netflash_timer[1] = 0;
 +    }
 +
 +    // Publish the kernel-TX QDISC floor-shader inputs for r_draw (both are file-scope in
@@ -4062,60 +4259,36 @@
 +	}
 +    }
 +
-+    // Socket-lock CAPACITOR BANK (RECV-Q, lane 0 only): the DISCRETE LEAPING ARC. At a rate set by
-+    // the smoothed recv-q fill, a lightning arc leaps between the two capacitor tops. Each leap is a
-+    // chain of small fullbright bolt fragments (MT_DP_NETCAP, SPR_BFE2 A-D) strung along a fresh
-+    // RANDOM jagged polyline: it marches tower B (tunnel side, -x) -> tower A (hub side, +x) == the
-+    // RX +x flow direction, its interior joints jitter in height/depth so the route differs every
-+    // leap, and its two END fragments are PINNED to the tower tops so the arc always starts/ends on
-+    // a capacitor. All the fragments flash together for ~7 tics then self-remove. (SEND-Q, lane 1,
-+    // is a BATTERY bank -- driven in DoomPerf_UpdateNetworkMachines, not here.)
-+    if (P_Random () < 2 + (cap_glow[0] * 90) / 1000)	// idle: rare zap .. saturated: near-continuous
-+    {
-+	int	bx = doomperf_net_cap_x[1];		// tower B world x (-1462, tunnel side, -x)
-+	int	ax = doomperf_net_cap_x[0];		// tower A world x (-1162, hub side, +x)
-+	int	ay = doomperf_net_cap_y[0];		// recv-q bay world y (-384)
-+	int	az = DOOMPERF_NET_CAP_TOPZ;		// tower-top wire height
-+	int	prevx = bx, prevy = ay, prevz = az;
-+	int	seg;
-+	mobj_t*	mo;
++    // Socket-lock CAPACITOR BANKS (level 0): both bays are the SAME instrument, mirror-imaged --
++    // RX recv-q (blue) / TX send-q (violet). Three layered signals on TWO stacked tower-to-tower
++    // wires, so a saturated bay never loses its steady-traffic read under the overflow bursts:
++    //   1. TRAVELING CHARGING CURRENT (throughput): a thin trickle of looping crackle-bolts glides
++    //      the LOWER wire (DOOMPERF_NET_CUR_Z, mid-tower) WITH the lane's traffic -- RX +x (tower B
++    //      -1462 -> tower A -1162), TX -x (A -> B) -- at the live rate, so the bay always has motion
++    //      whenever there is traffic, independent of the flashover on the top wire.
++    //   2. CHARGE GLOW (fill): the bay-floor light ramp above (DOOMPERF_NET_CANL_TAG, from cap_glow).
++    //   3. OVERFLOW FLASHOVER (drops): a fast jagged STREAK SHOOTS the other way (against traffic)
++    //      across the TOP wire (DOOMPERF_NET_CAP_TOPZ) on a socket drop -- a discrete moving bolt,
++    //      so at high drop rates you see several streaks in flight rather than one constant web.
++    // The reverse-TRAVELING flashover reads instantly as rejection/bounce-back because it is the
++    // only thing moving the wrong way, one clear level above the steady current.
++    DoomPerf_NetCurrentLane (doomperf_netcur[0], &doomperf_netcur_gap[0],
++			     doomperf_net_cap_x[1], doomperf_net_cap_x[0], doomperf_net_cap_y[0],
++			     0, DoomPerf_EffectiveNetworkRx ());	// RX current: B -> A (+x, with RX flow)
++    DoomPerf_NetCurrentLane (doomperf_netcur[1], &doomperf_netcur_gap[1],
++			     doomperf_net_cap_x[0], doomperf_net_cap_x[1], doomperf_net_cap_y[1],
++			     1, DoomPerf_EffectiveNetworkTx ());	// TX current: A -> B (-x, with TX flow)
 +
-+	// A fragment pinned exactly on tower B's top -- the arc root (RX enters from the tunnel side).
-+	mo = P_SpawnMobj (bx << FRACBITS, ay << FRACBITS, az << FRACBITS, MT_DP_NETCAP);
-+	P_SetMobjState (mo, S_DP_NETARC_SEG0 + (P_Random () & 3));
-+
-+	for (seg = 1; seg <= DOOMPERF_NET_ARC_SEGS; seg++)
-+	{
-+	    int	end = (seg == DOOMPERF_NET_ARC_SEGS);
-+	    int	nx = bx + ((ax - bx) * seg) / DOOMPERF_NET_ARC_SEGS;	// march +x, tower B -> tower A
-+	    int	ny = ay;
-+	    int	nz = az;
-+	    int	k;
-+
-+	    if (!end)						// jitter interior joints only (jagged path)
-+	    {
-+		nz += ((P_Random () - 128) * 44) / 128;		// +/- ~44 units up/down
-+		ny += ((P_Random () - 128) * 22) / 128;		// +/- ~22 units in depth
-+	    }
-+	    // Lay DOOMPERF_NET_ARC_SUB fragments per leg so the chain reads as one continuous ragged
-+	    // bolt; k == SUB lands exactly on this joint (and, on the last leg, exactly on tower A's
-+	    // top). Each fragment picks a random kinked frame so neighbours never look identical.
-+	    for (k = 1; k <= DOOMPERF_NET_ARC_SUB; k++)
-+	    {
-+		int	px = prevx + ((nx - prevx) * k) / DOOMPERF_NET_ARC_SUB;
-+		int	py = prevy + ((ny - prevy) * k) / DOOMPERF_NET_ARC_SUB;
-+		int	pz = prevz + ((nz - prevz) * k) / DOOMPERF_NET_ARC_SUB;
-+
-+		mo = P_SpawnMobj (px << FRACBITS, py << FRACBITS, pz << FRACBITS, MT_DP_NETCAP);
-+		P_SetMobjState (mo, S_DP_NETARC_SEG0 + (P_Random () & 3));
-+		// Interior fragments drift a touch toward the hub (+x) so the crackle reads as flowing
-+		// B->A with RX; the two PINNED end fragments (tower B root above, tower A here) stay put.
-+		if (!(end && k == DOOMPERF_NET_ARC_SUB))
-+		    mo->momx = 2 * FRACUNIT;
-+	    }
-+	    prevx = nx; prevy = ny; prevz = nz;
-+	}
-+    }
++    // Overflow flashover streaks: DENSITY ~ the socket drop/saturation level (index.ts feeds the
++    // real snmp/netstat overflow counter, or a saturation proxy off the fill when it is unavailable),
++    // so a busier bay marches more streaks. Each streak travels from the flow's END tower to its
++    // START (against traffic): RX A -> B (-x), TX B -> A (+x).
++    DoomPerf_NetFlashLane (doomperf_netflash[0], &doomperf_netflash_timer[0],
++			   doomperf_net_cap_x[0], doomperf_net_cap_x[1],
++			   doomperf_net_cap_y[0], 0, doomperf_net_lock_drops[0][0]);
++    DoomPerf_NetFlashLane (doomperf_netflash[1], &doomperf_netflash_timer[1],
++			   doomperf_net_cap_x[1], doomperf_net_cap_x[0],
++			   doomperf_net_cap_y[1], 1, doomperf_net_lock_drops[0][1]);
 +}
 +
 +// Doom Perf: RING-BUFFER TURBINES ("more alive network instruments"). Both NIC rings (RX + TX)
@@ -4378,7 +4551,7 @@
  //
  // THINKERS
  // All thinkers should be allocated by Z_Malloc
-@@ -123,6 +4443,301 @@
+@@ -123,6 +4616,301 @@
  
  
  
@@ -4680,7 +4853,7 @@
  //
  // P_Ticker
  //
-@@ -130,11 +4745,11 @@
+@@ -130,11 +4918,11 @@
  void P_Ticker (void)
  {
      int		i;
@@ -4694,7 +4867,7 @@
      // pause if in menu and at least one tic has been run
      if ( !netgame
  	 && menuactive
-@@ -143,16 +4758,41 @@
+@@ -143,16 +4931,41 @@
      {
  	return;
      }

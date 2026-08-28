@@ -21,7 +21,7 @@
 
 --- a/r_draw.c
 +++ b/r_draw.c
-@@ -95,14 +95,78 @@
+@@ -95,14 +95,77 @@
  // just for profiling 
  int			dccount;
  
@@ -68,7 +68,6 @@
 +static byte R_DoomPerfCpuStreakPixel (int ty);
 +static byte R_DoomPerfCpuGaugePixel (int gauge, int ty);
 +static byte R_DoomPerfDiskGaugePixel (int gauge, int ty);
-+static byte R_DoomPerfNetBatteryPixel (int gauge, int ty);
 +static byte R_DoomPerfDiskQueuePixel (fixed_t xfrac, fixed_t yfrac, byte background);
 +static byte R_DoomPerfDiskDashboardPixel (int tx, int ty, byte background);
 +static byte R_DoomPerfDiskPlatterPixel (fixed_t xfrac, fixed_t yfrac, byte background);
@@ -102,7 +101,7 @@
  { 
      int			count; 
      byte*		dest; 
-@@ -137,9 +201,107 @@
+@@ -137,9 +200,99 @@
      // This is as fast as it gets.
      do 
      {
@@ -136,14 +135,6 @@
 +				    doomperf_cpu_column_texture_x,
 +				    (frac>>FRACBITS)&127,
 +				    dc_source[(frac>>FRACBITS)&127])];
-+	else if (doomperf_cpu_column_display == 35 || doomperf_cpu_column_display == 36)
-+	    // Send-q BATTERY bank: a segmented cell gauge filling bottom-up with the send-q depth
-+	    // on a solid cell-column's lower (two-sided) face. The column is full-height (to the
-+	    // 176 bay ceiling) so ty is masked with &255. 35 = the red (+) cell, 36 = the blue (-)
-+	    // cell. Via dc_colormap so the bay light plays over it; charged cells use bright
-+	    // electric-blue indices so the filled rows read as live.
-+	    *dest = dc_colormap[R_DoomPerfNetBatteryPixel(doomperf_cpu_column_display - 35,
-+							  (frac>>FRACBITS)&255)];
 +	else if (doomperf_cpu_column_display == 37 || doomperf_cpu_column_display == 38)
 +	{
 +	    // Memory-well SHAFT depth fade. `frac` is the wall's continuous texture
@@ -213,7 +204,7 @@
  	
  	dest += SCREENWIDTH; 
  	frac += fracstep;
-@@ -514,6 +676,1107 @@
+@@ -514,6 +667,1054 @@
  // just for profiling
  int			dscount;
  
@@ -497,59 +488,6 @@
 +    if (ty < warn_ty)
 +	return DOOMPERF_DISK_RED;
 +    return DOOMPERF_DISK_GOLD;
-+}
-+
-+// Send-q BATTERY bank (network wing). Draws a segmented lead-acid CELL gauge on a low (40-tall,
-+// ty 0=top .. 40=bottom) solid cell-column face -- short enough that its TOP (terminal caps +
-+// cells) sits at eye level. A coloured TERMINAL CAP band with a +/- glyph sits at the top, then a
-+// 2-ROW grid of cells that light bottom-up with the send-q depth (doomperf_net_lock_fill[0][1]) --
-+// charged cells glow electric-blue, uncharged stay dark, dark grid lines separate them. gauge 0 =
-+// the red (+) column, gauge 1 = the blue (-) column. Reads the fill straight (index.ts feeds it
-+// live + sim); no engine tick needed. Side-effect-free. H MUST match BATT_H in network-wing.mjs.
-+static byte R_DoomPerfNetBatteryPixel (int gauge, int ty)
-+{
-+    int		tx = doomperf_cpu_column_texture_x & 63;	// 64-wide cell face
-+    int		fill = doomperf_net_lock_fill[0][1];		// send-q depth (permille)
-+    const int	H = 40;						// riser height (top at eye level)
-+    const int	CAPBAND = 12;					// terminal-cap band (carries the +/- glyph)
-+    const int	G0 = 14, G1 = 38;				// cell-grid vertical span (2 rows of 12)
-+    const byte	FRAME = 5;					// near-black case frame / grid lines
-+    const byte	EMPTY = 8;					// uncharged cell (dark)
-+    const byte	CAP = gauge ? 200 : 176;			// blue (-) / red (+) terminal cap
-+    const byte	LIT1 = 197, LIT2 = 196;				// electric-blue charged cell (two shades)
-+    int		cellH, row, col, fillLine, gx;
-+
-+    if (fill < 0) fill = 0; else if (fill > 1000) fill = 1000;
-+    if (ty < 0) ty = 0; else if (ty > H) ty = H;
-+
-+    // Outer case frame.
-+    if (tx < 2 || tx > 61 || ty < 1 || ty > H - 2)
-+	return FRAME;
-+
-+    // Terminal-cap band with a +/- glyph (white on the coloured cap).
-+    if (ty < CAPBAND)
-+    {
-+	gx = tx - 32;
-+	if (gx >= -8 && gx <= 8 && ty >= 4 && ty <= 6)		// horizontal bar (both + and -)
-+	    return 4;
-+	if (!gauge && gx >= -2 && gx <= 2 && ty >= 1 && ty <= 9)	// vertical stroke (+ only)
-+	    return 4;
-+	return CAP;
-+    }
-+
-+    // Cell grid: 2 rows x 3 columns over [G0..G1] x [2..61], dark grid lines between.
-+    cellH = (G1 - G0) / 2;
-+    if (cellH < 1) cellH = 1;
-+    if (((ty - G0) % cellH) == 0 || ((tx - 2) % 20) == 0)
-+	return FRAME;
-+    row = (ty - G0) / cellH;
-+    col = (tx - 2) / 20;
-+
-+    // Cells at or below the charge line are lit; the line rises from the bottom with fill.
-+    fillLine = G1 - (fill * (G1 - G0)) / 1000;
-+    if (ty >= fillLine)
-+	return ((row + col) & 1) ? LIT1 : LIT2;
-+    return EMPTY;
 +}
 +
 +static int R_DoomPerfCpuWorldX (fixed_t xfrac)
@@ -1321,7 +1259,7 @@
  
  //
  // Draws the actual span.
-@@ -553,7 +1816,24 @@
+@@ -553,7 +1754,24 @@
  
  	// Lookup pixel from flat texture tile,
  	//  re-index using light/colormap.
@@ -1347,7 +1285,7 @@
  
  	// Next step in u,v.
  	xfrac += ds_xstep; 
-@@ -676,8 +1956,22 @@
+@@ -676,8 +1894,22 @@
  	spot = ((yfrac>>(16-6))&(63*64)) + ((xfrac>>16)&63);
  	// Lowres/blocky mode does it twice,
  	//  while scale is adjusted appropriately.

@@ -574,10 +574,20 @@ const pushTelemetryToEngine = (
   // Socket lock (0): recvq -> RX pool, sendq -> TX pool; a backlogged-accept pile
   // lifts both toward the brim (the socket-lock saturation signal).
   const backlogLift = clampRatio((net.backloggedSockets ?? 0) / 200) * 0.6;
-  engine?._DoomPerf_SetNetLockFill?.(0, 0, netPm(Math.max((net.recvQueueBytes ?? 0) / SOCKET_Q_FULL, backlogLift)));
-  engine?._DoomPerf_SetNetLockFill?.(0, 1, netPm(Math.max((net.sendQueueBytes ?? 0) / SOCKET_Q_FULL, backlogLift)));
-  engine?._DoomPerf_SetNetLockDrops?.(0, 0, 0); // no cheap per-socket drop counter
-  engine?._DoomPerf_SetNetLockDrops?.(0, 1, 0);
+  const recvFill = Math.max((net.recvQueueBytes ?? 0) / SOCKET_Q_FULL, backlogLift);
+  const sendFill = Math.max((net.sendQueueBytes ?? 0) / SOCKET_Q_FULL, backlogLift);
+  engine?._DoomPerf_SetNetLockFill?.(0, 0, netPm(recvFill));
+  engine?._DoomPerf_SetNetLockFill?.(0, 1, netPm(sendFill));
+  // Socket-buffer OVERFLOW -> the capacitor-bay reverse flashover. Prefer the real per-second
+  // overflow counter (snmp Rcv/SndbufErrors + netstat TCPRcvQDrop/TCPBacklogDrop); when it is
+  // absent or zero, fall back to a saturation proxy off the fill so the flashover still fires as
+  // the queue rides near its brim. The larger wins so the bay is honest in both regimes (a real
+  // drop dominates an actual overflow; the proxy makes "about to reject" visible and demoable).
+  // SOCKET_DROP_FULL is small — socket overflows are rare, so even a light rate reads as dropping.
+  const SOCKET_DROP_FULL = 20; // socket overflows/s -> full flashover rate
+  const socketDropProxy = (fill: number) => (fill > 0.85 ? clampRatio((fill - 0.85) / 0.15) : 0);
+  engine?._DoomPerf_SetNetLockDrops?.(0, 0, netPm(Math.max((net.recvBufOverflowsPerSecond ?? 0) / SOCKET_DROP_FULL, socketDropProxy(recvFill))));
+  engine?._DoomPerf_SetNetLockDrops?.(0, 1, netPm(Math.max((net.sendBufOverflowsPerSecond ?? 0) / SOCKET_DROP_FULL, socketDropProxy(sendFill))));
 
   // Kernel lock (1): RX = softnet backlog (squeeze), always present; TX = qdisc
   // backlog when known, else a labelled tx-drop proxy. ?qdisc=off forces the proxy.
@@ -650,7 +660,7 @@ const scenarioTelemetry = (
   engine: DoomPerfEngine | undefined
 ): TelemetrySnapshot | undefined => {
   const mode = engine?._DoomPerf_GetSimMode?.() ?? 0;
-  if (mode < 1 || mode > 11) {
+  if (mode < 1 || mode > 13) {
     return undefined;
   }
 
@@ -681,20 +691,26 @@ const scenarioTelemetry = (
   // bottleneck (downstream stages are starved, which the engine's gate model handles). The
   // hot stage folds PRESSURE (steady high fill -> gate red) -> LOSS (drops pulse -> the full
   // queue overspills), the "saturation precedes errors" lesson, without a separate mode.
-  const networkMode = mode >= 9 && mode <= 11;
+  const networkMode = mode >= 9 && mode <= 13;
   const netRecvSat = mode === 10; // receive-path saturation (RX lane backs up + drops)
   const netXmitSat = mode === 11; // transmit-path saturation (TX lane backs up + drops)
-  const networkSaturated = netRecvSat || netXmitSat;
+  // Socket-overflow pair: the socket (level-0) stage is pinned saturated on one lane and its
+  // recv-q / send-q overflow counter fires, so the capacitor-bay reverse FLASHOVER is demoable.
+  const netRecvQOver = mode === 12; // recv-q overflow (RX socket buffer drops)
+  const netSendQOver = mode === 13; // send-q overflow (TX socket buffer drops)
+  const networkSaturated = netRecvSat || netXmitSat || netRecvQOver || netSendQOver;
   const count = Math.max(1, Math.min(doomPerfCpuCoreCapacity, engine?._DoomPerf_GetEffectiveCpuCoreCount?.() ?? 8));
   const now = Date.now();
   // Which single stage is the bottleneck this instant (rotates every NET_HOT_STAGE_MS).
   // Only the hot stage's queue-pressure fields are driven; the rest stay idle so their
   // gates flow green. RX (lane 0) and TX (lane 1) rotate independently.
   const netHotStage = netRecvSat ? netPickHotStage(now, 0) : netXmitSat ? netPickHotStage(now, 1) : -1;
-  const socHotRx = netRecvSat && netHotStage === 0;
+  // The recv-q / send-q overflow modes PIN the socket stage hot (no rotation) so the flashover
+  // fires reliably; the saturation modes rotate the hot stage as before.
+  const socHotRx = (netRecvSat && netHotStage === 0) || netRecvQOver;
   const kerHotRx = netRecvSat && netHotStage === 1;
   const ringHotRx = netRecvSat && netHotStage === 2;
-  const socHotTx = netXmitSat && netHotStage === 0;
+  const socHotTx = (netXmitSat && netHotStage === 0) || netSendQOver;
   const kerHotTx = netXmitSat && netHotStage === 1;
   const ringHotTx = netXmitSat && netHotStage === 2;
   // CPU is the stressed signal only in the CPU scenario, where the engine
@@ -723,7 +739,9 @@ const scenarioTelemetry = (
     : mode === 8 ? "sim: memory saturation, no swap configured"
     : mode === 9 ? "sim: high network utilization"
     : mode === 10 ? "sim: network receive saturation"
-    : "sim: network transmit saturation";
+    : mode === 11 ? "sim: network transmit saturation"
+    : mode === 12 ? "sim: socket recv-q overflow"
+    : "sim: socket send-q overflow";
   // Background memory stats so the memory and vmstat terminals are meaningful in
   // every scenario. Modes 5/6 follow the USE memory lab pattern: mode 5 is a
   // large resident set with low MemAvailable but quiet swap/PSI; mode 6 adds
@@ -1099,6 +1117,12 @@ const scenarioTelemetry = (
   const netLossPulse = Math.abs(Math.sin(now / 1500));
   const netRxDrops = kerHotRx ? 760 * netLossPulse : 0;
   const netTxDrops = kerHotTx ? 640 * netLossPulse : 0;
+  // Socket-buffer overflow rates: fire (pulsing) only in the matching overflow demo so the
+  // capacitor-bay reverse flashover snaps against the traffic on that lane. Scaled well above
+  // SOCKET_DROP_FULL (20/s) so the flashover reads clearly. Zero otherwise (incl. the saturation
+  // modes, whose socket phase still drives the flashover via the fill-near-max proxy).
+  const netRecvBufOver = netRecvQOver ? 40 * netLossPulse : 0;
+  const netSendBufOver = netSendQOver ? 34 * netLossPulse : 0;
   // The network-sim branch is guarded by SimNetworkTelemetry, so omitting any
   // field a network terminal reads is a compile error (see src/telemetry/types.ts).
   const networkSim: SimNetworkTelemetry = {
@@ -1121,6 +1145,8 @@ const scenarioTelemetry = (
         dropsPerSecond: netRxDrops + netTxDrops,
         rxDropsPerSecond: netRxDrops,
         txDropsPerSecond: netTxDrops,
+        recvBufOverflowsPerSecond: netRecvBufOver,
+        sendBufOverflowsPerSecond: netSendBufOver,
         errorsPerSecond: 0,
         // eth0 is the primary (noisiest) NIC, eth1 idles alongside, so the interface
         // terminal shows a real breakdown with a marked primary; their rx/tx sum to
@@ -1180,6 +1206,8 @@ const scenarioTelemetry = (
     dropsPerSecond: 0,
     rxDropsPerSecond: 0,
     txDropsPerSecond: 0,
+    recvBufOverflowsPerSecond: 0,
+    sendBufOverflowsPerSecond: 0,
     errorsPerSecond: 0,
     primaryInterface: "eth0",
     interfaces: [
@@ -1408,8 +1436,9 @@ const start = async () => {
     const refreshEffectiveTelemetry = (forceScenarioSample = false) => {
       const engine = getEngine();
       const mode = engine?._DoomPerf_GetSimMode?.() ?? 0;
-      // Must match scenarioTelemetry's own range check (1..11 — 3/4/5 disk, 6/7/8 memory, 9/10/11 network).
-      const inScenario = mode >= 1 && mode <= 11;
+      // Must match scenarioTelemetry's own range check (1..13 — 3/4/5 disk, 6/7/8 memory,
+      // 9/10/11 network saturation, 12/13 socket recv-q/send-q overflow).
+      const inScenario = mode >= 1 && mode <= 13;
       const now = Date.now();
       if (!inScenario) {
         lastScenario = undefined;

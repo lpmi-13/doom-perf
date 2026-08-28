@@ -194,7 +194,13 @@ type networkTelemetry struct {
 	DropsPerSecond   float64 `json:"dropsPerSecond"`
 	RxDropsPerSecond float64 `json:"rxDropsPerSecond"`
 	TxDropsPerSecond float64 `json:"txDropsPerSecond"`
-	ErrorsPerSecond  float64 `json:"errorsPerSecond"`
+	// Socket-buffer OVERFLOW rates (per second): the recv-q / send-q drop counters that fire the
+	// capacitor-bay reverse flashover in the network wing. Recv = /proc/net/snmp Udp:RcvbufErrors
+	// + /proc/net/netstat TcpExt:{TCPRcvQDrop,TCPBacklogDrop}; send = Udp:SndbufErrors. Cheap,
+	// world-readable, netns-scoped (no sudo); a missing file/field seals them to zero.
+	RecvBufOverflowsPerSecond float64 `json:"recvBufOverflowsPerSecond"`
+	SendBufOverflowsPerSecond float64 `json:"sendBufOverflowsPerSecond"`
+	ErrorsPerSecond           float64 `json:"errorsPerSecond"`
 	// PrimaryInterface is the noisiest real NIC this sample (highest rx+tx); the
 	// packet grove binds to it so the in-world lanes track the main interface
 	// rather than the aggregate. Interfaces carries the per-NIC breakdown (busiest
@@ -335,6 +341,10 @@ type sampler struct {
 	// and time_squeeze events, the kernel-lock RX backlog signal.
 	softnetDropped  uint64
 	softnetSqueezed uint64
+	// Socket-buffer overflow cumulative totals (/proc/net/snmp + /proc/net/netstat): the
+	// recv-q / send-q drop counters, rate-diffed into the *BufOverflowsPerSecond fields.
+	recvBufOverflows uint64
+	sendBufOverflows uint64
 	swapPages       uint64
 	swapIn    uint64
 	swapOut   uint64
@@ -682,6 +692,12 @@ func (s *sampler) sample(now time.Time) (telemetry, error) {
 	softnetDropped, softnetSqueezed := readSoftnet()
 	network.SoftnetDropsPerSecond = counterRate(softnetDropped, s.softnetDropped, elapsed)
 	network.SoftnetSqueezePerSecond = counterRate(softnetSqueezed, s.softnetSqueezed, elapsed)
+	// Socket-buffer overflow rates: the recv-q / send-q drop counters (snmp/netstat) as
+	// per-second rates. A missing file/field reads 0, so on a locked-down host the socket
+	// flashover degrades to its fill-near-max saturation proxy downstream rather than lying.
+	recvBufOverflows, sendBufOverflows := readSocketOverflows()
+	network.RecvBufOverflowsPerSecond = counterRate(recvBufOverflows, s.recvBufOverflows, elapsed)
+	network.SendBufOverflowsPerSecond = counterRate(sendBufOverflows, s.sendBufOverflows, elapsed)
 	// Transmit-lock backlog: qdisc backlog bytes via netlink (RTM_GETQDISC). nil when
 	// netlink is unavailable, which keeps the honest tx-drop-proxy fallback.
 	network.QdiscBacklogBytes = readQdiscBacklog()
@@ -715,6 +731,8 @@ func (s *sampler) sample(now time.Time) (telemetry, error) {
 	s.net = nets
 	s.softnetDropped = softnetDropped
 	s.softnetSqueezed = softnetSqueezed
+	s.recvBufOverflows = recvBufOverflows
+	s.sendBufOverflows = sendBufOverflows
 
 	worst := maxFloat(
 		resourceSeverity(cpuUtil, cpuSaturation, 0),
@@ -1534,6 +1552,74 @@ func readSoftnet() (dropped, squeezed uint64) {
 		}
 	}
 	return dropped, squeezed
+}
+
+// readSocketOverflows returns the cumulative socket-buffer OVERFLOW totals -- the cheap,
+// world-readable, netns-scoped drop counters that fire the network wing's capacitor-bay reverse
+// flashover. Recv-side = /proc/net/snmp Udp:RcvbufErrors + /proc/net/netstat TcpExt:{TCPRcvQDrop,
+// TCPBacklogDrop}; send-side = /proc/net/snmp Udp:SndbufErrors. (TCP send buffers backpressure
+// rather than drop, so SndbufErrors is the literal send-side counter.) A missing file or field
+// contributes 0, so a locked-down container simply reports no overflow rather than erroring; the
+// caller rate-diffs these like the other cumulative counters.
+func readSocketOverflows() (recvOverflows, sendOverflows uint64) {
+	snmp := readProcNetColumns("/proc/net/snmp")
+	recvOverflows += snmp["Udp"]["RcvbufErrors"]
+	sendOverflows += snmp["Udp"]["SndbufErrors"]
+	netstat := readProcNetColumns("/proc/net/netstat")
+	recvOverflows += netstat["TcpExt"]["TCPRcvQDrop"]
+	recvOverflows += netstat["TcpExt"]["TCPBacklogDrop"]
+	return recvOverflows, sendOverflows
+}
+
+// readProcNetColumns parses the paired header/value line format shared by /proc/net/snmp and
+// /proc/net/netstat: each protocol PREFIX has a "PREFIX: name1 name2 ..." header line immediately
+// followed by a "PREFIX: val1 val2 ..." value line. Returns proto -> field -> value. A line is a
+// VALUE line when its first token parses as a number and it pairs with the pending header of the
+// same proto; otherwise it is a HEADER line. A missing file yields an empty map (all lookups 0).
+func readProcNetColumns(path string) map[string]map[string]uint64 {
+	out := map[string]map[string]uint64{}
+	file, err := os.Open(path)
+	if err != nil {
+		return out
+	}
+	defer file.Close()
+	var pendingProto string
+	var pendingNames []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		proto, rest, ok := strings.Cut(scanner.Text(), ":")
+		if !ok {
+			continue
+		}
+		fields := strings.Fields(rest)
+		if len(fields) == 0 {
+			continue
+		}
+		if _, err := strconv.ParseUint(fields[0], 10, 64); err != nil {
+			// Header line: remember its field names for the next (value) line.
+			pendingProto = proto
+			pendingNames = fields
+			continue
+		}
+		// Value line: pair with the pending header of the same proto.
+		if proto != pendingProto || pendingNames == nil {
+			continue
+		}
+		row := out[proto]
+		if row == nil {
+			row = map[string]uint64{}
+			out[proto] = row
+		}
+		for i, name := range pendingNames {
+			if i >= len(fields) {
+				break
+			}
+			if v, err := strconv.ParseUint(fields[i], 10, 64); err == nil {
+				row[name] = v
+			}
+		}
+	}
+	return out
 }
 
 // Netlink constants (not in the syscall package) for dumping traffic-control qdiscs.

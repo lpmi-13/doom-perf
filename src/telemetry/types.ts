@@ -177,6 +177,13 @@ export interface NetworkTelemetry extends ResourceTelemetry {
   dropsPerSecond?: number;
   rxDropsPerSecond?: number;
   txDropsPerSecond?: number;
+  // Socket-buffer OVERFLOW rates (per second): the recv-q / send-q drop counters that fire the
+  // capacitor-bay reverse flashover. recv = /proc/net/snmp Udp:RcvbufErrors + /proc/net/netstat
+  // TcpExt:{TCPRcvQDrop,TCPBacklogDrop}; send = Udp:SndbufErrors. World-readable, netns-scoped,
+  // no sudo; absent (undefined) on a locked-down host, where the flashover falls back to a
+  // fill-near-max saturation proxy (see refreshEffectiveTelemetry).
+  recvBufOverflowsPerSecond?: number;
+  sendBufOverflowsPerSecond?: number;
   errorsPerSecond?: number;
   // Noisiest real NIC this sample + the per-interface breakdown (busiest first);
   // the packet grove binds to the primary interface rather than the aggregate.
@@ -257,6 +264,9 @@ export type SimNetworkTelemetry = NetworkTelemetry &
     // Directional drop rates the network terminal names line-by-line: required so
     // both sim branches synthesize them (the RX-drop / TX-drop demo modes fire one).
     | "rxDropsPerSecond" | "txDropsPerSecond"
+    // Socket-buffer overflow rates driving the capacitor-bay flashover: required so both
+    // sim branches set them (the recv-q / send-q overflow demo modes fire one).
+    | "recvBufOverflowsPerSecond" | "sendBufOverflowsPerSecond"
     | "primaryInterface" | "interfaces" | "tcp"
     | "recvQueueBytes" | "sendQueueBytes" | "backloggedSockets" | "topSockets"
     // Canal lock inputs the engine feeds from the effective snapshot: requiring them
