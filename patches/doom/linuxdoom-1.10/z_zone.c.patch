@@ -1,0 +1,90 @@
+# Doom Perf engine patch: z_zone.c
+#
+# Instrument the zone allocator so the perf harness can right-size the heap
+# (raised 2->16 MB in the m_misc.c / i_system.c patches to stop a fragmentation
+# black screen) from MEASURED occupancy instead of a guess. Z_Init publishes the
+# total zone size and zeroes the counters; Z_Malloc adds each allocation's final
+# (post-split, header-included) size and tracks a high-water mark; Z_Free
+# subtracts the block's size before the free-block merges rewrite it. Because
+# Z_Malloc's purge loop and Z_FreeTags both free through Z_Free, purges and tag
+# frees are accounted automatically. O(1) per call, no list walk. The globals
+# (doomperf_zone_size/used/peak_used) are defined in i_video_ems.c and reachable
+# here via the force-included doom_emscripten_compat.h. See PERF_TUNE_PLAN.md
+# Part 4.3. Z_ClearZone is not called at runtime, so it is left untouched.
+#
+# Order-independent: this is the only Doom Perf patch that touches z_zone.c.
+# Regenerate by diffing a clean tree against the staged build tree;
+# see scripts/build-doom-wasm.sh.
+
+--- a/z_zone.c
++++ b/z_zone.c
+@@ -113,6 +113,16 @@
+     block->user = NULL;
+     
+     block->size = mainzone->size - sizeof(memzone_t);
++
++    // Doom Perf (PERF_TUNE_PLAN.md Part 4.3): expose live zone occupancy so the
++    // harness can right-size the heap (raised 2->16 MB to stop a fragmentation
++    // black screen). The zone starts empty apart from the block-list sentinel,
++    // which is not a tracked allocation.
++    doomperf_zone_size = mainzone->size;
++    doomperf_zone_used = 0;
++    doomperf_zone_peak_used = 0;
++    doomperf_zone_static_used = 0;
++    doomperf_zone_static_peak = 0;
+ }
+ 
+ 
+@@ -128,6 +138,13 @@
+ 
+     if (block->id != ZONEID)
+ 	I_Error ("Z_Free: freed a pointer without ZONEID");
++
++    // Doom Perf (Part 4.3): account the freed block before the free-block merges
++    // below rewrite block->size. Covers purges too (Z_Malloc frees purgable
++    // blocks through here, as does Z_FreeTags).
++    doomperf_zone_used -= block->size;
++    if (block->tag < PU_PURGELEVEL)
++	doomperf_zone_static_used -= block->size;
+ 		
+     if (block->user > (void **)0x100)
+     {
+@@ -284,7 +301,19 @@
+     mainzone->rover = base->next;	
+ 	
+     base->id = ZONEID;
+-    
++
++    // Doom Perf (Part 4.3): base->size is now the allocated block's final size
++    // (post-split, header included). Track used bytes + high-water mark.
++    doomperf_zone_used += base->size;
++    if (doomperf_zone_used > doomperf_zone_peak_used)
++	doomperf_zone_peak_used = doomperf_zone_used;
++    if (tag < PU_PURGELEVEL)
++    {
++	doomperf_zone_static_used += base->size;
++	if (doomperf_zone_static_used > doomperf_zone_static_peak)
++	    doomperf_zone_static_peak = doomperf_zone_static_used;
++    }
++
+     return (void *) ((byte *)base + sizeof(memblock_t));
+ }
+ 
+@@ -440,6 +469,17 @@
+     if (tag >= PU_PURGELEVEL && (unsigned)block->user < 0x100)
+ 	I_Error ("Z_ChangeTag: an owner is required for purgable blocks");
+ 
++    // Doom Perf (Part 4.3): keep the non-purgeable counter correct when a block
++    // crosses the PU_PURGELEVEL boundary (e.g. a cached lump promoted to PU_STATIC).
++    if (block->tag < PU_PURGELEVEL && tag >= PU_PURGELEVEL)
++	doomperf_zone_static_used -= block->size;
++    else if (block->tag >= PU_PURGELEVEL && tag < PU_PURGELEVEL)
++    {
++	doomperf_zone_static_used += block->size;
++	if (doomperf_zone_static_used > doomperf_zone_static_peak)
++	    doomperf_zone_static_peak = doomperf_zone_static_used;
++    }
++
+     block->tag = tag;
+ }
+ 

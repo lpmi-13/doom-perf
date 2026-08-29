@@ -7,6 +7,8 @@
 #   0035  disk-platter-spindle
 #
 #   (+)   network-qdisc-disc (kernel-TX qdisc floor-display sentinels 126/127)
+#
+#   (+)   perf-peak-visplanes (Part 4.3: peak-visplane counter in R_ClearPlanes)
 # Order-independent: this is the only Doom Perf patch that touches r_plane.c.
 # Regenerate by diffing a clean tree against the staged build tree;
 # see scripts/build-doom-wasm.sh.
@@ -63,7 +65,23 @@
  short			openings[MAXOPENINGS];
  short*			lastopening;
  
-@@ -420,6 +448,21 @@
+@@ -194,6 +222,15 @@
+ 	ceilingclip[i] = -1;
+     }
+ 
++    // Doom Perf (PERF_TUNE_PLAN.md Part 4.3): capture the previous frame's peak
++    // visplane count before the reset, so the harness can right-size MAXVISPLANES
++    // (raised to 1024 to stop a visplane-overflow black screen) from real numbers.
++    {
++	int n = (int)(lastvisplane - visplanes);
++	if (n > doomperf_peak_visplanes) doomperf_peak_visplanes = n;
++	doomperf_cap_visplanes = MAXVISPLANES;
++    }
++
+     lastvisplane = visplanes;
+     lastopening = openings;
+     
+@@ -420,6 +457,21 @@
  	}
  	
  	// regular flat
@@ -85,7 +103,7 @@
  	ds_source = W_CacheLumpNum(firstflat +
  				   flattranslation[pl->picnum],
  				   PU_STATIC);
-@@ -449,5 +492,6 @@
+@@ -449,5 +501,6 @@
  	}
  	
  	Z_ChangeTag (ds_source, PU_CACHE);

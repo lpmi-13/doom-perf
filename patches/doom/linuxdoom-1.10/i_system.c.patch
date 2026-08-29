@@ -1,0 +1,38 @@
+# Doom Perf engine patch: i_system.c
+#
+# Keep the zone-heap initializer (mb_used) honest. M_LoadDefaults (m_misc.c)
+# overwrites this initializer at boot with its "mb_used" defaults-table entry
+# (there is no saved default.cfg in the browser), so the value that actually
+# sizes Doom's zone heap lives in BOTH files and they must agree. The vanilla
+# split (6 here, 2 in the table) meant a reader of i_system.c believed 6 MB while
+# the effective zone was 2 MB -- which fragmented into a Z_Malloc black screen on
+# a dense cross-hub view. Set both to 16: the table entry wins at boot as before,
+# and this initializer now matches (and is the fallback if the SNDSERV-gated
+# table entry is ever compiled out). See PERF_TUNE_PLAN.md Part 4.3 and the
+# m_misc.c patch. No behavioural change vs the current 16 MB zone -- this only
+# removes the misleading dead value.
+#
+# Order-independent: this is the only Doom Perf patch that touches i_system.c.
+# Regenerate by diffing a clean tree against the staged build tree;
+# see scripts/build-doom-wasm.sh.
+
+--- a/i_system.c
++++ b/i_system.c
+@@ -48,7 +48,16 @@
+ 
+ 
+ 
+-int	mb_used = 6;
++// Doom Perf: zone-heap size in MB, read by I_ZoneBase/I_GetHeapSize below.
++// IMPORTANT: at boot M_LoadDefaults (m_misc.c) OVERWRITES this with the "mb_used"
++// entry in its defaults table (there is no saved default.cfg in the browser), so
++// the value that actually sizes the zone lives in BOTH places and they must agree.
++// Vanilla was 6 here and 2 in the table -> the table's 2 MB won, and a dense
++// cross-hub view fragmented the zone until a texture composite failed
++// (I_Error "Z_Malloc: failed on allocation" -> black screen). Both are now 16;
++// keeping this initializer in sync means the zone is 16 MB even if the SNDSERV
++// table entry is ever compiled out. See PERF_TUNE_PLAN.md Part 4.3 and m_misc.c.
++int	mb_used = 16;
+ 
+ 
+ void

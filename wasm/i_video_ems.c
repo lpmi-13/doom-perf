@@ -107,6 +107,21 @@ static int doomperf_dim_permille = 0;        // eased screen-dim currently appli
 // idle-gating change is meant to bring down.
 static uint32_t doomperf_render_frames = 0;
 
+// Doom Perf: profiling peak counters (PERF_TUNE_PLAN.md Part 4.3). Defined here
+// (the single export surface); written from the render TUs and z_zone.c via the
+// force-included compat header. See doom_emscripten_compat.h for the contract.
+int doomperf_peak_visplanes = 0;
+int doomperf_peak_drawsegs = 0;
+int doomperf_peak_vissprites = 0;
+int doomperf_cap_visplanes = 0;
+int doomperf_cap_drawsegs = 0;
+int doomperf_cap_vissprites = 0;
+int doomperf_zone_size = 0;
+int doomperf_zone_used = 0;
+int doomperf_zone_peak_used = 0;
+int doomperf_zone_static_used = 0;
+int doomperf_zone_static_peak = 0;
+
 // Doom Perf: title wordmark "oo" live-load pulse (see doom_emscripten_compat.h).
 // The oo is drawn with reserved palette indices DOOMPERF_OO_TAG[]; while
 // doomperf_title_remap is set (V_DrawPatch, around the TITLEPIC/M_DOOM draws) those
@@ -630,6 +645,40 @@ EMSCRIPTEN_KEEPALIVE
 unsigned int DoomPerf_GetRenderFrameCount(void)
 {
     return doomperf_render_frames;
+}
+
+// Doom Perf: profiling peak getters (PERF_TUNE_PLAN.md Part 4.3). The perf probe
+// samples these to report each render array's peak occupancy against its capacity
+// and the zone heap's peak used against its total, so the crash-headroom limits
+// (MAXVISPLANES/etc. and the 16 MB zone) can be right-sized from real numbers.
+EMSCRIPTEN_KEEPALIVE int DoomPerf_GetPeakVisplanes(void)  { return doomperf_peak_visplanes; }
+EMSCRIPTEN_KEEPALIVE int DoomPerf_GetPeakDrawsegs(void)   { return doomperf_peak_drawsegs; }
+EMSCRIPTEN_KEEPALIVE int DoomPerf_GetPeakVissprites(void) { return doomperf_peak_vissprites; }
+EMSCRIPTEN_KEEPALIVE int DoomPerf_GetCapVisplanes(void)   { return doomperf_cap_visplanes; }
+EMSCRIPTEN_KEEPALIVE int DoomPerf_GetCapDrawsegs(void)    { return doomperf_cap_drawsegs; }
+EMSCRIPTEN_KEEPALIVE int DoomPerf_GetCapVissprites(void)  { return doomperf_cap_vissprites; }
+EMSCRIPTEN_KEEPALIVE int DoomPerf_GetZoneSizeBytes(void)  { return doomperf_zone_size; }
+EMSCRIPTEN_KEEPALIVE int DoomPerf_GetZoneUsedBytes(void)  { return doomperf_zone_used; }
+EMSCRIPTEN_KEEPALIVE int DoomPerf_GetZonePeakBytes(void)  { return doomperf_zone_peak_used; }
+// Non-purgeable (PU_STATIC + PU_LEVEL, tag < PU_PURGELEVEL) occupancy. Total used
+// trends toward full because PU_CACHE is greedy and purged on demand; THIS is the
+// zone's real floor and what governs a Z_Malloc exhaustion, so it is the number to
+// right-size against (plus headroom for the largest single composite + a cache
+// working set).
+EMSCRIPTEN_KEEPALIVE int DoomPerf_GetZoneStaticBytes(void)     { return doomperf_zone_static_used; }
+EMSCRIPTEN_KEEPALIVE int DoomPerf_GetZoneStaticPeakBytes(void) { return doomperf_zone_static_peak; }
+
+// Zero the render-array peaks and re-baseline the zone peak to current usage, so
+// the harness can measure per-window maxima (called from the probe's reset()
+// after warmup). Zone size/used are live totals and are left untouched.
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_ResetRenderPeaks(void)
+{
+    doomperf_peak_visplanes = 0;
+    doomperf_peak_drawsegs = 0;
+    doomperf_peak_vissprites = 0;
+    doomperf_zone_peak_used = doomperf_zone_used;
+    doomperf_zone_static_peak = doomperf_zone_static_used;
 }
 
 // Doom Perf: render-pacing setters (PERF_TUNE_PLAN.md Part 1). The browser drives

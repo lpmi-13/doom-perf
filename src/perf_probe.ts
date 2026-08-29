@@ -22,6 +22,21 @@ const MAX_FRAME_SAMPLES = 200000; // ring-buffer cap (~55 min at 60fps) — keep
 type EngineModule = {
   _DoomPerf_GetRenderFrameCount?: () => number;
   _DoomPerf_GetSimMode?: () => number;
+  // Profiling peak counters (PERF_TUNE_PLAN.md Part 4.3): render-array occupancy
+  // and zone-heap usage, so the crash-headroom limits can be right-sized from
+  // measured peaks. Absent on an un-rebuilt engine (fields degrade to null).
+  _DoomPerf_GetPeakVisplanes?: () => number;
+  _DoomPerf_GetPeakDrawsegs?: () => number;
+  _DoomPerf_GetPeakVissprites?: () => number;
+  _DoomPerf_GetCapVisplanes?: () => number;
+  _DoomPerf_GetCapDrawsegs?: () => number;
+  _DoomPerf_GetCapVissprites?: () => number;
+  _DoomPerf_GetZoneSizeBytes?: () => number;
+  _DoomPerf_GetZoneUsedBytes?: () => number;
+  _DoomPerf_GetZonePeakBytes?: () => number;
+  _DoomPerf_GetZoneStaticBytes?: () => number;
+  _DoomPerf_GetZoneStaticPeakBytes?: () => number;
+  _DoomPerf_ResetRenderPeaks?: () => void;
   wasmMemory?: { buffer?: ArrayBufferLike };
   HEAP8?: { buffer?: ArrayBufferLike; byteLength?: number };
 };
@@ -48,6 +63,23 @@ export interface PerfSnapshot {
   };
   longtasks: { supported: boolean; count: number; totalMs: number; maxMs: number };
   render: { available: boolean; frames: number | null; fps: number | null; total: number | null };
+  // Engine peak counters (PERF_TUNE_PLAN.md Part 4.3): peak render-array occupancy
+  // vs capacity and peak zone-heap usage vs total, for right-sizing the limits.
+  enginePeaks: {
+    available: boolean;
+    visplanes: { peak: number; cap: number } | null;
+    drawsegs: { peak: number; cap: number } | null;
+    vissprites: { peak: number; cap: number } | null;
+    // usedBytes/peakBytes trend toward full (PU_CACHE is greedy); staticPeakBytes
+    // (non-purgeable high-water) is the real floor to right-size against.
+    zone: {
+      usedBytes: number;
+      peakBytes: number;
+      sizeBytes: number;
+      staticUsedBytes: number | null;
+      staticPeakBytes: number | null;
+    } | null;
+  };
   simMode: number | null;
   jsHeap: { available: boolean; usedBytes: number | null; peakBytes: number | null; limitBytes: number | null };
   wasmHeap: { available: boolean; bytes: number | null; peakBytes: number | null };
@@ -75,6 +107,48 @@ const readRenderFrames = (): number | null => {
   const engine = getEngine();
   const value = engine?._DoomPerf_GetRenderFrameCount?.();
   return typeof value === "number" ? value >>> 0 : null;
+};
+
+// Read the engine's peak counters (PERF_TUNE_PLAN.md Part 4.3). Returns
+// `available: false` when the getters are absent (un-rebuilt engine) so the
+// snapshot degrades rather than throwing. The engine maintains the maxima
+// itself; the probe just reads the final values at snapshot time.
+const readEnginePeaks = (): PerfSnapshot["enginePeaks"] => {
+  const e = getEngine();
+  const g = (fn?: () => number): number | null => {
+    const v = fn?.();
+    return typeof v === "number" ? v : null;
+  };
+  const vp = g(e?._DoomPerf_GetPeakVisplanes);
+  const ds = g(e?._DoomPerf_GetPeakDrawsegs);
+  const vs = g(e?._DoomPerf_GetPeakVissprites);
+  const zoneSize = g(e?._DoomPerf_GetZoneSizeBytes);
+  if (vp === null && zoneSize === null) {
+    return { available: false, visplanes: null, drawsegs: null, vissprites: null, zone: null };
+  }
+  const capVp = g(e?._DoomPerf_GetCapVisplanes);
+  const capDs = g(e?._DoomPerf_GetCapDrawsegs);
+  const capVs = g(e?._DoomPerf_GetCapVissprites);
+  const zoneUsed = g(e?._DoomPerf_GetZoneUsedBytes);
+  const zonePeak = g(e?._DoomPerf_GetZonePeakBytes);
+  const zoneStatic = g(e?._DoomPerf_GetZoneStaticBytes);
+  const zoneStaticPeak = g(e?._DoomPerf_GetZoneStaticPeakBytes);
+  return {
+    available: true,
+    visplanes: vp !== null && capVp !== null ? { peak: vp, cap: capVp } : null,
+    drawsegs: ds !== null && capDs !== null ? { peak: ds, cap: capDs } : null,
+    vissprites: vs !== null && capVs !== null ? { peak: vs, cap: capVs } : null,
+    zone:
+      zoneSize !== null && zoneUsed !== null && zonePeak !== null
+        ? {
+            usedBytes: zoneUsed,
+            peakBytes: zonePeak,
+            sizeBytes: zoneSize,
+            staticUsedBytes: zoneStatic,
+            staticPeakBytes: zoneStaticPeak,
+          }
+        : null,
+  };
 };
 
 const readSimMode = (): number | null => {
@@ -176,6 +250,9 @@ export function installPerfProbe(): PerfProbe {
     longtaskTotalMs = 0;
     longtaskMaxMs = 0;
     renderBaseline = readRenderFrames();
+    // Zero the engine's render-array peaks and re-baseline the zone peak to
+    // current usage, so enginePeaks reflects this measurement window (Part 4.3).
+    getEngine()?._DoomPerf_ResetRenderPeaks?.();
     jsHeapPeak = null;
     wasmHeapPeak = null;
     domPeak = null;
@@ -244,6 +321,7 @@ export function installPerfProbe(): PerfProbe {
         fps: renderFps,
         total: renderTotal,
       },
+      enginePeaks: readEnginePeaks(),
       simMode: readSimMode(),
       jsHeap: {
         available: js !== null,

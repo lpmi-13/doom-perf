@@ -225,6 +225,32 @@ extern int doomperf_sim_mode;
 // read it with no extern of its own. [[doomperf-engine-global-externs]]
 extern int doomperf_render_interp;
 
+// Doom Perf: profiling peak counters (PERF_TUNE_PLAN.md Part 4.3). The perf
+// harness reads these to right-size the render limits and the zone heap from
+// MEASURED peaks instead of the guessed 8x headroom that was bumped in to stop
+// I_Error black-screen crashes (raised MAXVISPLANES/MAXVISSPRITES/MAXDRAWSEGS
+// and the 2->16 MB zone). Each _peak_ is the max seen since boot (or since the
+// last DoomPerf_ResetRenderPeaks); each _cap_ is the compiled array size, so the
+// report can show "peak of cap" and how far a limit could safely come back down.
+// The render peaks are written where each per-frame count is finalized, just
+// before its R_Clear* reset (visplanes in r_plane.c, drawsegs in r_bsp.c,
+// vissprites in r_things.c); the caps are stamped from the same sites (that is
+// where each MAX* is visible). The zone figures track live zone occupancy from
+// z_zone.c (Z_Init sizes it; Z_Malloc/Z_Free maintain used + peak). All globals
+// are DEFINED in i_video_ems.c; this force-included header is why the render and
+// zone TUs can write them with no extern of their own. [[doomperf-engine-global-externs]]
+extern int doomperf_peak_visplanes;
+extern int doomperf_peak_drawsegs;
+extern int doomperf_peak_vissprites;
+extern int doomperf_cap_visplanes;
+extern int doomperf_cap_drawsegs;
+extern int doomperf_cap_vissprites;
+extern int doomperf_zone_size;       // total zone bytes (mainzone->size)
+extern int doomperf_zone_used;       // bytes currently allocated (incl. block headers)
+extern int doomperf_zone_peak_used;  // high-water mark of doomperf_zone_used
+extern int doomperf_zone_static_used; // non-purgeable bytes (tag < PU_PURGELEVEL)
+extern int doomperf_zone_static_peak; // high-water mark of doomperf_zone_static_used
+
 // Doom Perf: human-readable scenario title for the active doomperf_sim_mode,
 // used as the automap heads-up title in place of the Doom level name. Defined
 // in m_menu.c next to the data-source labels it is derived from.

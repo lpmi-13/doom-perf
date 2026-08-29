@@ -6,6 +6,8 @@
 #   0009  allow-pwad-sprite-overrides
 #   0032  hide-viewplayer-body-sprite
 #
+#
+#   (+)   perf-peak-vissprites (Part 4.3: peak-vissprite counter in R_ClearSprites)
 # Order-independent: this is the only Doom Perf patch that touches r_things.c.
 # Regenerate by diffing a clean tree against the staged build tree;
 # see scripts/build-doom-wasm.sh.
@@ -52,7 +54,22 @@
      if ((int)frame > maxframe)
  	maxframe = frame;
  		
-@@ -444,6 +470,11 @@
+@@ -316,6 +342,14 @@
+ //
+ void R_ClearSprites (void)
+ {
++    // Doom Perf (PERF_TUNE_PLAN.md Part 4.3): capture the previous frame's peak
++    // vissprite count before the reset, so the harness can right-size MAXVISSPRITES
++    // (raised to 1024; vanilla silently dropped sprites past 128) from real numbers.
++    {
++	int n = (int)(vissprite_p - vissprites);
++	if (n > doomperf_peak_vissprites) doomperf_peak_vissprites = n;
++	doomperf_cap_vissprites = MAXVISSPRITES;
++    }
+     vissprite_p = vissprites;
+ }
+ 
+@@ -444,6 +478,11 @@
  
  
  
@@ -64,7 +81,7 @@
  //
  // R_ProjectSprite
  // Generates a vissprite for a thing
-@@ -478,7 +509,15 @@
+@@ -478,7 +517,15 @@
      
      angle_t		ang;
      fixed_t		iscale;
@@ -81,7 +98,7 @@
      // transform the origin point
      tr_x = thing->x - viewx;
      tr_y = thing->y - viewy;
-@@ -585,12 +624,34 @@
+@@ -585,12 +632,34 @@
  	// fixed map
  	vis->colormap = fixedcolormap;
      }
@@ -117,7 +134,7 @@
      else
      {
  	// diminished light
-@@ -979,11 +1040,8 @@
+@@ -979,11 +1048,8 @@
  	if (ds->maskedtexturecol)
  	    R_RenderMaskedSegRange (ds, ds->x1, ds->x2);
      

@@ -7,16 +7,36 @@
 # turn-/view-dependent hard crash / black canvas). Companion to the
 # MAXVISPLANES / MAXOPENINGS (r_plane.c) and MAXDRAWSEGS (r_defs.h) bumps.
 #
+#
+# Also (Part 4.3): capture the per-frame peak DRAWSEG count in R_ClearDrawSegs
+# (MAXDRAWSEGS lives in r_defs.h) so the perf harness can right-size it from
+# measured peaks. Writes doomperf_peak_drawsegs / doomperf_cap_drawsegs.
 # Order-independent: this is the only Doom Perf patch that touches r_bsp.c.
 # Regenerate by diffing a clean tree against the staged build tree;
 # see scripts/build-doom-wasm.sh.
 
 --- a/r_bsp.c
 +++ b/r_bsp.c
-@@ -85,7 +85,21 @@
+@@ -67,6 +67,15 @@
+ //
+ void R_ClearDrawSegs (void)
+ {
++    // Doom Perf (PERF_TUNE_PLAN.md Part 4.3): capture the previous frame's peak
++    // drawseg count before the reset, so the harness can right-size MAXDRAWSEGS
++    // (raised to 1024) from real numbers. ds_p only grows within a frame, so the
++    // value at reset is that frame's true peak.
++    {
++	int n = (int)(ds_p - drawsegs);
++	if (n > doomperf_peak_drawsegs) doomperf_peak_drawsegs = n;
++	doomperf_cap_drawsegs = MAXDRAWSEGS;
++    }
+     ds_p = drawsegs;
+ }
+ 
+@@ -85,7 +94,21 @@
  } cliprange_t;
-
-
+ 
+ 
 -#define MAXSEGS		32
 +// Doom Perf: raised from the vanilla 32. R_ClipSolidWallSegment inserts one
 +// solidsegs entry per DISJOINT fully-occluding wall span on screen and has NO
@@ -33,6 +53,6 @@
 +// overflow for ANY view or geometry; it costs ~2 KB of BSS. Same class of fix
 +// as MAXVISPLANES / MAXVISSPRITES / MAXDRAWSEGS.
 +#define MAXSEGS		256
-
+ 
  // newend is one past the last valid seg
  cliprange_t*	newend;
