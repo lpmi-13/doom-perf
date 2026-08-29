@@ -1,0 +1,37 @@
+# Doom Perf engine patch: m_misc.c
+#
+# Raise the zone-heap default (mb_used) from the vanilla 2 to 16 (MB). M_LoadDefaults
+# writes this default over i_system.c's mb_used initializer at boot (no saved
+# default.cfg exists in the browser), so this table entry -- not the initializer --
+# is what actually sizes Doom's zone heap. At 2 MB the DoomPerf lab's dense, custom-
+# textured wings fragment the zone until a ~50 KB texture composite can't be
+# allocated, tripping I_Error("Z_Malloc: failed on allocation ...") -> a hard black
+# screen (reproducible on a rich cross-hub view). See PERF_TUNE_PLAN.md Part 4 for
+# eventual right-sizing (heap cap / sleeping-wing cache purge).
+#
+# Order-independent: this is the only Doom Perf patch that touches m_misc.c.
+# Regenerate by diffing a clean tree against the staged build tree; see
+# scripts/build-doom-wasm.sh.
+
+--- a/m_misc.c
++++ b/m_misc.c
+@@ -255,7 +255,18 @@
+ // UNIX hack, to be removed. 
+ #ifdef SNDSERV
+     {"sndserver", (int *) &sndserver_filename, (int) "sndserver"},
+-    {"mb_used", &mb_used, 2},
++    // Doom Perf: the zone-heap size in MB. M_LoadDefaults writes this default over
++    // i_system.c's mb_used initializer at boot (there is no saved default.cfg in the
++    // browser), so THIS is the value that actually takes effect -- the vanilla 2 MB.
++    // Doom's zone caches composited wall textures + flats (PU_CACHE) alongside level
++    // data and engine state (PU_STATIC/PU_LEVEL). The DoomPerf lab's four dense,
++    // custom-textured wings leave ~1.2 MB of PU_STATIC+level resident, so a 2 MB zone
++    // has only fragmented scraps free; a rich cross-hub view (memory wing exit across
++    // the atrium) then needs to composite a ~50 KB texture and no free block is big
++    // enough -> I_Error("Z_Malloc: failed on allocation") hard-aborts to a black
++    // screen. 16 MB gives generous, defrag-tolerant headroom. The zone is one up-front
++    // malloc; PERF_TUNE_PLAN.md Part 4 (heap cap / purge sleeping wings) right-sizes it.
++    {"mb_used", &mb_used, 16},
+ #endif
+     
+ #endif

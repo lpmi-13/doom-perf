@@ -217,6 +217,14 @@ extern int doomperf_net_qdisc_sat;
 //   utilization/saturation (three-lock canal fills + orb density + net dev terminal).
 extern int doomperf_sim_mode;
 
+// Doom Perf render-pacing (PERF_TUNE_PLAN.md Part 1). doomperf_render_interp is the
+// sub-tic interpolation toggle (1.5): when 0, d_main.c's D_DoomLoop renders one
+// fresh-viewpoint frame per 35 Hz tic (a hard ~35 fps cap) instead of interpolating
+// multiple frames per tic. Defined in i_video_ems.c (with the other pacing state,
+// which stays private to that TU); this force-included extern is why d_main.c can
+// read it with no extern of its own. [[doomperf-engine-global-externs]]
+extern int doomperf_render_interp;
+
 // Doom Perf: human-readable scenario title for the active doomperf_sim_mode,
 // used as the automap heads-up title in place of the Doom level name. Defined
 // in m_menu.c next to the data-source labels it is derived from.

@@ -83,6 +83,21 @@ int doomperf_net_qdisc_flow = 0;
 int doomperf_net_qdisc_sat = 0;
 int doomperf_sim_mode = 0;
 
+// Doom Perf: render-pacing controller (PERF_TUNE_PLAN.md Part 1 — "stop rendering
+// frames nobody asked for"). The Asyncify loop presents a software-rendered frame
+// ~60x/sec unconditionally; these flags let it coast the *present* rate down when
+// nobody can see the difference, without touching game logic — the 35 Hz tic still
+// runs (TryRunTics), so only PRESENTED frames drop and the thinkers/instruments keep
+// advancing on their own clock (that is the 1.3 "decouple instruments from camera
+// fps" property, for free). All state here is read only inside this TU except
+// doomperf_render_interp, which d_main.c's interpolation loop reads (externed in
+// doom_emscripten_compat.h). See DoomPerf_UpdatePacing below for how they combine.
+static int doomperf_hidden = 0;              // 1 while the tab is backgrounded (visibilitychange) [1.1]
+static int doomperf_idle_gate = 1;           // master enable for idle/hibernate coasting (0 = always 60) [1.2/1.4]
+int        doomperf_render_interp = 1;       // 0 = disable sub-tic interpolation -> 35 fps cap; read in d_main.c [1.5]
+static uint32_t doomperf_last_input_ms = 0;  // SDL_GetTicks() at the last real user input (PollEvents / NotifyActivity)
+static int doomperf_dim_permille = 0;        // eased screen-dim currently applied while hibernating (0..1000) [1.4]
+
 // Doom Perf: profiling harness (PERF_TUNE_PLAN.md Part 0). A monotonically
 // increasing count of frames the software renderer has actually presented,
 // incremented once per I_FinishUpdate (the SDL present path below). The perf
@@ -617,6 +632,38 @@ unsigned int DoomPerf_GetRenderFrameCount(void)
     return doomperf_render_frames;
 }
 
+// Doom Perf: render-pacing setters (PERF_TUNE_PLAN.md Part 1). The browser drives
+// these from src/index.ts. SetHidden is the visibility gate (1.1); SetIdleGate is the
+// master switch for the idle/hibernate coast (the harness flips it off to measure a
+// clean 60 fps baseline); SetRenderInterp is the sub-tic interpolation toggle (1.5);
+// NotifyActivity lets DOM-side interaction that SDL never sees (terminal clicks, tab
+// re-focus) reset the idle timer so hibernate always wakes on real activity.
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_SetHidden(int hidden)
+{
+    doomperf_hidden = hidden ? 1 : 0;
+    if (!hidden)
+        doomperf_last_input_ms = (uint32_t) SDL_GetTicks();   // re-focus counts as activity
+}
+
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_SetIdleGate(int enabled)
+{
+    doomperf_idle_gate = enabled ? 1 : 0;
+}
+
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_SetRenderInterp(int enabled)
+{
+    doomperf_render_interp = enabled ? 1 : 0;
+}
+
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_NotifyActivity(void)
+{
+    doomperf_last_input_ms = (uint32_t) SDL_GetTicks();
+}
+
 EMSCRIPTEN_KEEPALIVE
 int DoomPerf_GetEffectiveCpuCoreCount(void)
 {
@@ -980,6 +1027,22 @@ static void PollEvents(void)
 
     while (SDL_PollEvent(&sdl_event))
     {
+        // Doom Perf: any real user input resets the idle timer so the render-pacing
+        // controller (DoomPerf_UpdatePacing) wakes from an idle/hibernate coast to
+        // full 60 fps. Key repeats are ignored for the game event queue but still
+        // count as "the operator is here" for pacing.
+        switch (sdl_event.type)
+        {
+        case SDL_KEYDOWN:
+        case SDL_KEYUP:
+        case SDL_MOUSEBUTTONDOWN:
+        case SDL_MOUSEBUTTONUP:
+        case SDL_MOUSEMOTION:
+            doomperf_last_input_ms = (uint32_t) SDL_GetTicks();
+            break;
+        default:
+            break;
+        }
         switch (sdl_event.type)
         {
         case SDL_KEYDOWN:
@@ -1208,9 +1271,151 @@ int I_GetTimeMS(void)
     return (int) SDL_GetTicks();
 }
 
+// ---------------------------------------------------------------------------
+// Doom Perf render-pacing controller (PERF_TUNE_PLAN.md Part 1)
+// ---------------------------------------------------------------------------
+// One decision per presented frame: how long to yield before the next present.
+// The single lever is the emscripten_sleep at the end of I_FinishUpdate. Longer
+// sleep == fewer presented frames; game logic is untouched (TryRunTics still runs
+// the 35 Hz tics, in catch-up bursts when we present slowly), so the world and
+// every instrument keep advancing — we just draw them less often. Tiers:
+//   hidden (tab backgrounded)          -> ~2 fps            [1.1 visibility gate]
+//   camera moving / recent input       -> 60 fps (smooth)   [full]
+//   parked, gauges or recent activity  -> 15 fps            [1.2/1.3 idle coast]
+//   parked + quiet + long no-input     -> ~5 fps + dim      [1.4 hibernate]
+
+#define DOOMPERF_FPS_FULL        60
+#define DOOMPERF_FPS_IDLE        15    // parked but not yet hibernating
+#define DOOMPERF_FPS_HIBERNATE   5     // long-idle screensaver floor
+#define DOOMPERF_AWAKE_GRACE_MS  1000  // stay at full fps this long after any input (covers menu/wipe)
+#define DOOMPERF_HIBERNATE_MS    20000 // no input for this long -> hibernate tier
+#define DOOMPERF_HIDDEN_SLEEP_MS 500   // ~2 fps while backgrounded
+#define DOOMPERF_DIM_MAX         420   // hibernate screen dim, permille of brightness removed (~58% bright)
+#define DOOMPERF_TELEMETRY_DEADBAND 24 // aggregate permille change that counts as "the machine did something"
+#define DOOMPERF_TELEMETRY_HOLD_MS  3000 // keep treating telemetry as active this long after the last change
+
+// True when the level camera has moved (translated or turned) since the previous
+// presented frame. When there is no level camera (title/menu/load) there is nothing
+// to keep smooth, so idle/input recency governs instead — return 0 ("not moving").
+static int DoomPerf_CameraMoved(void)
+{
+    static fixed_t px = 0, py = 0;
+    static angle_t pa = 0;
+    static int have = 0;
+    mobj_t* mo;
+    fixed_t x, y;
+    angle_t a;
+    int moved;
+
+    if (!(gamestate == GS_LEVEL && players[0].mo))
+    {
+        have = 0;
+        return 0;
+    }
+    mo = players[0].mo;
+    // Momentum is the primary signal: it is set once per 35 Hz tic and stays
+    // constant across the several interpolated frames rendered within that tic, so
+    // it never flickers 1/0 the way a per-frame position delta would. It also stays
+    // true while the player slides to a stop after releasing keys, or is carried by
+    // a lift. Position/angle deltas back it up for teleports and pure turning.
+    if (mo->momx != 0 || mo->momy != 0)
+    {
+        px = mo->x; py = mo->y; pa = mo->angle; have = 1;
+        return 1;
+    }
+    x = mo->x;
+    y = mo->y;
+    a = mo->angle;
+    if (!have)
+    {
+        px = x; py = y; pa = a; have = 1;
+        return 1;   // first frame in a level: assume active until we have a baseline
+    }
+    // > 1 map unit of translation, or any change in facing, is real motion. When the
+    // player is truly parked, momentum has decayed to zero and x/y/angle are stable.
+    moved = (abs(x - px) > FRACUNIT) || (abs(y - py) > FRACUNIT) || (a != pa);
+    px = x; py = y; pa = a;
+    return moved;
+}
+
+// True while the monitored machine is doing something worth animating at a higher
+// rate. We fold a handful of the most animation-relevant permille signals into one
+// number and watch it for change; a change latches "active" for a short hold so the
+// tier does not strobe between frames (respects [[prefer-everpresent-over-flicker]]).
+static int DoomPerf_TelemetryActive(void)
+{
+    static int prev = 0;
+    static int have = 0;
+    static uint32_t last_change_ms = 0;
+    int sig;
+    int delta;
+    uint32_t now = (uint32_t) SDL_GetTicks();
+
+    sig = doomperf_cpu_load_pressure
+        + doomperf_net_rx + doomperf_net_tx
+        + doomperf_storage_util + doomperf_storage_await
+        + doomperf_memory_saturation
+        + doomperf_cpu_run_queue_count * 100
+        + (doomperf_oom_event ? 5000 : 0);
+
+    if (!have) { prev = sig; last_change_ms = now; have = 1; }
+    delta = sig > prev ? sig - prev : prev - sig;
+    prev = sig;
+    if (delta > DOOMPERF_TELEMETRY_DEADBAND)
+        last_change_ms = now;
+    return (now - last_change_ms) < DOOMPERF_TELEMETRY_HOLD_MS;
+}
+
+// Decide the pacing for this frame: update the eased hibernate dim toward its target
+// and return the number of milliseconds to yield before presenting the next frame.
+// Called once per presented frame from I_FinishUpdate (so the motion/telemetry
+// samplers above advance exactly once per frame).
+static int DoomPerf_UpdatePacing(void)
+{
+    uint32_t now = (uint32_t) SDL_GetTicks();
+    int moved = DoomPerf_CameraMoved();     // call every frame (updates its baseline)
+    int busy  = DoomPerf_TelemetryActive(); // call every frame (updates its baseline)
+    int recent_input;
+    int dim_target = 0;
+    int sleep_ms;
+
+    if (doomperf_last_input_ms == 0)
+        doomperf_last_input_ms = now;       // treat boot as "just interacted"
+    recent_input = (now - doomperf_last_input_ms) < DOOMPERF_AWAKE_GRACE_MS;
+
+    if (doomperf_hidden)
+    {
+        sleep_ms = DOOMPERF_HIDDEN_SLEEP_MS;                 // [1.1] backgrounded tab
+    }
+    else if (!doomperf_idle_gate || moved || recent_input)
+    {
+        sleep_ms = 1000 / DOOMPERF_FPS_FULL;                 // smooth: motion / input / gate off
+    }
+    else if ((now - doomperf_last_input_ms) >= DOOMPERF_HIBERNATE_MS && !busy)
+    {
+        sleep_ms = 1000 / DOOMPERF_FPS_HIBERNATE;            // [1.4] true screensaver
+        dim_target = DOOMPERF_DIM_MAX;
+    }
+    else
+    {
+        sleep_ms = 1000 / DOOMPERF_FPS_IDLE;                 // [1.2/1.3] parked, gauges live
+    }
+
+    // Ease the dim toward its target so entering/leaving hibernate fades rather than
+    // pops. On wake the render rate is already 60 fps, so the fade-out is quick and
+    // snappy; on entry it drifts in over ~1-2 s at the low hibernate rate.
+    if (doomperf_dim_permille < dim_target)
+        doomperf_dim_permille += (dim_target - doomperf_dim_permille + 7) / 8;
+    else if (doomperf_dim_permille > dim_target)
+        doomperf_dim_permille -= (doomperf_dim_permille - dim_target + 3) / 4;
+
+    return sleep_ms;
+}
+
 void I_FinishUpdate(void)
 {
     int i;
+    int sleep_ms;
 
     if (!graphics_initialized || !screens[0])
     {
@@ -1294,17 +1499,41 @@ void I_FinishUpdate(void)
         }
     }
 
+    // Doom Perf: decide this frame's pacing (also eases the hibernate dim). Done
+    // here, after the world + vignette are composited, so the dim below multiplies
+    // the finished image. Returns how long to yield before the next present.
+    sleep_ms = DoomPerf_UpdatePacing();
+
+    // Doom Perf: hibernate dim (PERF_TUNE_PLAN.md 1.4). While parked and idle we drop
+    // to ~5 fps and fade the whole frame toward dark like a screensaver, then fade
+    // back on wake. Skipped entirely (no per-pixel cost) whenever fully lit.
+    if (doomperf_dim_permille > 0)
+    {
+        int keep = 1000 - doomperf_dim_permille;   // brightness retained, permille
+        int n = SCREENWIDTH * SCREENHEIGHT;
+
+        for (i = 0; i < n; i++)
+        {
+            uint32_t px = rgba_framebuffer[i];
+            int r = ((int)((px >> 16) & 0xff) * keep) / 1000;
+            int g = ((int)((px >> 8) & 0xff) * keep) / 1000;
+            int b = ((int)(px & 0xff) * keep) / 1000;
+            rgba_framebuffer[i] = 0xff000000u | ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+        }
+    }
+
     SDL_UpdateTexture(texture, 0, rgba_framebuffer, SCREENWIDTH * sizeof(uint32_t));
     SDL_RenderClear(renderer);
     SDL_RenderCopy(renderer, texture, 0, 0);
     SDL_RenderPresent(renderer);
     doomperf_render_frames++;   // profiling harness: count presented engine frames
 
-    // Yield to the browser and cap the *render* rate. Game logic is still paced
-    // to 35 Hz by TryRunTics (real-time I_GetTime); D_DoomLoop renders multiple
-    // interpolated frames per tic, so this caps that to ~60 fps rather than the
-    // old one-frame-per-tic 35 fps. (Was 1000/TICRATE.)
-    emscripten_sleep(1000 / 60);
+    // Yield to the browser and cap the *render* rate. Game logic stays paced to
+    // 35 Hz by TryRunTics (real-time I_GetTime); D_DoomLoop renders interpolated
+    // frames per tic, so this caps that. The interval is dynamic now (was 1000/60):
+    // DoomPerf_UpdatePacing coasts it down when the tab is hidden, the camera is
+    // parked, or the operator has walked away. See PERF_TUNE_PLAN.md Part 1.
+    emscripten_sleep(sleep_ms);
 }
 
 void I_ReadScreen(byte* scr)

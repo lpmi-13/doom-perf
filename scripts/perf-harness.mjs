@@ -64,6 +64,7 @@ const parseArgs = (argv) => {
     url: "http://127.0.0.1:8000",
     endpoint: "http://localhost:9222",
     headed: false,
+    hidden: false,
     throttle: undefined,
     repeat: 1,
     out: "perf-results",
@@ -87,6 +88,7 @@ const parseArgs = (argv) => {
       case "--url": args.url = next(); break;
       case "--endpoint": args.endpoint = next(); break;
       case "--headed": args.headed = true; break;
+      case "--hidden": args.hidden = true; break;
       case "--throttle": args.throttle = Number(next()); break;
       case "--repeat": args.repeat = Math.max(1, Number(next())); break;
       case "--out": args.out = next(); break;
@@ -126,6 +128,9 @@ Options:
   --motion tour|idle|spin|forward   tour motion (default: tour = idle+spin+forward)
   --interval MS       manual/attach sample cadence (default: 1000)
   --headed            tour: show a real GPU-composited window
+  --hidden            tour: run the measure window with the tab marked hidden, to
+                      book the 1.1 visibility-gate win (the engine coasts to ~2 fps).
+                      Best paired with --motion idle. A/B it against a normal run.
   --throttle N        CDP CPU throttling rate (e.g. 4 = 4x slower) for tier tests
   --profile NAME      pass ?perf=NAME (potato|balanced|cinematic) through to the app
   --repeat N          tour: run N times, report the median-fps run (fights noise)
@@ -266,6 +271,32 @@ const applyThrottle = async (cdp, rate) => {
   }
 };
 
+// Simulate a backgrounded tab for the 1.1 visibility gate (PERF_TUNE_PLAN.md Part 1).
+// There is no stable CDP command to set document.visibilityState, and truly
+// backgrounding a lone headless page is not possible, so drive the app's own path
+// directly: shadow document.hidden / visibilityState and fire the `visibilitychange`
+// event the app listens for. Its handler calls _DoomPerf_SetHidden, and the engine
+// coasts its present rate to ~2 fps — exactly the win we want to measure. The probe's
+// render-frame counter captures the drop even though the (foreground) headless
+// compositor keeps painting rAF at ~60, so read renderFps / CDP task, not rAF fps.
+const setPageHidden = async (page, hidden) => {
+  await page.evaluate((h) => {
+    if (!window.__perfVisInstalled) {
+      Object.defineProperty(document, "hidden", {
+        configurable: true,
+        get: () => !!window.__perfHidden,
+      });
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        get: () => (window.__perfHidden ? "hidden" : "visible"),
+      });
+      window.__perfVisInstalled = true;
+    }
+    window.__perfHidden = !!h;
+    document.dispatchEvent(new Event("visibilitychange"));
+  }, hidden);
+};
+
 // ---------------------------------------------------------------------------
 // Result shaping + output
 // ---------------------------------------------------------------------------
@@ -278,6 +309,7 @@ const commonMeta = (args, resolvedScenario, extra) => ({
   profile: args.profile ?? null,
   headless: args.mode === "tour" ? !args.headed : false,
   note: (args.mode === "tour" && !args.headed) ? HEADLESS_NOTE : undefined,
+  hidden: !!args.hidden,
   url: args.url,
   throttle: args.throttle ?? null,
   createdAt: new Date().toISOString(),
@@ -312,6 +344,7 @@ const summarize = (result) => {
     label: result.label,
     mode: result.mode,
     scenario: result.scenario,
+    hidden: result.hidden ?? false,
     durationMs: num(agg.durationMs),
     rafFps: num(probe?.raf?.fps),
     renderFps: num(probe?.render?.fps),
@@ -361,9 +394,14 @@ const runTourOnce = async (args, resolvedScenario) => {
     const cdpBaseline = (await collect(page, cdp)).metrics;
 
     console.log(`  measuring ${args.duration}s (motion: ${args.motion})…`);
+    if (args.hidden) {
+      await setPageHidden(page, true);
+      console.log("  visibility: hidden (1.1 gate active — expect renderFps to drop to ~2)");
+    }
     const t0 = Date.now();
     await runMotion(page, args.motion, args.duration * 1000);
     const durationMs = Date.now() - t0;
+    if (args.hidden) await setPageHidden(page, false);
 
     const final = await collect(page, cdp);
     const aggregate = {
@@ -501,6 +539,7 @@ const reportSingle = (result) => {
   const s = summarize(result);
   console.log(`\n  ── ${s.label} (${s.mode}${s.scenario ? `, ${s.scenario}` : ""}) ──`);
   console.log(`  window          ${fmtNum((s.durationMs ?? 0) / 1000)}s`);
+  if (result.hidden) console.log(`  visibility      hidden (1.1 gate)`);
   console.log(`  rAF fps         ${fmtNum(s.rafFps)}`);
   console.log(`  render fps      ${fmtNum(s.renderFps)}  (engine-presented frames)`);
   console.log(`  frame p95/p99   ${fmtNum(s.frameP95)} / ${fmtNum(s.frameP99)} ms`);
@@ -537,12 +576,26 @@ const runCompare = ([aPath, bPath]) => {
   const b = summarize(readJson(bPath));
   console.log(`\nA = ${a.label}  (${aPath})`);
   console.log(`B = ${b.label}  (${bPath})\n`);
+  if (a.hidden !== b.hidden) {
+    const hiddenSide = b.hidden ? "B" : "A";
+    console.log(
+      `note: visibility A/B (${hiddenSide} = hidden tab). A lower render fps / CDP task on the\n` +
+        `      hidden side is the 1.1 gate WORKING, not a regression — the "better: up" verdict\n` +
+        `      on render fps is inverted for this comparison. rAF fps stays ~60 (headless keeps\n` +
+        `      compositing); read render fps + CDP task as the win.\n`
+    );
+  }
   const pad = (s, n) => String(s).padEnd(n);
   const padS = (s, n) => String(s).padStart(n);
   console.log(`${pad("metric", 18)}${padS("A", 12)}${padS("B", 12)}${padS("Δ%", 10)}  verdict`);
   console.log("─".repeat(64));
   let regressions = 0;
   const commitBits = [];
+  // In a visibility A/B (one side hidden) the frame-rate metrics are *meant* to fall
+  // on the hidden side — that is the 1.1 gate working — so don't let their expected
+  // drop flip the exit code to FAIL. They still print with an honest Δ%.
+  const hiddenAB = a.hidden !== b.hidden;
+  const expectedDrop = new Set(hiddenAB ? ["renderFps", "rafFps"] : []);
   for (const row of COMPARE_ROWS) {
     const av = a[row.key];
     const bv = b[row.key];
@@ -552,7 +605,9 @@ const runCompare = ([aPath, bPath]) => {
     if (pct !== null) {
       const improved = row.better === "up" ? pct > 0 : pct < 0;
       const worsened = row.better === "up" ? pct < 0 : pct > 0;
-      if (worsened && Math.abs(pct) > REGRESSION_PCT) {
+      if (expectedDrop.has(row.key) && Math.abs(pct) > REGRESSION_PCT) {
+        verdict = "· expected (gate)";
+      } else if (worsened && Math.abs(pct) > REGRESSION_PCT) {
         verdict = "⚠ regressed";
         regressions++;
       } else if (improved && Math.abs(pct) > REGRESSION_PCT) {

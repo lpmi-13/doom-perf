@@ -13,7 +13,7 @@
 
 --- a/d_main.c
 +++ b/d_main.c
-@@ -391,8 +391,31 @@
+@@ -391,8 +391,41 @@
  		
  	S_UpdateSounds (players[consoleplayer].mo);// move positional sounds
  
@@ -34,6 +34,16 @@
 +	    int			dt;
 +
 +	    R_CaptureViewpoint ();
++	    // Doom Perf: with interpolation disabled (doomperf_render_interp == 0, the
++	    // 1.5 "efficient" toggle / a low power-tier default) render a single
++	    // fresh-viewpoint frame per tic -- a hard ~35 fps cap, no sub-tic frames.
++	    // doomperf_render_interp is force-included from doom_emscripten_compat.h.
++	    if (!doomperf_render_interp)
++	    {
++		dp_interpfrac = FRACUNIT;
++		D_Display ();
++	    }
++	    else
 +	    do
 +	    {
 +		dt = I_GetTimeMS () - frame_base;
@@ -47,7 +57,7 @@
  
  #ifndef SNDSERV
  	// Sound mixing for the buffer is snychronous.
-@@ -422,8 +445,9 @@
+@@ -422,8 +455,9 @@
  //
  void D_PageTicker (void)
  {
@@ -59,7 +69,7 @@
  }
  
  
-@@ -433,7 +457,10 @@
+@@ -433,7 +467,10 @@
  //
  void D_PageDrawer (void)
  {
@@ -70,7 +80,7 @@
  }
  
  
-@@ -1020,8 +1047,8 @@
+@@ -1020,8 +1057,8 @@
      printf ("W_Init: Init WADfiles.\n");
      W_InitMultipleFiles (wadfiles);
      
@@ -81,7 +91,7 @@
      if (modifiedgame)
      {
  	// These are the lumps that will be checked in IWAD,
-@@ -1034,10 +1061,6 @@
+@@ -1034,10 +1071,6 @@
  	};
  	int i;
  	
@@ -92,7 +102,7 @@
  	// Check for fake IWAD with right name,
  	// but w/o all the lumps of the registered version. 
  	if (gamemode == registered)
-@@ -1057,7 +1080,7 @@
+@@ -1057,7 +1090,7 @@
  	    "                      press enter to continue\n"
  	    "===========================================================================\n"
  	    );
