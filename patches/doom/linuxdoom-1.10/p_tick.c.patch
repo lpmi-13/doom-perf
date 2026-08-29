@@ -4551,7 +4551,128 @@
  //
  // THINKERS
  // All thinkers should be allocated by Z_Malloc
-@@ -123,6 +4616,301 @@
+@@ -95,12 +4588,110 @@
+ 
+ 
+ 
++// -----------------------------------------------------------------------------
++// Doom Perf: SLEEPING WINGS (PERF_TUNE_PLAN.md Part 3). Today every wing thinks
++// every tic. Here we tick a wing's instruments and run its orb/particle thinkers
++// ONLY while the player can see that wing -- i.e. while they occupy it, or while
++// they are near the hub where all four doorways can be in view. When the player
++// is committed DEEP inside one wing, the entrance DR door has auto-closed behind
++// them, so the other three wings are provably off-screen and are frozen whole
++// (their Update dispatch is skipped in P_Ticker, their mobj thinkers skipped in
++// P_RunThinkers). That removes ~3/4 of the per-tic instrument simulation with
++// ZERO visible change: a wing always re-wakes while still occluded -- before its
++// instruments re-enter the frame -- so the one-tic catch-up is never seen, and
++// the render-side per-pixel shaders were already BSP/visibility-culled anyway.
++//
++// Map geometry (build-doomperf-map.mjs): the hub is centred on the origin
++// (radius 384); the wings radiate along the axes --
++//   north = CPU (+y),  east = MEMORY (+x),  south = STORAGE (-y),  west = NETWORK (-x).
++// A wing's "depth" is the player's distance from the origin along that wing's
++// axis. DOOMPERF_WING_WAKE_DEPTH sits past the entry throat (which ends at v=704)
++// and foyer, so neighbours stay fully lit through the whole threshold and only
++// power down once the player is well inside a single wing.
++typedef enum
++{
++    DPWING_CPU,		// north  (+y)
++    DPWING_MEMORY,	// east   (+x)
++    DPWING_STORAGE,	// south  (-y)
++    DPWING_NETWORK,	// west   (-x)
++    DPWING_NONE		// near the hub (or no player yet): every wing stays awake
++} doomperf_wing_t;
++
++#define DOOMPERF_WING_WAKE_DEPTH 1024	// map units from hub centre along a wing axis
++
++// Which wing a world position (x,y) falls in, by dominant axis + sign. The wings
++// occupy disjoint axis-aligned halls, so the dominant axis is unambiguous for any
++// reachable point; hub-centre ties resolve to a vertical wing but are only ever
++// evaluated for mobjs, and only while the player is committed elsewhere (so the
++// result is off-screen either way).
++static doomperf_wing_t DoomPerf_WingOfPos (fixed_t fx, fixed_t fy)
++{
++    int	x = fx >> FRACBITS;
++    int	y = fy >> FRACBITS;
++    int	ax = x < 0 ? -x : x;
++    int	ay = y < 0 ? -y : y;
++
++    if (ay >= ax)
++	return (y >= 0) ? DPWING_CPU : DPWING_STORAGE;
++    return (x >= 0) ? DPWING_MEMORY : DPWING_NETWORK;
++}
++
++// The wing the player is COMMITTED to -- deep enough that the entrance door has
++// shut and the other wings are out of sight -- or DPWING_NONE while near the hub
++// / in a threshold, where every wing must stay awake.
++static doomperf_wing_t DoomPerf_PlayerWing (void)
++{
++    int	x, y, ax, ay;
++
++    if (!(playeringame[0] && players[0].mo))
++	return DPWING_NONE;			// pre-spawn: keep everything live
++
++    x = players[0].mo->x >> FRACBITS;
++    y = players[0].mo->y >> FRACBITS;
++    ax = x < 0 ? -x : x;
++    ay = y < 0 ? -y : y;
++
++    if (ax < DOOMPERF_WING_WAKE_DEPTH && ay < DOOMPERF_WING_WAKE_DEPTH)
++	return DPWING_NONE;			// near hub: all four wings awake
++    return DoomPerf_WingOfPos (players[0].mo->x, players[0].mo->y);
++}
++
++// Snapshot of the player's committed wing for THIS tic, set once at the top of
++// P_Ticker so the Update dispatch and P_RunThinkers agree within the tic. When
++// doomperf_wing_sleep is off (harness A/B baseline) this stays DPWING_NONE, so the
++// gates below are transparent and the map behaves exactly as before.
++static doomperf_wing_t doomperf_active_wing = DPWING_NONE;
++
++// A wing ticks this frame iff the player is near the hub (NONE) or in that wing.
++static boolean DoomPerf_WingAwake (doomperf_wing_t w)
++{
++    return doomperf_active_wing == DPWING_NONE || doomperf_active_wing == w;
++}
++
++// True iff this thinker is a Doom Perf instrument mobj sitting in a wing that is
++// asleep this tic. Only DP instrument mobj types (the contiguous MT_DP_* block)
++// are ever frozen; doors, plats, the player, and every vanilla thinker always
++// run. Called only when doomperf_active_wing != DPWING_NONE.
++static boolean DoomPerf_ThinkerAsleep (thinker_t* th)
++{
++    mobj_t*	mo;
++
++    if (th->function.acp1 != (actionf_p1)P_MobjThinker)
++	return false;
++    mo = (mobj_t*)th;
++    if (mo->type < MT_DP_CPUTASK || mo->type >= NUMMOBJTYPES)
++	return false;				// not an instrument mobj -> never freeze
++    return DoomPerf_WingOfPos (mo->x, mo->y) != doomperf_active_wing;
++}
++
++
+ //
+ // P_RunThinkers
+ //
+ void P_RunThinkers (void)
+ {
+     thinker_t*	currentthinker;
++    boolean	cull = doomperf_wing_sleep && doomperf_active_wing != DPWING_NONE;
+ 
+     currentthinker = thinkercap.next;
+     while (currentthinker != &thinkercap)
+@@ -114,7 +4705,8 @@
+ 	}
+ 	else
+ 	{
+-	    if (currentthinker->function.acp1)
++	    if (currentthinker->function.acp1
++		&& !(cull && DoomPerf_ThinkerAsleep (currentthinker)))
+ 		currentthinker->function.acp1 (currentthinker);
+ 	}
+ 	currentthinker = currentthinker->next;
+@@ -123,6 +4715,301 @@
  
  
  
@@ -4853,7 +4974,7 @@
  //
  // P_Ticker
  //
-@@ -130,11 +4918,11 @@
+@@ -130,11 +5017,11 @@
  void P_Ticker (void)
  {
      int		i;
@@ -4867,7 +4988,7 @@
      // pause if in menu and at least one tic has been run
      if ( !netgame
  	 && menuactive
-@@ -143,16 +4931,41 @@
+@@ -143,16 +5030,62 @@
      {
  	return;
      }
@@ -4875,29 +4996,50 @@
 -		
 +
 +
-+    DoomPerf_UpdatePillars ();
-+    DoomPerf_UpdatePlatter ();
-+    DoomPerf_UpdateDiskDashboard ();
-+    DoomPerf_UpdateDiskCircuit ();
-+    DoomPerf_UpdateDiskRain ();
-+    DoomPerf_UpdateDiskPlates ();
-+    DoomPerf_UpdateMemoryWing ();
-+    DoomPerf_UpdateMemoryFalls ();
-+    DoomPerf_UpdateSwapCap ();
-+    DoomPerf_UpdateSwapVent ();
-+    // Ordering here is load-bearing: UpdateMemoryWing publishes doomperf_pool_fill,
-+    // which UpdateSwapCap's alarm and UpdateOomBaron's gate light both read.
-+    DoomPerf_UpdateOomBaron ();
-+    DoomPerf_UpdateMemorySpire ();
-+    DoomPerf_FaultVolley ();
-+    DoomPerf_UpdateRunQueueParticles ();
-+    DoomPerf_UpdateNetworkPackets ();
-+    DoomPerf_UpdateNetworkLocks ();
-+    // After UpdateNetworkLocks so the activity lamp reads this tic's fresh qdisc_sat.
-+    DoomPerf_UpdateNetLeds ();
-+    DoomPerf_UpdateNetQdiscCap ();
-+    DoomPerf_UpdateNetworkMachines ();
-+    // Before P_PlayerThink so this tic's lane scale drags THIS tic's P_MovePlayer.
++    // Doom Perf Part 3 (sleeping wings): freeze the instruments of wings the
++    // player cannot see. doomperf_active_wing is this tic's snapshot -- the wing
++    // the player is committed deep inside, or DPWING_NONE near the hub (all lit).
++    // With doomperf_wing_sleep off it stays NONE, so every group runs as before.
++    // Each per-wing group keeps its own internal ordering (the memory group's is
++    // load-bearing: UpdateMemoryWing publishes doomperf_pool_fill, read by
++    // UpdateSwapCap's alarm and UpdateOomBaron's gate light).
++    doomperf_active_wing = doomperf_wing_sleep ? DoomPerf_PlayerWing () : DPWING_NONE;
++
++    if (DoomPerf_WingAwake (DPWING_CPU))
++    {
++	DoomPerf_UpdatePillars ();
++	DoomPerf_UpdateRunQueueParticles ();
++    }
++    if (DoomPerf_WingAwake (DPWING_STORAGE))
++    {
++	DoomPerf_UpdatePlatter ();
++	DoomPerf_UpdateDiskDashboard ();
++	DoomPerf_UpdateDiskCircuit ();
++	DoomPerf_UpdateDiskRain ();
++	DoomPerf_UpdateDiskPlates ();
++    }
++    if (DoomPerf_WingAwake (DPWING_MEMORY))
++    {
++	DoomPerf_UpdateMemoryWing ();
++	DoomPerf_UpdateMemoryFalls ();
++	DoomPerf_UpdateSwapCap ();
++	DoomPerf_UpdateSwapVent ();
++	DoomPerf_UpdateOomBaron ();
++	DoomPerf_UpdateMemorySpire ();
++	DoomPerf_FaultVolley ();
++    }
++    if (DoomPerf_WingAwake (DPWING_NETWORK))
++    {
++	DoomPerf_UpdateNetworkPackets ();
++	DoomPerf_UpdateNetworkLocks ();
++	// After UpdateNetworkLocks so the activity lamp reads this tic's fresh qdisc_sat.
++	DoomPerf_UpdateNetLeds ();
++	DoomPerf_UpdateNetQdiscCap ();
++	DoomPerf_UpdateNetworkMachines ();
++    }
++    // The causeway always runs: it is cheap, it feeds P_MovePlayer THIS tic (so it
++    // must lead P_PlayerThink below), and it only ever drags the player while they
++    // stand on the storage lanes -- where STORAGE is the awake wing anyway.
 +    DoomPerf_UpdateCauseway ();
 +
      for (i=0 ; i<MAXPLAYERS ; i++)

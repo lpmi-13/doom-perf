@@ -226,8 +226,10 @@ if (perfBenchEnabled) {
 // Power Profile menu lands (applied to the engine once it is up, in the boot path):
 //   ?perf-idle=off -> never coast; always render 60 fps (clean before/after baseline)
 //   ?interp=off    -> disable sub-tic interpolation (a hard ~35 fps cap)
+//   ?perf-sleep=off -> keep every wing ticking (Part 3 baseline: no spatial culling)
 const idleGateDisabled = new URLSearchParams(window.location.search).get("perf-idle") === "off";
 const interpDisabled = new URLSearchParams(window.location.search).get("interp") === "off";
+const wingSleepDisabled = new URLSearchParams(window.location.search).get("perf-sleep") === "off";
 // Scenario name -> data-source menu index (== engine sim mode == DOWN presses
 // from the top of the list). Mirrors scenarioTelemetry()/m_menu.c ordering:
 // 0 live, 1/2 CPU util/sat, 3/4/5 disk util/sat-shallow/sat-deep, 6/7/8 memory
@@ -380,6 +382,7 @@ type DoomPerfEngine = {
   _DoomPerf_SetHidden?: (hidden: number) => void; // 1.1 visibility gate: tab backgrounded -> ~2 fps
   _DoomPerf_SetIdleGate?: (enabled: number) => void; // master switch for the idle/hibernate coast
   _DoomPerf_SetRenderInterp?: (enabled: number) => void; // 1.5 sub-tic interpolation toggle (off = ~35 fps cap)
+  _DoomPerf_SetWingSleep?: (enabled: number) => void; // Part 3: freeze off-screen wings (off = keep all wings live)
   _DoomPerf_NotifyActivity?: () => void; // reset the idle timer from DOM-side interaction
 };
 
@@ -1892,6 +1895,7 @@ const start = async () => {
       window.addEventListener("keydown", notifyActivity, { capture: true, passive: true });
       if (idleGateDisabled) getEngine()?._DoomPerf_SetIdleGate?.(0);
       if (interpDisabled) getEngine()?._DoomPerf_SetRenderInterp?.(0);
+      if (wingSleepDisabled) getEngine()?._DoomPerf_SetWingSleep?.(0);
     }
 
     // Perf harness: with ?scenario=NAME, boot straight into a fixed data source

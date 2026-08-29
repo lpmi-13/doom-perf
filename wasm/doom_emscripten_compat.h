@@ -225,6 +225,14 @@ extern int doomperf_sim_mode;
 // read it with no extern of its own. [[doomperf-engine-global-externs]]
 extern int doomperf_render_interp;
 
+// Doom Perf sleeping wings (PERF_TUNE_PLAN.md Part 3). Master switch: when 1
+// (default), P_Ticker/P_RunThinkers freeze the instruments and orb/particle
+// thinkers of every wing the player cannot currently see; when 0 (the harness's
+// ?perf-sleep=off baseline) every wing ticks as before. Defined in i_video_ems.c;
+// this force-included extern is why p_tick.c can read it with no extern of its
+// own. [[doomperf-engine-global-externs]]
+extern int doomperf_wing_sleep;
+
 // Doom Perf: profiling peak counters (PERF_TUNE_PLAN.md Part 4.3). The perf
 // harness reads these to right-size the render limits and the zone heap from
 // MEASURED peaks instead of the guessed 8x headroom that was bumped in to stop

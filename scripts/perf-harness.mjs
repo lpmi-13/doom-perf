@@ -65,6 +65,7 @@ const parseArgs = (argv) => {
     endpoint: "http://localhost:9222",
     headed: false,
     hidden: false,
+    wingSleep: true,
     throttle: undefined,
     repeat: 1,
     out: "perf-results",
@@ -89,6 +90,7 @@ const parseArgs = (argv) => {
       case "--endpoint": args.endpoint = next(); break;
       case "--headed": args.headed = true; break;
       case "--hidden": args.hidden = true; break;
+      case "--no-wing-sleep": args.wingSleep = false; break; // Part 3 baseline: ?perf-sleep=off
       case "--throttle": args.throttle = Number(next()); break;
       case "--repeat": args.repeat = Math.max(1, Number(next())); break;
       case "--out": args.out = next(); break;
@@ -125,16 +127,25 @@ Options:
   --wing cpu|mem|disk|net|all   shorthand that picks a representative --scenario.
   --duration SEC      tour measure window after warmup (default: 30)
   --warmup SEC        discarded warmup before measuring (default: 2)
-  --motion tour|idle|spin|forward|wings   tour motion (default: tour = idle+spin+forward)
+  --motion tour|idle|spin|forward|wings|deepstay   tour motion (default: tour =
+                      idle+spin+forward)
                       wings = worst-case drive through every wing (opens doors,
                       pushes deep, spins for cross-hub sightlines); use >=90s
                       duration and pair with a --wing/--scenario to light up that
-                      wing's instrument sprites. Best for the Part 4.3 peak counters.
+                      wing's instrument sprites. Best for the Part 4.3 peak counters
+                      and the Part 3 sleeping-wings A/B (deep-in-a-wing is when the
+                      other three freeze).
+                      deepstay = open the north door, drive deep into the CPU wing,
+                      then hold still — the Part 3 marquee "parked dashboard" case
+                      (memory/storage/network stay frozen the whole window).
   --interval MS       manual/attach sample cadence (default: 1000)
   --headed            tour: show a real GPU-composited window
   --hidden            tour: run the measure window with the tab marked hidden, to
                       book the 1.1 visibility-gate win (the engine coasts to ~2 fps).
                       Best paired with --motion idle. A/B it against a normal run.
+  --no-wing-sleep     tour: pass ?perf-sleep=off so every wing keeps ticking — the
+                      Part 3 baseline. A/B it against a normal run (default: culling
+                      on) with --motion wings to book the sleeping-wings CPU cut.
   --throttle N        CDP CPU throttling rate (e.g. 4 = 4x slower) for tier tests
   --profile NAME      pass ?perf=NAME (potato|balanced|cinematic) through to the app
   --repeat N          tour: run N times, report the median-fps run (fights noise)
@@ -232,6 +243,21 @@ const runMotion = async (page, motion, durationMs) => {
     while (Date.now() < end) await holdKey(page, "ArrowUp", Math.min(2000, end - Date.now()));
     return;
   }
+  // "deepstay": the Part 3 marquee case — a dashboard parked DEEP in one wing.
+  // Spawn is hub-centre facing NORTH (the CPU wing), so drive through the north
+  // door (USE opens it) and push well past DOOMPERF_WING_WAKE_DEPTH, then stand
+  // still for the rest of the window. With culling on, the other three wings
+  // (memory/storage/network) stay frozen the whole measure window — the steady
+  // state a wall monitor actually sits in. A/B on/off (add --no-wing-sleep) to
+  // book the sustained sim cut; pair with --hidden to isolate sim from render.
+  if (motion === "deepstay") {
+    const clamp = (ms) => Math.max(0, Math.min(ms, end - Date.now()));
+    await dropMarker(page, "deepstay:push");
+    await holdKeyWithUse(page, "ArrowUp", clamp(7000)); // open door + drive deep into CPU
+    await dropMarker(page, "deepstay:park");
+    await sleep(clamp(end - Date.now()));               // hold still deep in the wing
+    return;
+  }
   // "wings": a worst-case drive for the Part 4.3 render-array peak counters. The
   // player spawns at the hub centre (0,0) facing NORTH; the four wings are
   // N=CPU, E=memory, S=storage, W=network. This opens each hub door and pushes
@@ -288,11 +314,12 @@ const runMotion = async (page, motion, durationMs) => {
 // URL building + console wiring
 // ---------------------------------------------------------------------------
 
-const buildUrl = (base, { scenario, profile }) => {
+const buildUrl = (base, { scenario, profile, wingSleep }) => {
   const u = new URL(base);
   u.searchParams.set("perf-bench", "1");
   if (scenario) u.searchParams.set("scenario", scenario);
   if (profile) u.searchParams.set("perf", profile);
+  if (wingSleep === false) u.searchParams.set("perf-sleep", "off"); // Part 3 A/B baseline
   return u.toString();
 };
 
@@ -444,7 +471,7 @@ const runTourOnce = async (args, resolvedScenario) => {
     await cdp.send("Performance.enable").catch(() => {});
     await applyThrottle(cdp, args.throttle);
 
-    const url = buildUrl(args.url, { scenario: resolvedScenario, profile: args.profile });
+    const url = buildUrl(args.url, { scenario: resolvedScenario, profile: args.profile, wingSleep: args.wingSleep });
     console.log(`  goto ${url}`);
     await page.goto(url, { waitUntil: "domcontentloaded" });
 
@@ -571,7 +598,7 @@ const runManual = async (args, resolvedScenario) => {
   const page = context.pages()[0] ?? (await context.newPage());
   const consoleLog = wireConsole(page);
   const cdp = await context.newCDPSession(page);
-  const url = buildUrl(args.url, { scenario: resolvedScenario, profile: args.profile });
+  const url = buildUrl(args.url, { scenario: resolvedScenario, profile: args.profile, wingSleep: args.wingSleep });
   console.log(`  goto ${url}`);
   await page.goto(url, { waitUntil: "domcontentloaded" });
   await runSampling(args, resolvedScenario, { page, cdp, consoleLog, cleanup: () => context.close() });
@@ -584,7 +611,7 @@ const runAttach = async (args, resolvedScenario) => {
   const page = context.pages()[0] ?? (await context.newPage());
   const consoleLog = wireConsole(page);
   const cdp = await context.newCDPSession(page);
-  const url = buildUrl(args.url, { scenario: resolvedScenario, profile: args.profile });
+  const url = buildUrl(args.url, { scenario: resolvedScenario, profile: args.profile, wingSleep: args.wingSleep });
   console.log(`  navigating attached tab to ${url}`);
   await page.goto(url, { waitUntil: "domcontentloaded" }).catch((e) => console.log(`  (goto: ${e.message})`));
   await runSampling(args, resolvedScenario, { page, cdp, consoleLog, cleanup: () => browser.close() });

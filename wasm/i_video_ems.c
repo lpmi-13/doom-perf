@@ -95,6 +95,7 @@ int doomperf_sim_mode = 0;
 static int doomperf_hidden = 0;              // 1 while the tab is backgrounded (visibilitychange) [1.1]
 static int doomperf_idle_gate = 1;           // master enable for idle/hibernate coasting (0 = always 60) [1.2/1.4]
 int        doomperf_render_interp = 1;       // 0 = disable sub-tic interpolation -> 35 fps cap; read in d_main.c [1.5]
+int        doomperf_wing_sleep = 1;          // 1 = freeze off-screen wings' instruments/thinkers; read in p_tick.c [Part 3]
 static uint32_t doomperf_last_input_ms = 0;  // SDL_GetTicks() at the last real user input (PollEvents / NotifyActivity)
 static int doomperf_dim_permille = 0;        // eased screen-dim currently applied while hibernating (0..1000) [1.4]
 
@@ -705,6 +706,15 @@ EMSCRIPTEN_KEEPALIVE
 void DoomPerf_SetRenderInterp(int enabled)
 {
     doomperf_render_interp = enabled ? 1 : 0;
+}
+
+// Part 3 sleeping wings: master switch for freezing off-screen wings (default on).
+// The harness flips it off (?perf-sleep=off) to measure a clean all-wings-live
+// baseline; p_tick.c reads doomperf_wing_sleep via the force-included compat header.
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_SetWingSleep(int enabled)
+{
+    doomperf_wing_sleep = enabled ? 1 : 0;
 }
 
 EMSCRIPTEN_KEEPALIVE
