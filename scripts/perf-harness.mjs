@@ -125,7 +125,11 @@ Options:
   --wing cpu|mem|disk|net|all   shorthand that picks a representative --scenario.
   --duration SEC      tour measure window after warmup (default: 30)
   --warmup SEC        discarded warmup before measuring (default: 2)
-  --motion tour|idle|spin|forward   tour motion (default: tour = idle+spin+forward)
+  --motion tour|idle|spin|forward|wings   tour motion (default: tour = idle+spin+forward)
+                      wings = worst-case drive through every wing (opens doors,
+                      pushes deep, spins for cross-hub sightlines); use >=90s
+                      duration and pair with a --wing/--scenario to light up that
+                      wing's instrument sprites. Best for the Part 4.3 peak counters.
   --interval MS       manual/attach sample cadence (default: 1000)
   --headed            tour: show a real GPU-composited window
   --hidden            tour: run the measure window with the tab marked hidden, to
@@ -194,6 +198,21 @@ const holdKey = async (page, key, ms) => {
   await page.keyboard.up(key);
 };
 
+// Hold a movement key for `ms` while tapping USE (Space) every ~250ms, so the
+// manual DR hub doors (special 1, USE within 64 units) open on approach — and
+// reopen from the far side on the way back. Closed doors block the hall view, so
+// the worst-case drive can't reach the wings without this.
+const holdKeyWithUse = async (page, key, ms) => {
+  if (ms <= 0) return;
+  await page.keyboard.down(key);
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    await page.keyboard.press("Space");
+    await sleep(Math.max(0, Math.min(250, end - Date.now())));
+  }
+  await page.keyboard.up(key);
+};
+
 // Run a motion pattern for roughly `durationMs`, dropping phase markers so a
 // reader can see idle vs. motion boundaries inside the measured window.
 const runMotion = async (page, motion, durationMs) => {
@@ -211,6 +230,39 @@ const runMotion = async (page, motion, durationMs) => {
   if (motion === "forward") {
     await dropMarker(page, "forward");
     while (Date.now() < end) await holdKey(page, "ArrowUp", Math.min(2000, end - Date.now()));
+    return;
+  }
+  // "wings": a worst-case drive for the Part 4.3 render-array peak counters. The
+  // player spawns at the hub centre (0,0) facing NORTH; the four wings are
+  // N=CPU, E=memory, S=storage, W=network. This opens each hub door and pushes
+  // deep into its wing, then spins at the far end so the long look-back-down-the-
+  // wing and cross-hub sightlines (which balloon visplanes/drawsegs) plus each
+  // wing's instrument sprites all land in-frame at some point. Navigation is
+  // open-loop and imperfect, but the counters are maxima over the window, so
+  // approximate aim still captures the worst frames; a longer --duration just
+  // adds coverage and repeats (one N,E,S,W cycle is ~45s — recommend >= 90).
+  if (motion === "wings") {
+    const clamp = (ms) => Math.max(0, Math.min(ms, end - Date.now()));
+    const SPIN = 2900; // ~one full turn (65536 BAM / ~640 per tic / 35 tics)
+    const TURN90 = 760; // ~quarter turn to the next cardinal (turning right = N->E->S->W)
+    const PUSH = 3600; // drive through the opened door and deep into the wing
+    const BACK = 3600; // retreat toward the hub (USE reopens the door if it closed)
+    const cardinals = ["cpu-N", "memory-E", "storage-S", "network-W"];
+    // Hub-centre spin first: frames all four doorways from the middle.
+    await dropMarker(page, "hub-spin");
+    await holdKey(page, "ArrowRight", clamp(SPIN));
+    let i = 0;
+    while (Date.now() < end) {
+      const name = cardinals[i % 4];
+      await dropMarker(page, `wing:${name}`);
+      if (i > 0) await holdKey(page, "ArrowRight", clamp(TURN90)); // precess to the next cardinal
+      await holdKeyWithUse(page, "ArrowUp", clamp(PUSH)); // open door + drive deep in
+      if (Date.now() >= end) break;
+      await dropMarker(page, `wing:${name}:spin`);
+      await holdKey(page, "ArrowRight", clamp(SPIN)); // deep-wing + look-back-across-hub sightlines
+      await holdKeyWithUse(page, "ArrowDown", clamp(BACK)); // retreat toward the hub
+      i++;
+    }
     return;
   }
   // "tour": a fixed, reproducible idle -> spin -> forward -> spin cycle so the same
@@ -355,6 +407,18 @@ const summarize = (result) => {
     jsHeapPeak: num(probe?.jsHeap?.peakBytes),
     wasmHeapPeak: num(probe?.wasmHeap?.peakBytes),
     domPeak: num(probe?.dom?.peakNodes),
+    // Engine peak counters (PERF_TUNE_PLAN.md Part 4.3): peak render-array
+    // occupancy vs capacity and peak zone-heap usage vs total, for right-sizing
+    // the crash-headroom limits from measured peaks.
+    visplanesPeak: num(probe?.enginePeaks?.visplanes?.peak),
+    visplanesCap: num(probe?.enginePeaks?.visplanes?.cap),
+    drawsegsPeak: num(probe?.enginePeaks?.drawsegs?.peak),
+    drawsegsCap: num(probe?.enginePeaks?.drawsegs?.cap),
+    visspritesPeak: num(probe?.enginePeaks?.vissprites?.peak),
+    visspritesCap: num(probe?.enginePeaks?.vissprites?.cap),
+    zonePeakBytes: num(probe?.enginePeaks?.zone?.peakBytes),
+    zoneSizeBytes: num(probe?.enginePeaks?.zone?.sizeBytes),
+    zoneStaticPeakBytes: num(probe?.enginePeaks?.zone?.staticPeakBytes),
     cdpTaskDurationS: num(cdp?.TaskDuration),
     cdpScriptDurationS: num(cdp?.ScriptDuration),
     cdpLayoutDurationS: num(cdp?.LayoutDuration),
@@ -548,6 +612,16 @@ const reportSingle = (result) => {
   console.log(`  JS heap peak    ${fmtBytes(s.jsHeapPeak)}`);
   console.log(`  WASM heap peak  ${fmtBytes(s.wasmHeapPeak)}`);
   console.log(`  DOM nodes peak  ${s.domPeak ?? "n/a"}`);
+  // Engine peak counters (Part 4.3): "peak / cap" shows how far each crash-headroom
+  // limit could be trimmed; the zone line shows peak used against the 16 MB heap.
+  const pkCap = (p, c) => (p === null ? "n/a" : c !== null ? `${p} / ${c}` : `${p}`);
+  if (s.visplanesPeak !== null || s.zonePeakBytes !== null) {
+    console.log(`  visplanes peak  ${pkCap(s.visplanesPeak, s.visplanesCap)}`);
+    console.log(`  drawsegs peak   ${pkCap(s.drawsegsPeak, s.drawsegsCap)}`);
+    console.log(`  vissprites peak ${pkCap(s.visspritesPeak, s.visspritesCap)}`);
+    console.log(`  zone peak used  ${fmtBytes(s.zonePeakBytes)} / ${fmtBytes(s.zoneSizeBytes)}  (cache-greedy)`);
+    console.log(`  zone non-purge  ${fmtBytes(s.zoneStaticPeakBytes)}  (PU_STATIC+LEVEL peak — the real floor)`);
+  }
   if (s.cdpTaskDurationS !== null)
     console.log(`  CDP task/script ${fmtNum(s.cdpTaskDurationS, 2)} / ${fmtNum(s.cdpScriptDurationS, 2)} s`);
 };
@@ -562,6 +636,11 @@ const COMPARE_ROWS = [
   { key: "jsHeapPeak", label: "JS heap peak", better: "down", fmt: fmtBytes },
   { key: "wasmHeapPeak", label: "WASM heap peak", better: "down", fmt: fmtBytes },
   { key: "domPeak", label: "DOM nodes peak", better: "down", fmt: (v) => fmtNum(v, 0) },
+  { key: "visplanesPeak", label: "visplanes peak", better: "down", fmt: (v) => fmtNum(v, 0) },
+  { key: "drawsegsPeak", label: "drawsegs peak", better: "down", fmt: (v) => fmtNum(v, 0) },
+  { key: "visspritesPeak", label: "vissprites peak", better: "down", fmt: (v) => fmtNum(v, 0) },
+  { key: "zonePeakBytes", label: "zone peak used", better: "down", fmt: fmtBytes },
+  { key: "zoneStaticPeakBytes", label: "zone non-purge peak", better: "down", fmt: fmtBytes },
   { key: "cdpTaskDurationS", label: "CDP task (s)", better: "down", fmt: (v) => fmtNum(v, 2) },
   { key: "cdpScriptDurationS", label: "CDP script (s)", better: "down", fmt: (v) => fmtNum(v, 2) },
 ];
