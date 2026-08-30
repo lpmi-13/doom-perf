@@ -26,7 +26,7 @@
 // [[memory-wing-use-instruments]].
 import { addWingEntrance, localSideToWorld, rotatePoint, ringTrap } from "./common.mjs";
 import { reserved, wingName } from "./registry.mjs";
-import { terminalTextureSize, buildTerminalPatch, wallSignSize, buildWallSignPatch, drawCenteredText, signTextColor } from "../textures.mjs";
+import { terminalTextureSize, buildTerminalPatch, wallSignSize, buildWallSignPatch, drawCenteredText, signTextColor, makeInscription } from "../textures.mjs";
 import { lump, buildPatch } from "../wad-bytes.mjs";
 
 // Shoelace signed area; the builder wants CLOCKWISE loops (interior on the right,
@@ -166,6 +166,11 @@ const barrelTag = (index) => tagBase + 51 + index; // 551..555
 
 // ===== Art (all under the reserved DPM prefix) =====
 const barrelPadFlatName = wingName("memory", "BPAD");
+// "OOMKILLS" floor placard, inscribed in the entry apron in FRONT of the OOM-killer
+// section so the player reads what the RSS barrel pile + caged baron are on approach.
+// Memory is the EAST wing, so walking toward the baron is +v = world +x = facing EAST.
+// Four 64-cells at the "IO VAULT" density (8 chars / 4 cells); the font is uppercase-only.
+const oomLabelInscription = makeInscription(wingName("memory", "OOML"), "OOMKILLS", "east", 4);
 const pageFlatNames = { used: wingName("memory", "USED"), cache: wingName("memory", "CACH"), free: wingName("memory", "FREE") };
 const bookshelfTexture = { texture: wingName("memory", "SHLF"), patch: wingName("memory", "PSHLF"), width: 128, height: 128 };
 const abyssWallTexture = { texture: wingName("memory", "VOID"), patch: wingName("memory", "PVOID"), width: 64, height: 128 };
@@ -1361,7 +1366,23 @@ const build = (ctx) => {
   const barrelPadDepth = 64;
   const gateFrontV = FAR.v1 + 300; // baron gate front / back wall behind the barrel row
   const daisFrontV = gateFrontV + 32; // dais front (the gate sill is 32 deep)
-  areaRect(direction, "far-plaza-front", { u1: FAR.u1, v1: FAR.v1, u2: FAR.u2, v2: barrelRowV }, { ...podStyle, light: 178 });
+  // Entry apron in FRONT of the OOM-killer section, split so a floor placard can be
+  // inscribed across its middle: the player reads "OOMKILLS" on the approach, with the
+  // RSS barrel pile + caged baron beyond. A 64-deep band is sandwiched by two plaza
+  // slabs; its central four 64-cells carry the inscription flats (u -128..128, centred on
+  // the barrel row) with plaza filler either side. Floors sample world (x=v, y=-u) on a
+  // 64 grid, so the band is snapped to grid lines; walking +v (toward the baron) faces
+  // EAST, and cell k steps -64 in u (= +64 world-y), placing the text left-to-right.
+  const oomLabelV1 = Math.ceil((FAR.v1 + 32) / 64) * 64; // 2176: first grid line clear of the entrance
+  const oomLabelV2 = oomLabelV1 + 64;                    // 2240: ~73u short of the barrel row
+  areaRect(direction, "far-plaza-front", { u1: FAR.u1, v1: FAR.v1, u2: FAR.u2, v2: oomLabelV1 }, { ...podStyle, light: 178 });
+  areaRect(direction, "far-plaza-label-l", { u1: FAR.u1, v1: oomLabelV1, u2: -128, v2: oomLabelV2 }, { ...podStyle, light: 178 });
+  oomLabelInscription.names.forEach((flatName, k) => {
+    const cellU2 = 128 - k * 64; // cell 0 at +u (last letters), cell 3 at -u (first letters)
+    areaRect(direction, `oom-label-${k}`, { u1: cellU2 - 64, v1: oomLabelV1, u2: cellU2, v2: oomLabelV2 }, { ...podStyle, light: 178, floorFlat: flatName });
+  });
+  areaRect(direction, "far-plaza-label-r", { u1: 128, v1: oomLabelV1, u2: FAR.u2, v2: oomLabelV2 }, { ...podStyle, light: 178 });
+  areaRect(direction, "far-plaza-front-back", { u1: FAR.u1, v1: oomLabelV2, u2: FAR.u2, v2: barrelRowV }, { ...podStyle, light: 178 });
   [-224, -112, 0, 112, 224].forEach((cx, slot) => {
     areaRect(direction, `rss-pad-${slot}`, { u1: cx - 32, v1: barrelRowV, u2: cx + 32, v2: barrelRowV + barrelPadDepth }, {
       ...podStyle,
@@ -1677,7 +1698,7 @@ const textures = [
   })),
 ];
 
-const flats = [...pageFlats, ...poolFlats, buildBarrelPadFlat()];
+const flats = [...pageFlats, ...poolFlats, buildBarrelPadFlat(), ...oomLabelInscription.flats];
 
 // Memory is the EAST wing (local u,v -> world (v,-u)); the shared terminalSegment
 // helper assumes north=identity, so each screen face is emitted in WORLD coords
