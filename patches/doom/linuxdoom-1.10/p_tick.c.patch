@@ -48,7 +48,7 @@
  //-----------------------------------------------------------------------------
  //
  // $Id:$
-@@ -30,9 +30,4502 @@
+@@ -30,9 +30,4493 @@
  
  #include "doomstat.h"
  
@@ -2991,11 +2991,13 @@
 +#define DOOMPERF_NET_CAP_TOPZ	140	// TOP wire (tower-top): where the OVERFLOW FLASHOVER is strung (level 0, F0=0)
 +#define DOOMPERF_NET_CUR_Z	76	// LOWER wire (~half the 152-tall tower): the steady traveling CURRENT
 +//					   rides here so it stays visible when a flashover snaps across the top wire.
-+#define DOOMPERF_NET_CANL_TAG	752	// 752 + lane : socket bay floor (glow ramps with fill)
 +#define DOOMPERF_NET_ARC_SEGS	6	// interior joints of the jagged arc polyline (start tower -> end tower)
 +#define DOOMPERF_NET_ARC_SUB	2	// bolt fragments laid per leg (chain -> continuous ragged bolt)
 +#define DOOMPERF_NET_CUR_CAP	6	// max in-flight traveling charging-current bolts per bay
 +#define DOOMPERF_NET_CUR_SPEED	(5 * FRACUNIT)	// bolt glide speed along the wire (a slow trickle)
++#define DOOMPERF_NET_CUR_FLOOR	150	// min current rate (permille) when a bay's socket buffer holds a queue:
++//					   a few KB/s of real drain rounds to 0 permille against the full link
++//					   rate, so a bay with a residual queue would read dead without this trickle.
 +// OVERFLOW FLASHOVER: a "shooting-star" COMET -- a bright round HEAD orb (SPR_SHTG blue / SPR_MISF
 +// violet) gliding a top wire against the traffic on a drop, trailing a world-space fading WAKE behind
 +// it. Discrete + slow + a clear head/wake so the direction of travel reads at a glance. Rather than one
@@ -4048,15 +4050,13 @@
 +    int		level;
 +    int		lane;
 +    int		which;
++    int		rx_cur;
++    int		tx_cur;
 +    // Doom Perf: per-electrode smoothed drive for the softnet Tesla coils. A one-pole
 +    // low-pass so a bursty softnet rate eases the lightning CRACKLE DENSITY up and down
 +    // instead of flickering. [0]=squeeze [1]=drop. The bus beds no longer move or temper
 +    // (lane height + colour frozen), so no flats here.
 +    static int	coil_glow[2] = {0, 0};
-+    // Doom Perf: per-lane smoothed drive for the socket-lock CAPACITOR BANKS (level 0). Same
-+    // one-pole low-pass so the gauge floor, can glow and charge-mote density all ease. [0]=RX
-+    // recv-q, [1]=TX send-q. Updated BEFORE the sector loop so the gauge/cans read it there.
-+    static int	cap_glow[2] = {0, 0};
 +    // Trackside signal lamps: cached texture nums (queried once; -2 = not yet looked up).
 +    // The lit aspect is NOT a threshold here -- it mirrors doomperf_net_gate_red, set by
 +    // DoomPerf_NetLane when an orb is physically held at the gate.
@@ -4095,17 +4095,6 @@
 +    doomperf_net_qdisc_flow = DoomPerf_EffectiveNetworkTx ();
 +    doomperf_net_qdisc_sat = (doomperf_net_lock_drops[1][1] > doomperf_net_qdisc_fill)
 +			   ? doomperf_net_lock_drops[1][1] : doomperf_net_qdisc_fill;
-+
-+    // Ease the two socket-lock capacitor banks toward their live queue fill (index.ts already
-+    // folds the accept backlog into these level-0 fills), so the gauge/cans below and the
-+    // charge motes further down all track one smoothed value.
-+    for (lane = 0; lane < 2; lane++)
-+    {
-+	int	target = doomperf_net_lock_fill[0][lane];
-+	if (target > 1000)
-+	    target = 1000;
-+	cap_glow[lane] += (target - cap_glow[lane]) / 8;	// one-pole low-pass
-+    }
 +
 +    for (i = 0; i < numsectors; i++)
 +    {
@@ -4204,15 +4193,6 @@
 +	    }
 +	    continue;
 +	}
-+
-+	// Socket-lock capacitor BAY floor: an ambient charge glow that brightens with the
-+	// queue fill (also lights the sector-lit tower props standing on it).
-+	idx = tag - DOOMPERF_NET_CANL_TAG;
-+	if (idx >= 0 && idx < 2)
-+	{
-+	    sectors[i].lightlevel = (short)(150 + (cap_glow[idx] * 90) / 1000);
-+	    continue;
-+	}
 +    }
 +
 +    // (Packet DROPS are now shown in-lane: DoomPerf_NetLane peels the tail orb out of an
@@ -4260,24 +4240,35 @@
 +    }
 +
 +    // Socket-lock CAPACITOR BANKS (level 0): both bays are the SAME instrument, mirror-imaged --
-+    // RX recv-q (blue) / TX send-q (violet). Three layered signals on TWO stacked tower-to-tower
++    // RX recv-q (blue) / TX send-q (violet). Two layered signals on TWO stacked tower-to-tower
 +    // wires, so a saturated bay never loses its steady-traffic read under the overflow bursts:
 +    //   1. TRAVELING CHARGING CURRENT (throughput): a thin trickle of looping crackle-bolts glides
 +    //      the LOWER wire (DOOMPERF_NET_CUR_Z, mid-tower) WITH the lane's traffic -- RX +x (tower B
 +    //      -1462 -> tower A -1162), TX -x (A -> B) -- at the live rate, so the bay always has motion
-+    //      whenever there is traffic, independent of the flashover on the top wire.
-+    //   2. CHARGE GLOW (fill): the bay-floor light ramp above (DOOMPERF_NET_CANL_TAG, from cap_glow).
-+    //   3. OVERFLOW FLASHOVER (drops): a fast jagged STREAK SHOOTS the other way (against traffic)
++    //      whenever there is traffic, independent of the flashover on the top wire. The rate is
++    //      FLOORED to DOOMPERF_NET_CUR_FLOOR whenever the bay's socket buffer holds a queue
++    //      (doomperf_net_lock_fill[0][lane] > 0): a few KB/s of real drain rounds to 0 permille
++    //      against the full link rate, so without the floor a bay with a residual queue reads dead
++    //      even though its stored charge is still being consumed. Throughput drives denser current
++    //      above the floor. (Mirrors the packet canal's DOOMPERF_NET_MINTARGET "never read dead in
++    //      live mode" idea.)
++    //   2. OVERFLOW FLASHOVER (drops): a fast jagged STREAK SHOOTS the other way (against traffic)
 +    //      across the TOP wire (DOOMPERF_NET_CAP_TOPZ) on a socket drop -- a discrete moving bolt,
 +    //      so at high drop rates you see several streaks in flight rather than one constant web.
 +    // The reverse-TRAVELING flashover reads instantly as rejection/bounce-back because it is the
 +    // only thing moving the wrong way, one clear level above the steady current.
++    rx_cur = DoomPerf_EffectiveNetworkRx ();
++    tx_cur = DoomPerf_EffectiveNetworkTx ();
++    if (doomperf_net_lock_fill[0][0] > 0 && rx_cur < DOOMPERF_NET_CUR_FLOOR)
++	rx_cur = DOOMPERF_NET_CUR_FLOOR;
++    if (doomperf_net_lock_fill[0][1] > 0 && tx_cur < DOOMPERF_NET_CUR_FLOOR)
++	tx_cur = DOOMPERF_NET_CUR_FLOOR;
 +    DoomPerf_NetCurrentLane (doomperf_netcur[0], &doomperf_netcur_gap[0],
 +			     doomperf_net_cap_x[1], doomperf_net_cap_x[0], doomperf_net_cap_y[0],
-+			     0, DoomPerf_EffectiveNetworkRx ());	// RX current: B -> A (+x, with RX flow)
++			     0, rx_cur);	// RX current: B -> A (+x, with RX flow)
 +    DoomPerf_NetCurrentLane (doomperf_netcur[1], &doomperf_netcur_gap[1],
 +			     doomperf_net_cap_x[0], doomperf_net_cap_x[1], doomperf_net_cap_y[1],
-+			     1, DoomPerf_EffectiveNetworkTx ());	// TX current: A -> B (-x, with TX flow)
++			     1, tx_cur);	// TX current: A -> B (-x, with TX flow)
 +
 +    // Overflow flashover streaks: DENSITY ~ the socket drop/saturation level (index.ts feeds the
 +    // real snmp/netstat overflow counter, or a saturation proxy off the fill when it is unavailable),
@@ -4551,7 +4542,7 @@
  //
  // THINKERS
  // All thinkers should be allocated by Z_Malloc
-@@ -95,12 +4588,121 @@
+@@ -95,12 +4579,121 @@
  
  
  
@@ -4673,7 +4664,7 @@
  
      currentthinker = thinkercap.next;
      while (currentthinker != &thinkercap)
-@@ -114,7 +4716,8 @@
+@@ -114,7 +4707,8 @@
  	}
  	else
  	{
@@ -4683,7 +4674,7 @@
  		currentthinker->function.acp1 (currentthinker);
  	}
  	currentthinker = currentthinker->next;
-@@ -123,6 +4726,301 @@
+@@ -123,6 +4717,301 @@
  
  
  
@@ -4985,7 +4976,7 @@
  //
  // P_Ticker
  //
-@@ -130,11 +5028,11 @@
+@@ -130,11 +5019,11 @@
  void P_Ticker (void)
  {
      int		i;
@@ -4999,7 +4990,7 @@
      // pause if in menu and at least one tic has been run
      if ( !netgame
  	 && menuactive
-@@ -143,16 +5041,62 @@
+@@ -143,16 +5032,62 @@
      {
  	return;
      }
