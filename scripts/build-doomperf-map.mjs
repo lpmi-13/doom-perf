@@ -206,10 +206,12 @@ directions.forEach(addResourceArea);
 // one door alongside the wall texture (see sideResource): the glowing techno
 // pillar (CPU's silicon) now flanks the NETWORK door, the amber candelabra (DISK
 // foundry) flanks the CPU door, and the floor lamp (NETWORK's own lamps) flanks
-// the DISK door. The warning torch (MEMORY's pressure/OOM path) stays at the east.
+// the DISK door. The MEMORY (east) door is flanked by tall GREEN torches so the
+// entrance reads in the wing's green theme (matching the green MEMORY door plate),
+// rather than the red torch it used to share with the CPU wing.
 const hubFlankThing = {
   north: 35, // candelabra (CBRA) — DISK's prop, now at the CPU door
-  east: 46, // tall torch (allowed by the patched engine's prop filter) — MEMORY
+  east: 45, // tall GREEN torch (TGRN) — matches the green MEMORY door theme
   south: 2028, // floor lamp (COLU) — NETWORK's prop, now at the DISK door
   west: 48, // tall techno pillar (ELEC) — CPU's prop, now at the NETWORK door
 };
