@@ -4551,7 +4551,7 @@
  //
  // THINKERS
  // All thinkers should be allocated by Z_Malloc
-@@ -95,12 +4588,110 @@
+@@ -95,12 +4588,121 @@
  
  
  
@@ -4586,17 +4586,28 @@
 +
 +#define DOOMPERF_WING_WAKE_DEPTH 1024	// map units from hub centre along a wing axis
 +
-+// Which wing a world position (x,y) falls in, by dominant axis + sign. The wings
-+// occupy disjoint axis-aligned halls, so the dominant axis is unambiguous for any
-+// reachable point; hub-centre ties resolve to a vertical wing but are only ever
-+// evaluated for mobjs, and only while the player is committed elsewhere (so the
-+// result is off-screen either way).
++// Which wing a world position (x,y) falls in. Mostly the dominant axis + sign: the
++// wings radiate along the axes and their halls are disjoint, so |x| vs |y| picks
++// the wing for points on or near a wing's own axis. The ONE exception is the CPU
++// run-queue "subway" -- a CPU side-room pushed WEST of the core axis (RQ_ROOM_DX in
++// build-doomperf-map.mjs): its floor and orbs sit at x in [-1392,-640], y in
++// [768,1600], i.e. deep in the WESTERN octant (|x| > |y|). The dominant-axis test
++// alone would therefore file the whole subway -- and the player standing in it --
++// under NETWORK, so the sleeping-wings freeze (P_RunThinkers / P_Ticker below)
++// reads the run queue as "not the player's wing" and stalls every task orb the
++// moment the player walks in to watch it. That north-west quadrant (west of the
++// core, north past the entry throat) is CPU-exclusive: NETWORK is equatorial
++// (|world y| <= ~450), MEMORY is east, STORAGE is south. So claim it for CPU before
++// falling back to the dominant-axis test, which stays correct for every other wing.
 +static doomperf_wing_t DoomPerf_WingOfPos (fixed_t fx, fixed_t fy)
 +{
 +    int	x = fx >> FRACBITS;
 +    int	y = fy >> FRACBITS;
 +    int	ax = x < 0 ? -x : x;
 +    int	ay = y < 0 ? -y : y;
++
++    if (x < -600 && y > 700)
++	return DPWING_CPU;			// CPU run-queue subway (west side-room)
 +
 +    if (ay >= ax)
 +	return (y >= 0) ? DPWING_CPU : DPWING_STORAGE;
@@ -4662,7 +4673,7 @@
  
      currentthinker = thinkercap.next;
      while (currentthinker != &thinkercap)
-@@ -114,7 +4705,8 @@
+@@ -114,7 +4716,8 @@
  	}
  	else
  	{
@@ -4672,7 +4683,7 @@
  		currentthinker->function.acp1 (currentthinker);
  	}
  	currentthinker = currentthinker->next;
-@@ -123,6 +4715,301 @@
+@@ -123,6 +4726,301 @@
  
  
  
@@ -4974,7 +4985,7 @@
  //
  // P_Ticker
  //
-@@ -130,11 +5017,11 @@
+@@ -130,11 +5028,11 @@
  void P_Ticker (void)
  {
      int		i;
@@ -4988,7 +4999,7 @@
      // pause if in menu and at least one tic has been run
      if ( !netgame
  	 && menuactive
-@@ -143,16 +5030,62 @@
+@@ -143,16 +5041,62 @@
      {
  	return;
      }
