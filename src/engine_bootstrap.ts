@@ -22,6 +22,7 @@ type EngineModule = {
     createDataFile?: (path: string, name: string, data: Uint8Array, canRead: boolean, canWrite: boolean) => void;
     analyzePath?: (path: string) => { exists: boolean };
     chdir?: (path: string) => void;
+    symlink?: (oldpath: string, newpath: string) => void;
   };
   callMain?: (args: string[]) => void;
   arguments?: string[];
@@ -129,12 +130,31 @@ export async function bootstrapEngine({
     names.add("doom1.wad");
   }
 
-  for (const name of names) {
+  // MEMFS keeps each file's bytes in a JS-side buffer, so writing the multi-MB
+  // IWAD under *both* its own name and the canonical IdentifyVersion alias
+  // (e.g. freedoom1.wad + doom1.wad) duplicates the whole WAD on the JS heap
+  // (PERF_TUNE_PLAN Part 4.2). Write the bytes once and point every extra name
+  // at them with a symlink — the engine opens whichever alias it scans for and
+  // MEMFS follows the link transparently, so there is only ever one copy.
+  const writeWadFile = (name: string, bytes: Uint8Array) => {
     if (typeof moduleInstance.FS_createDataFile === "function") {
-      moduleInstance.FS_createDataFile("/", name, wadBytes, true, true);
+      moduleInstance.FS_createDataFile("/", name, bytes, true, true);
     } else if (moduleInstance.FS?.createDataFile) {
-      moduleInstance.FS.createDataFile("/", name, wadBytes, true, true);
+      moduleInstance.FS.createDataFile("/", name, bytes, true, true);
     }
+  };
+  const nameList = [...names];
+  const primaryName = nameList[0];
+  writeWadFile(primaryName, wadBytes);
+  for (const name of nameList.slice(1)) {
+    if (moduleInstance.FS?.symlink) {
+      moduleInstance.FS.symlink(`/${primaryName}`, `/${name}`);
+    } else {
+      // No symlink support: fall back to a full second write so the alias exists.
+      writeWadFile(name, wadBytes);
+    }
+  }
+  for (const name of nameList) {
     const exists = moduleInstance.FS?.analyzePath?.(`/${name}`)?.exists;
     console.log(`WAD ${name} exists: ${exists ? "yes" : "no"}`);
   }

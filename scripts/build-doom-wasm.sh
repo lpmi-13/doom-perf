@@ -81,6 +81,14 @@ fi
 
 mkdir -p "$OUT_DIR"
 
+# Memory sizing (PERF_TUNE_PLAN Part 4.1). The 16 MB zone heap (m_misc.c mb_used)
+# means boot alone needs ~20 MB, and the measured working-set peak from the perf
+# harness is a stable ~27.3 MB when the full map is toured. INITIAL_MEMORY=32 MB
+# boots with the whole working set so ALLOW_MEMORY_GROWTH never has to
+# grow-realloc (and copy the linear memory) during a normal wing tour, which is
+# the jank/fragmentation this avoids. MAXIMUM_MEMORY=64 MB caps the ratchet at
+# ~2.3x the peak so a runaway fails predictably instead of growing unbounded.
+
 SRC_FILES=()
 while IFS= read -r file; do
   SRC_FILES+=("$file")
@@ -97,6 +105,8 @@ emcc "${SRC_FILES[@]}" \
   -s USE_SDL=2 \
   -s ASYNCIFY=1 \
   -s ALLOW_MEMORY_GROWTH=1 \
+  -s INITIAL_MEMORY=33554432 \
+  -s MAXIMUM_MEMORY=67108864 \
   -s MODULARIZE=1 \
   -s EXPORT_ES6=1 \
   -s ENVIRONMENT=web \
