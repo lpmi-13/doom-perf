@@ -535,16 +535,18 @@ const formatStorageIops = (telemetry: TelemetrySnapshot): string => {
   const devices = s.devices ?? [];
   const lines: string[] = [];
   lines.push("$ iostat -x 1 2   (per device)");
-  lines.push(`${padStart("Device", 10)}  ${padStart("", 22)} ${padStart("iops", 7)}  util`);
-  const scale = Math.max(1, ...devices.map((d) => rate(d.iops)));
+  lines.push(`${padStart("Device", 10)}  ${padStart("%util", 22)} ${padStart("iops", 7)}  util`);
   const rows = devices.slice(0, 5); // top-5, matching the five rain gauges
   rows.forEach((d) => {
     // Clamp the name into the 10-col Device field (dm/mapper/multipath names can
     // run long) so a wide name can't shove the bar out of alignment with the rows
     // below it — same truncation the RSS terminal uses for COMMAND.
     const name = d.name.length > 10 ? `${d.name.slice(0, 7)}...` : d.name;
+    // The meter is the device's %util (busy-time fraction), so it agrees with the
+    // util column — NOT iops scaled to the busiest device, which pegged the bar
+    // full for the busiest (or only) device regardless of how idle it actually was.
     lines.push(
-      `${padStart(name, 10)}  ${bar(rate(d.iops) / scale)} ${padStart(String(Math.round(rate(d.iops))), 7)}  ${(clamp(d.utilization) * 100).toFixed(0)}%`
+      `${padStart(name, 10)}  ${bar(clamp(d.utilization))} ${padStart(String(Math.round(rate(d.iops))), 7)}  ${(clamp(d.utilization) * 100).toFixed(0)}%`
     );
   });
   // Pin the block height so the summary below doesn't jump as devices come and go.
