@@ -9,18 +9,38 @@ diagnostics lab.
 
 The current goal is not to make a normal Doom game. It is to turn Doom into an
 explorable systems observability space where CPU, memory, storage, and network
-utilization, saturation, and errors become Doom rooms, props, gauges, and HUD
+utilization, saturation, and errors become Doom rooms, visualizations, and salient
 signals.
 
-![Title screen](images/loading-screen.png)
+![Title screen](images/menu-screen.png)
 
 ![CPU door](images/cpu-door.png)
 
 ![CPU cores](images/cpu-cores.png)
 
-![in-game terminal screen](images/in-game-terminal.png)
+![vmstat terminal](vmstat-terminal.png)
+
+![run queue](run-queue.png)
+
+![major and minor faults](major-minor-faults.png)
+
+![memory spire](memory-spire.png)
+
+![memory wing swap](memory-wing-swap.png)
+
+![in-game terminal screen](images/memory-page-faults-terminal.png)
+
+![disk spire](images/disk-spire.png)
+
+![io await corridor](io-await-corridor.png)
+
+![iops by device](iops-by-device.png)
 
 ![decorative elements](images/server-elements.png)
+
+![network tunnel](network-ethernet-tunnel.png)
+
+![nic RX buffer](nic-rx-buffer.png)
 
 ## Current Status
 
