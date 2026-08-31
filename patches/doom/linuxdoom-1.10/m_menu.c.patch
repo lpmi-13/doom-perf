@@ -53,7 +53,7 @@
  };
  
  menu_t  MainDef =
-@@ -268,6 +263,81 @@
+@@ -268,6 +263,74 @@
      0
  };
  
@@ -89,18 +89,13 @@
 +    // -> kernel queue -> NIC ring) backs up while the other stays calm, so one lane of
 +    // the canal lights. Each folds pressure -> loss (steady queue backlog + pulsing
 +    // drops) rather than splitting those into separate modes; kept ADJACENT so the two
-+    // directions flip back to back. Appended after the network group, so no earlier
-+    // mode renumbers; network is never referenced engine-side, and src/index.ts's
-+    // scenario synthesis follows.
++    // directions flip back to back. src/index.ts rotates the hot bottleneck through the
++    // three stages, and when it lands on the SOCKET stage the recv-q / send-q OVERFLOW
++    // counter fires too -- so the capacitor-bay reverse FLASHOVER is one of these modes'
++    // randomized targets, not a mode of its own. Appended after the network group, so no
++    // earlier mode renumbers; network is never referenced engine-side.
 +    mode_simnetsatrx,
 +    mode_simnetsattx,
-+    // A SOCKET-OVERFLOW pair: the socket-queue stage (level 0) is pinned saturated on one lane
-+    // and its recv-q / send-q OVERFLOW counter fires, so the capacitor-bay reverse FLASHOVER is
-+    // demoable without a real drop on the host. Appended after the network group, so no earlier
-+    // mode renumbers; network is never referenced engine-side, and src/index.ts's scenario
-+    // synthesis follows (mode 12 = recv-q overflow, 13 = send-q overflow).
-+    mode_simnetrecvq,
-+    mode_simnetsendq,
 +    mode_end
 +} mode_e;
 +
@@ -117,9 +112,7 @@
 +    {1,"",M_ChooseMode,'o'},
 +    {1,"",M_ChooseMode,'n'},
 +    {1,"",M_ChooseMode,'r'},
-+    {1,"",M_ChooseMode,'x'},
-+    {1,"",M_ChooseMode,'e'},
-+    {1,"",M_ChooseMode,'g'}
++    {1,"",M_ChooseMode,'x'}
 +};
 +
 +menu_t  ModeDef =
@@ -135,7 +128,7 @@
  
  //
  // EPISODE SELECT
-@@ -338,11 +408,6 @@
+@@ -338,11 +401,6 @@
  //
  enum
  {
@@ -147,7 +140,7 @@
      mousesens,
      option_empty2,
      soundvol,
-@@ -351,11 +416,6 @@
+@@ -351,11 +409,6 @@
  
  menuitem_t OptionsMenu[]=
  {
@@ -159,7 +152,7 @@
      {2,"M_MSENS",	M_ChangeSensitivity,'m'},
      {-1,"",0},
      {1,"M_SVOL",	M_Sound,'s'}
-@@ -855,7 +915,10 @@
+@@ -855,7 +908,10 @@
  //
  void M_DrawMainMenu(void)
  {
@@ -170,7 +163,7 @@
  }
  
  
-@@ -877,11 +940,112 @@
+@@ -877,11 +933,111 @@
  	M_StartMessage(NEWGAME,NULL,false);
  	return;
      }
@@ -210,14 +203,12 @@
 +    "SIM: HIGH NETWORK UTILIZATION",
 +    // A receive / transmit saturation pair: one direction's column backs up (queue
 +    // pressure) and then drops (loss). Flipping the two is the lesson — saturation has
-+    // a direction, and which side is dropping is where you look.
++    // a direction, and which side is dropping is where you look. The bottleneck rotates
++    // through the socket / kernel / ring stages; when it lands on the socket stage the
++    // recv-q / send-q overflow counter fires, so the capacitor-bay reverse FLASHOVER (a
++    // drop bouncing back up the wire) surfaces here too, without a mode of its own.
 +    "SIM: NETWORK RECEIVE SATURATION",
-+    "SIM: NETWORK TRANSMIT SATURATION",
-+    // The socket-overflow pair: the socket queue rides at its brim and its recv-q / send-q
-+    // overflow counter fires, so the capacitor-bay reverse FLASHOVER (a drop bouncing back
-+    // up the wire) is demoable without a real overflow on the host.
-+    "SIM: SOCKET RECV-Q OVERFLOW",
-+    "SIM: SOCKET SEND-Q OVERFLOW"
++    "SIM: NETWORK TRANSMIT SATURATION"
 +};
 +
 +//
@@ -278,17 +269,18 @@
 +void M_ChooseMode(int choice)
 +{
 +    // 0 = live telemetry; 1/2 = simulated high CPU utilization/saturation
-+    // (read by the CPU room renderer); 3/4/5 disk, 6/7/8 memory, 9..13 network
-+    // (read by the browser's USE terminal scenarios). Network has FIVE: 9
-+    // utilization, 10 receive saturation, 11 transmit saturation, 12 recv-q
-+    // overflow, 13 send-q overflow (the last two fire the socket-bay flashover).
++    // (read by the CPU room renderer); 3/4/5 disk, 6/7/8 memory, 9/10/11 network
++    // (read by the browser's USE terminal scenarios). Network has THREE: 9
++    // utilization, 10 receive saturation, 11 transmit saturation; the rx/tx modes
++    // rotate the hot bottleneck through the socket/kernel/ring stages, and the
++    // socket stage fires the socket-bay overflow flashover as part of the cycle.
 +    doomperf_sim_mode = choice;
 +    G_DeferedInitNew(hurtme,1,1);
 +    M_ClearMenus ();
  }
  
  
-@@ -945,24 +1109,14 @@
+@@ -945,24 +1101,14 @@
  // M_Options
  //
  char    detailNames[2][9]	= {"M_GDHIGH","M_GDLOW"};
@@ -313,7 +305,7 @@
  }
  
  void M_Options(int choice)
-@@ -1579,10 +1733,6 @@
+@@ -1579,10 +1725,6 @@
  	    M_EndGame(0);
  	    return true;
  				
@@ -324,7 +316,7 @@
  				
  	  case KEY_F9:            // Quickload
  	    S_StartSound(NULL,sfx_swtchn);
-@@ -1864,12 +2014,6 @@
+@@ -1864,12 +2006,6 @@
      switch ( gamemode )
      {
        case commercial:

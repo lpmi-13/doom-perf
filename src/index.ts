@@ -233,20 +233,20 @@ const wingSleepDisabled = new URLSearchParams(window.location.search).get("perf-
 // Scenario name -> data-source menu index (== engine sim mode == DOWN presses
 // from the top of the list). Mirrors scenarioTelemetry()/m_menu.c ordering:
 // 0 live, 1/2 CPU util/sat, 3/4/5 disk util/sat-shallow/sat-deep, 6/7/8 memory
-// util/sat-swap/sat-noswap, 9/10/11/12/13 network util/rx-sat/tx-sat/recvq/sendq.
+// util/sat-swap/sat-noswap, 9/10/11 network util/rx-sat/tx-sat.
 const SCENARIO_MODES: Record<string, number> = {
   live: 0,
   cpu: 1, "cpu-load": 1, "cpu-util": 1, "cpu-sat": 2,
   disk: 3, "disk-util": 3, "disk-sat": 4, "disk-sat-shallow": 4, "disk-sat-deep": 5,
   mem: 6, memory: 6, "mem-util": 6, "mem-sat": 7, "mem-sat-swap": 7, "mem-noswap": 8,
-  net: 9, network: 9, "net-util": 9, "net-rx": 10, "net-tx": 11, "net-recvq": 12, "net-sendq": 13,
+  net: 9, network: 9, "net-util": 9, "net-rx": 10, "net-tx": 11,
 };
 const resolveScenarioMode = (name: string | null): number | null => {
   if (!name) return null;
   const key = name.trim().toLowerCase();
   if (key in SCENARIO_MODES) return SCENARIO_MODES[key];
   const numeric = Number(key);
-  return Number.isInteger(numeric) && numeric >= 0 && numeric <= 13 ? numeric : null;
+  return Number.isInteger(numeric) && numeric >= 0 && numeric <= 11 ? numeric : null;
 };
 const scenarioMode = resolveScenarioMode(new URLSearchParams(window.location.search).get("scenario"));
 
@@ -709,7 +709,7 @@ const scenarioTelemetry = (
   engine: DoomPerfEngine | undefined
 ): TelemetrySnapshot | undefined => {
   const mode = engine?._DoomPerf_GetSimMode?.() ?? 0;
-  if (mode < 1 || mode > 13) {
+  if (mode < 1 || mode > 11) {
     return undefined;
   }
 
@@ -739,27 +739,25 @@ const scenarioTelemetry = (
   // up and overspill while the others flow, matching how a real path has a single dominant
   // bottleneck (downstream stages are starved, which the engine's gate model handles). The
   // hot stage folds PRESSURE (steady high fill -> gate red) -> LOSS (drops pulse -> the full
-  // queue overspills), the "saturation precedes errors" lesson, without a separate mode.
-  const networkMode = mode >= 9 && mode <= 13;
+  // queue overspills), the "saturation precedes errors" lesson, without a separate mode. When
+  // the rotation lands on the SOCKET stage it also fires the recv-q / send-q OVERFLOW counter,
+  // so the capacitor-bay reverse FLASHOVER is one of the randomized targets (no separate mode).
+  const networkMode = mode >= 9 && mode <= 11;
   const netRecvSat = mode === 10; // receive-path saturation (RX lane backs up + drops)
   const netXmitSat = mode === 11; // transmit-path saturation (TX lane backs up + drops)
-  // Socket-overflow pair: the socket (level-0) stage is pinned saturated on one lane and its
-  // recv-q / send-q overflow counter fires, so the capacitor-bay reverse FLASHOVER is demoable.
-  const netRecvQOver = mode === 12; // recv-q overflow (RX socket buffer drops)
-  const netSendQOver = mode === 13; // send-q overflow (TX socket buffer drops)
-  const networkSaturated = netRecvSat || netXmitSat || netRecvQOver || netSendQOver;
+  const networkSaturated = netRecvSat || netXmitSat;
   const count = Math.max(1, Math.min(doomPerfCpuCoreCapacity, engine?._DoomPerf_GetEffectiveCpuCoreCount?.() ?? 8));
   const now = Date.now();
   // Which single stage is the bottleneck this instant (rotates every NET_HOT_STAGE_MS).
   // Only the hot stage's queue-pressure fields are driven; the rest stay idle so their
   // gates flow green. RX (lane 0) and TX (lane 1) rotate independently.
   const netHotStage = netRecvSat ? netPickHotStage(now, 0) : netXmitSat ? netPickHotStage(now, 1) : -1;
-  // The recv-q / send-q overflow modes PIN the socket stage hot (no rotation) so the flashover
-  // fires reliably; the saturation modes rotate the hot stage as before.
-  const socHotRx = (netRecvSat && netHotStage === 0) || netRecvQOver;
+  // The socket stage (0) is one of the three rotating bottlenecks; when it is hot its recv-q /
+  // send-q overflow counter fires (below), so the capacitor-bay flashover appears in the cycle.
+  const socHotRx = netRecvSat && netHotStage === 0;
   const kerHotRx = netRecvSat && netHotStage === 1;
   const ringHotRx = netRecvSat && netHotStage === 2;
-  const socHotTx = (netXmitSat && netHotStage === 0) || netSendQOver;
+  const socHotTx = netXmitSat && netHotStage === 0;
   const kerHotTx = netXmitSat && netHotStage === 1;
   const ringHotTx = netXmitSat && netHotStage === 2;
   // CPU is the stressed signal only in the CPU scenario, where the engine
@@ -788,9 +786,7 @@ const scenarioTelemetry = (
     : mode === 8 ? "sim: memory saturation, no swap configured"
     : mode === 9 ? "sim: high network utilization"
     : mode === 10 ? "sim: network receive saturation"
-    : mode === 11 ? "sim: network transmit saturation"
-    : mode === 12 ? "sim: socket recv-q overflow"
-    : "sim: socket send-q overflow";
+    : "sim: network transmit saturation";
   // Background memory stats so the memory and vmstat terminals are meaningful in
   // every scenario. Modes 5/6 follow the USE memory lab pattern: mode 5 is a
   // large resident set with low MemAvailable but quiet swap/PSI; mode 6 adds
@@ -1166,12 +1162,13 @@ const scenarioTelemetry = (
   const netLossPulse = Math.abs(Math.sin(now / 1500));
   const netRxDrops = kerHotRx ? 760 * netLossPulse : 0;
   const netTxDrops = kerHotTx ? 640 * netLossPulse : 0;
-  // Socket-buffer overflow rates: fire (pulsing) only in the matching overflow demo so the
-  // capacitor-bay reverse flashover snaps against the traffic on that lane. Scaled well above
-  // SOCKET_DROP_FULL (20/s) so the flashover reads clearly. Zero otherwise (incl. the saturation
-  // modes, whose socket phase still drives the flashover via the fill-near-max proxy).
-  const netRecvBufOver = netRecvQOver ? 40 * netLossPulse : 0;
-  const netSendBufOver = netSendQOver ? 34 * netLossPulse : 0;
+  // Socket-buffer overflow rates: fire (pulsing) whenever the SOCKET stage is the hot rotating
+  // bottleneck on that lane, so the capacitor-bay reverse flashover snaps against the traffic.
+  // Scaled well above SOCKET_DROP_FULL (20/s) so the flashover reads clearly. Zero otherwise;
+  // this drives the flashover off the REAL overflow counter during the socket phase, upgrading
+  // the fill-near-max proxy the effective-telemetry feed falls back to elsewhere.
+  const netRecvBufOver = socHotRx ? 40 * netLossPulse : 0;
+  const netSendBufOver = socHotTx ? 34 * netLossPulse : 0;
   // The network-sim branch is guarded by SimNetworkTelemetry, so omitting any
   // field a network terminal reads is a compile error (see src/telemetry/types.ts).
   const networkSim: SimNetworkTelemetry = {
@@ -1485,9 +1482,10 @@ const start = async () => {
     const refreshEffectiveTelemetry = (forceScenarioSample = false) => {
       const engine = getEngine();
       const mode = engine?._DoomPerf_GetSimMode?.() ?? 0;
-      // Must match scenarioTelemetry's own range check (1..13 — 3/4/5 disk, 6/7/8 memory,
-      // 9/10/11 network saturation, 12/13 socket recv-q/send-q overflow).
-      const inScenario = mode >= 1 && mode <= 13;
+      // Must match scenarioTelemetry's own range check (1..11 — 3/4/5 disk, 6/7/8 memory,
+      // 9/10/11 network util/rx-sat/tx-sat; the socket-overflow flashover rides the rx/tx
+      // saturation modes' rotating socket stage now, not a mode of its own).
+      const inScenario = mode >= 1 && mode <= 11;
       const now = Date.now();
       if (!inScenario) {
         lastScenario = undefined;

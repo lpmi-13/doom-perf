@@ -405,7 +405,7 @@ The app exposes two hooks the harness relies on:
 - `?scenario=NAME` boots straight into a fixed data source for a reproducible
   load, instead of live host jitter. Names: `live`, `cpu` / `cpu-sat`,
   `disk` / `disk-sat` / `disk-sat-deep`, `mem` / `mem-sat` / `mem-noswap`,
-  `net` / `net-rx` / `net-tx` / `net-recvq` / `net-sendq`.
+  `net` / `net-rx` / `net-tx`.
 
 Serve the app first (`npm run dev:telemetry`, or `npm run dev`), then:
 

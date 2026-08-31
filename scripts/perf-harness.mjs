@@ -41,7 +41,7 @@ const KNOWN_SCENARIOS = new Set([
   "cpu", "cpu-load", "cpu-util", "cpu-sat",
   "disk", "disk-util", "disk-sat", "disk-sat-shallow", "disk-sat-deep",
   "mem", "memory", "mem-util", "mem-sat", "mem-sat-swap", "mem-noswap",
-  "net", "network", "net-util", "net-rx", "net-tx", "net-recvq", "net-sendq",
+  "net", "network", "net-util", "net-rx", "net-tx",
 ]);
 // --wing shorthand -> a representative scenario name.
 const WING_SCENARIO = { cpu: "cpu", mem: "mem", disk: "disk", net: "net", all: "live" };
@@ -122,7 +122,7 @@ Options:
   --label NAME        output label (default: run)
   --scenario NAME     fixed data source for a reproducible load. Names:
                       live, cpu[-sat], disk[-sat|-sat-deep], mem[-sat|-noswap],
-                      net[-rx|-tx|-recvq|-sendq]. Default: live (tour) so it
+                      net[-rx|-tx]. Default: live (tour) so it
                       enters a level; omit in manual/attach to pick one by hand.
   --wing cpu|mem|disk|net|all   shorthand that picks a representative --scenario.
   --duration SEC      tour measure window after warmup (default: 30)

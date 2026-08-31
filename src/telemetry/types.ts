@@ -265,7 +265,8 @@ export type SimNetworkTelemetry = NetworkTelemetry &
     // both sim branches synthesize them (the RX-drop / TX-drop demo modes fire one).
     | "rxDropsPerSecond" | "txDropsPerSecond"
     // Socket-buffer overflow rates driving the capacitor-bay flashover: required so both
-    // sim branches set them (the recv-q / send-q overflow demo modes fire one).
+    // sim branches set them (the rx/tx saturation modes fire one when their rotating
+    // bottleneck lands on the socket stage).
     | "recvBufOverflowsPerSecond" | "sendBufOverflowsPerSecond"
     | "primaryInterface" | "interfaces" | "tcp"
     | "recvQueueBytes" | "sendQueueBytes" | "backloggedSockets" | "topSockets"
