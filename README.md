@@ -63,41 +63,51 @@ What currently works:
   network.
 - Go telemetry SSE service at `http://127.0.0.1:9999/telemetry`.
 - Telemetry client in the browser that normalizes live/simulated resource data
-  and pushes live CPU, memory, and storage values into the WASM engine through
-  exported `DoomPerf_*` functions.
+  and pushes live CPU, memory, storage, and network values into the WASM engine
+  through exported `DoomPerf_*` functions.
 - Doom menu flow narrowed to Doom Perf's data-source selection.
-- Nine current data-source choices from the splash/menu flow:
+- Twelve current data-source choices from the splash/menu flow:
   - `LIVE STATS`
   - `SIM: HIGH CPU UTILIZATION`
   - `SIM: HIGH CPU SATURATION`
   - `SIM: HIGH DISK UTILIZATION`
-  - `SIM: HIGH DISK SATURATION`
+  - `SIM: DISK SATURATION, SHALLOW QUEUE`
+  - `SIM: DISK SATURATION, DEEP QUEUE`
   - `SIM: HIGH MEMORY UTILIZATION`
-  - `SIM: HIGH MEMORY SATURATION`
+  - `SIM: MEMORY SATURATION, SWAP`
+  - `SIM: MEMORY SATURATION, NO SWAP`
   - `SIM: HIGH NETWORK UTILIZATION`
-  - `SIM: HIGH NETWORK SATURATION`
+  - `SIM: NETWORK RECEIVE SATURATION`
+  - `SIM: NETWORK TRANSMIT SATURATION`
 - CPU wing instruments for per-core utilization, run queue pressure, blocked
   I/O-wait tasks, and load average pressure.
-- Memory wing instruments for page-bank utilization, swap/PSI saturation, and
-  OOM error state.
-- Storage wing instruments for disk utilization, queue depth, service latency,
-  and a scrolling metrics dashboard.
-- Network wing map structure for RX/TX lanes, NIC bays, choke, drops, errors,
-  and a `/proc/net/dev` terminal.
-- Interactive terminal overlays for CPU (`mpstat`, `vmstat`, `uptime`), memory
-  (`free`, top RSS, swap, PSI, OOM), storage (`iostat -x`), and network
-  (`/proc/net/dev`) readouts.
+- Memory wing instruments for page-bank utilization, a swap/reclaim saturation
+  sluice, minor/major page-fault firing range, an OOM-killer Baron, per-process
+  RSS barrels, and a book-fill spire.
+- Storage wing instruments for a disk-usage sunburst, per-device IOPS rain
+  gauges, a two-tier IO queue circuit, a latency causeway that drags player
+  movement by read/write await, a pulsing platter spindle, and a scrolling
+  metrics dashboard.
+- Network wing live instruments for RX/TX packet-orb lanes with gate-metered
+  block signals, softnet tesla coils, recv/send socket capacitor banks, a
+  kernel-TX qdisc disc, a switchyard train tunnel, and RJ45 link/activity LEDs.
+- Interactive terminal overlays across all four wings: CPU (per-core cores, run
+  queue, load average), memory (utilization baseline, top RSS, reclaim & relief,
+  page faults, OOM errors), storage (`iostat` service & queue, `df` capacity,
+  per-device IOPS, IO queue depth, latency causeway), and network (per-interface
+  throughput, TCP socket census, socket Recv-Q/Send-Q, softnet backlog, qdisc
+  backlog, NIC RX/TX ring counters).
 - Touch-device support for menu navigation, movement, the USE/interact prompt,
   and a long-press on the game view to reopen the data-source menu (the phone's
   equivalent of Esc) so a different sim can be selected mid-run.
 - Disk server-rack easter egg that plays an interaction sting and spikes the
   storage metrics dashboard.
 
+All four resource wings (CPU, memory, storage, and network) now carry live,
+engine-driven visual instruments; none of them are static map geometry anymore.
+
 What is still left:
 
-- Add live engine-driven visual instruments for the network wing. Network
-  telemetry and terminals exist today, but the RX/TX lanes, choke, drop basin,
-  and error drain are still static map geometry.
 - Continue refining resource-wing visual language, especially making
   metric-bearing instruments distinct from decorative Doom atmosphere.
 - Add more per-room music or audio cues beyond the current interaction sting.
@@ -179,10 +189,16 @@ The Go service samples Linux state once per second and emits Server-Sent Events.
 The current live feed includes:
 
 - `/proc/stat` for aggregate and per-core CPU utilization
-- `/proc/loadavg` for run queue and load pressure
-- `/proc/meminfo` and `/proc/vmstat` for memory pressure
-- `/proc/diskstats` for storage utilization, queue depth, latency, and I/O rate
-- `/proc/net/dev` for network throughput, drops, and errors
+- `/proc/loadavg` and `/proc/uptime` for run queue and load pressure
+- `/proc/meminfo`, `/proc/vmstat` (page faults, `oom_kill`), and
+  `/proc/pressure/memory` (PSI) for memory pressure, plus per-process
+  `/proc/<pid>/` (`comm`, `statm`, `oom_score`) for the top resident sets
+- `/proc/diskstats`, `/sys/block/*` (per-device IOPS), and `statfs` (capacity)
+  for storage utilization, queue depth, latency, I/O rate, and `df`
+- `/proc/net/dev`, `/proc/net/snmp`, `/proc/net/netstat`,
+  `/proc/net/softnet_stat`, `/proc/net/tcp` (socket Recv-Q/Send-Q), and
+  `/sys/class/net/*` for network throughput, backlog, socket queues, drops,
+  and errors
 
 The browser accepts either `telemetry` events or JSON `message` events. With no
 query parameter it always connects same-origin to `/telemetry`:
@@ -340,22 +356,29 @@ in (or regenerate it by diffing a clean tree against the staged build tree).
 | `d_main.c.patch` | Allow the project PWAD with the base IWAD; hold the opening title page instead of cycling demos; uncapped render loop; title `oo` load-pulse wiring. |
 | `g_game.c.patch` | Ignore fire and weapon-selection controls. |
 | `hu_stuff.c.patch` | Show the active scenario title on the automap. |
-| `info.c.patch` | Run-queue and blocked I/O-wait orb actor states; dim tall red torches; orb spawn/despawn polish. |
-| `info.h.patch` | Declarations for the orb actor states. |
-| `m_menu.c.patch` | Simplified Doom Perf title menu; paged data-source selection (live plus CPU/disk/memory/network sim modes); automap scenario title; title `oo` load pulse; trimmed options menu. |
+| `i_system.c.patch` | Keep the zone-heap size initializer (`mb_used`) in sync with the `m_misc.c` defaults table at 16 MB (avoids a fragmentation `Z_Malloc` black screen). |
+| `info.c.patch` | Run-queue and blocked I/O-wait orb actor states; dim tall red torches; orb spawn/despawn polish; cyan RX / violet TX network packet orbs; memory-well book fill; RJ45 link/activity LEDs. |
+| `info.h.patch` | Declarations for the orb, network-packet, book, and LED actor states. |
+| `m_menu.c.patch` | Simplified Doom Perf title menu; paged data-source selection (live plus CPU/disk/memory/network sim modes); automap scenario title; title `oo` load pulse; trimmed options menu; disabled F-key shortcuts and deleted the classic Load/Save/Sound/Options/Episode menus. |
+| `m_misc.c.patch` | Raise the zone-heap default (`mb_used`) from 2 to 16 MB — the defaults table is what actually sizes the zone at boot. |
 | `p_doors.c.patch` | Remove key requirements from locked doors. |
 | `p_inter.c.patch` | Make the observer immune to damage. |
 | `p_map.c.patch` | Suppress the original USE wall-bump grunt around terminal screens. |
 | `p_mobj.c.patch` | Suppress monster and lost-soul spawning; strip normal gameplay items while keeping selected lab props. |
-| `p_tick.c.patch` | Per-tick instrument drivers: CPU pillar sink, run-queue orbs, disk platter pulse, memory page bank, disk metrics dashboard, disk platter spindle, orb spawn/despawn polish. |
+| `p_tick.c.patch` | Per-tick instrument drivers for all four wings: CPU pillar sink and run-queue orbs; disk platter pulse/spindle, metrics dashboard, IOPS bank, df cistern, queue couriers, and latency-causeway pistons; memory page bank, RSS barrels, page-fault meters, reclaim sluice, OOM-killer Baron, and spire book-fill; network packet grove, gate-metered lane signals, softnet coils, qdisc, and ethernet LEDs. |
+| `p_user.c.patch` | Latency causeway: scale player forward/side thrust by the storage wing's read/write await so the crossing is dragged, leaving turning instant. |
+| `r_bsp.c.patch` | Raise `MAXSEGS` (solidsegs clip table) 32→256 so a dense single-view can never overflow it into a black screen; capture the peak drawseg count for the perf harness. |
 | `r_data.c.patch` | Allow project sprite replacements for lab signs. |
-| `r_draw.c.patch` | CPU floor instruments (cores, column streaks, pads, load gauges) and disk floor instruments (latency, queue channel, metrics dashboard, platter spindle); sim-mode level select. |
+| `r_defs.h.patch` | Raise `MAXDRAWSEGS` so dense wall geometry (esp. the network substation hall) renders fully instead of dropping segs. |
+| `r_draw.c.patch` | CPU floor instruments (cores, column streaks, pads, load gauges) and disk floor instruments (latency, queue channel, metrics dashboard, platter spindle); network qdisc disc and faceplate shader; sim-mode level select. |
 | `r_main.c.patch` | Full 320x200 view (suppress the status bar); camera viewpoint interpolation; flattened light diminishing. |
-| `r_plane.c.patch` | CPU core floor display; disk queue channel; disk platter spindle plane rendering. |
+| `r_plane.c.patch` | CPU core floor display; disk queue channel and platter spindle; network qdisc floor sentinels; peak-visplane counter. |
 | `r_segs.c.patch` | Wall-surface instruments: CPU core streaks/floor, CPU load gauge band, disk latency gauges, disk metrics dashboard, disk platter spindle; flattened light diminishing. |
-| `r_things.c.patch` | Hide first-person weapon sprites and muzzle flash; allow PWAD sprite overrides; hide the viewplayer body sprite. |
+| `r_things.c.patch` | Hide first-person weapon sprites and muzzle flash; allow PWAD sprite overrides; hide the viewplayer body sprite; peak-vissprite counter. |
+| `r_things.h.patch` | Raise the vissprite limit 128→1024 (the memory spire alone is ~180 book sprites). |
 | `st_stuff.c.patch` | Suppress the original status bar HUD. |
 | `v_video.c.patch` | Title `oo` load-pulse palette remap in `V_DrawPatch`. |
+| `z_zone.c.patch` | Instrument the zone allocator (publish total size and high-water usage) so the perf harness can right-size the heap. |
 
 Rebuild the engine from a clean Doom source checkout:
 
@@ -375,18 +398,21 @@ public/maps/doomperf-lab.wad
 ```
 
 The map currently provides a central atrium and labeled CPU, memory, storage,
-and network wings.
+and network wings. All four wings are fully instrumented with live,
+engine-driven visuals and terminal read points.
 
-- CPU is fully instrumented with a core chamber, run-queue subway, blocked-task
-  pen, and load-average gauge room.
-- Memory is instrumented with a page bank, cache reservoir, swap channels, PSI
-  pads, an OOM alcove, and five terminal read points.
-- Storage is instrumented with read/write bays, a service queue channel, a
-  pulsing platter, latency gauges, a scrolling metrics dashboard, and an
-  `iostat` terminal.
-- Network has its full static wing layout and terminal: RX/TX lanes, NIC bays,
-  choke, drop basin, error drain, and `/proc/net/dev` readout. Live renderer
-  hooks for those network surfaces are the main remaining resource-wing gap.
+- CPU is instrumented with a core chamber (per-core utilization plus run-queue
+  saturation on the core pillars), run-queue subway, blocked-task pen, and
+  load-average gauge room.
+- Memory is instrumented with a page bank, a swap/reclaim saturation sluice, a
+  minor/major page-fault firing range, an OOM-killer Baron patrolling per-process
+  RSS barrels, a central book-fill spire, and its terminal read points.
+- Storage is instrumented with a disk-usage sunburst, per-device IOPS rain
+  gauges, a two-tier IO queue circuit, a latency causeway that drags the player,
+  a pulsing platter spindle, a scrolling metrics dashboard, and terminals.
+- Network is instrumented with RX/TX packet-orb lanes and gate-metered block
+  signals, softnet tesla coils, recv/send socket capacitor banks, a kernel-TX
+  qdisc disc, a switchyard train tunnel with RJ45 LEDs, and its terminals.
 
 Regenerate the map with:
 
@@ -398,14 +424,14 @@ npm run build:map
 
 | Command | Purpose |
 | --- | --- |
-| `npm run build` | Bundle `src/index.ts` to `public/dist/index.js` with esbuild. |
-| `npm run dev` | Bundle and serve `public/` with esbuild watch mode. |
-| `npm run dev:telemetry` | Run the Go telemetry service and esbuild web host together. |
-| `npm run build:map` | Regenerate `public/maps/doomperf-lab.wad`. |
+| `npm run build` | Build the browser bundle and stamp cache-busting asset versions (`scripts/build-web.mjs`, esbuild under the hood). |
+| `npm run dev:telemetry` | Run the Go telemetry service and the esbuild web host (watch + serve) together. |
+| `npm run build:map` | Regenerate `public/maps/doomperf-lab.wad` and validate it. |
 | `npm run build:engine` | Rebuild `public/engine/doom.js` and `public/engine/doom.wasm`. |
+| `npm run test:map` | Run the map-builder unit tests. |
 | `npm run test:go` | Run Go telemetry service tests. |
 | `npm run typecheck` | Run TypeScript checking. This is stricter than the supported esbuild bundle path. |
-| `npm run check` | Run typecheck, Go tests, and the browser bundle build. |
+| `npm run check` | Run typecheck, the map-builder tests, Go tests, and the browser bundle build. |
 | `npm run perf` | Profile the running tab (see Profiling Harness); pass flags after `--`. |
 
 ## Profiling Harness
@@ -423,11 +449,13 @@ The app exposes two hooks the harness relies on:
   JS/WASM heap, DOM node count, and the engine's rendered-frame counter. It only
   attaches with the flag, so it costs nothing otherwise.
 - `?scenario=NAME` boots straight into a fixed data source for a reproducible
-  load, instead of live host jitter. Names: `live`, `cpu` / `cpu-sat`,
-  `disk` / `disk-sat` / `disk-sat-deep`, `mem` / `mem-sat` / `mem-noswap`,
-  `net` / `net-rx` / `net-tx`.
+  load, instead of live host jitter (`NAME` may also be a raw sim-mode index
+  0–11). Names: `live`; `cpu` / `cpu-sat`;
+  `disk` / `disk-sat-shallow` / `disk-sat-deep`; `mem` / `mem-sat` /
+  `mem-noswap`; `net` / `net-rx` / `net-tx`.
 
-Serve the app first (`npm run dev:telemetry`, or `npm run dev`), then:
+Serve the app first (`npm run dev:telemetry`, or `node scripts/build-web.mjs
+--watch --serve` for the web host alone), then:
 
 ```bash
 # Automated before/after (headless, scripted camera motion):
