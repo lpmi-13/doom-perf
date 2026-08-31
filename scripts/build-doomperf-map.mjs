@@ -11,6 +11,7 @@ import {
 import { createMapBuilder } from "./lib/map-builder.mjs";
 import { controlPanelTexture } from "./lib/wings/registry.mjs";
 import { buildPerfTitlePic, buildPerfMenuTitle, decodePatch, readPalette, nearest } from "./lib/titlepic.mjs";
+import { buildMenuCursors } from "./lib/menu-cursor.mjs";
 import { cpuWing } from "./lib/wings/cpu-wing.mjs";
 import { memoryWing } from "./lib/wings/memory-wing.mjs";
 import { storageWing } from "./lib/wings/storage-wing.mjs";
@@ -517,6 +518,14 @@ const perfMenuTitle = buildPerfMenuTitle({
   playpalLump,
   buildPatch,
 });
+// Replace the menu cursor (Freedoom's red-eyed skull) with a cool-white ">_"
+// command-prompt caret; the engine's unconditional M_SKULL1<->M_SKULL2 swap blinks
+// the underscore. Regular graphic lumps -> plain PWAD override, no engine patch.
+const perfMenuCursors = buildMenuCursors({
+  skullLump: readWadLump(iwadBytes, "M_SKULL1"),
+  playpalLump,
+  buildPatch,
+});
 // Big VIOLET ring-mote for the TX NIC ring, an EXACT violet twin of the RX ring's blue mote.
 // The RX turbine's orbiting motes render freedoom's stock BFG-burst frame BFE1 D -- a large blue
 // blob, left unauthored -- so 8 of them overlap into the dense blue "rose". The TX mote must match
@@ -635,6 +644,10 @@ const mapLumps = [
   // Wordmark relabel (FREED∞M -> PERFD∞M); overrides the IWAD title + menu lumps.
   lump("TITLEPIC", perfTitlePic),
   lump("M_DOOM", perfMenuTitle),
+  // Menu cursor: cool-white ">_" prompt caret replacing the skull (blinks via the
+  // engine's M_SKULL1<->M_SKULL2 swap).
+  lump("M_SKULL1", perfMenuCursors.skull1),
+  lump("M_SKULL2", perfMenuCursors.skull2),
   lump("PNAMES", buildPNames()),
   ...textureConfigs.map(({ patch, build }) => lump(patch, build())),
   lump("TEXTURE2", buildTexture2()),
