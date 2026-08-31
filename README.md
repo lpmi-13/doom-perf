@@ -18,29 +18,29 @@ signals.
 
 ![CPU cores](images/cpu-cores.png)
 
-![vmstat terminal](vmstat-terminal.png)
+![vmstat terminal](images/vmstat-terminal.png)
 
-![run queue](run-queue.png)
+![run queue](images/run-queue.png)
 
-![major and minor faults](major-minor-faults.png)
+![major and minor faults](images/major-minor-faults.png)
 
-![memory spire](memory-spire.png)
+![memory spire](images/memory-spire.png)
 
-![memory wing swap](memory-wing-swap.png)
+![memory wing swap](images/memory-wing-swap.png)
 
 ![in-game terminal screen](images/memory-page-faults-terminal.png)
 
 ![disk spire](images/disk-spire.png)
 
-![io await corridor](io-await-corridor.png)
+![io await corridor](images/io-await-corridor.png)
 
-![iops by device](iops-by-device.png)
+![iops by device](images/iops-by-device.png)
 
 ![decorative elements](images/server-elements.png)
 
-![network tunnel](network-ethernet-tunnel.png)
+![network tunnel](images/network-ethernet-tunnel.png)
 
-![nic RX buffer](nic-rx-buffer.png)
+![nic RX buffer](images/nic-rx-buffer.png)
 
 ## Current Status
 
