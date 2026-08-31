@@ -145,13 +145,23 @@ export const buildPerfTitlePic = ({ titlepicLump, playpalLump, buildPatch }) => 
   // "oo" indices are held out of the ember quantisation so none of them pulses.
   const out = renderFlameBackground({ pal, width, height, reserved: new Set(OO_TAGS) });
 
-  // Stamp the authored wordmark (asset is already in TITLEPIC coordinates).
+  // Stamp the authored wordmark (asset is in TITLEPIC coordinates), lifted up by
+  // TITLE_Y_SHIFT. The menu composites over TITLEPIC (see d_main.c V_DrawPatch of
+  // the opening page), so this wordmark is the "DOOMPERF" header the data-source
+  // menu shows -- M_DOOM/MainDef is never reached. The authored glyphs sit at
+  // asset rows 27..53 (centre 40), one line above SELECT DATA SOURCE (y=56);
+  // lifting 12px lands them at rows 15..41 (centre 28), halfway between the top
+  // of the screen and that header. The flame graph stays below row 57, so the
+  // vacated rows just show the dark ember gradient.
+  const TITLE_Y_SHIFT = 12;
   const { width: aw, height: ah, rgba } = getWordmark();
   for (let y = 0; y < Math.min(ah, height); y += 1) {
+    const dy = y - TITLE_Y_SHIFT;
+    if (dy < 0) continue;
     for (let x = 0; x < Math.min(aw, width); x += 1) {
       const o = (y * aw + x) * 4, a = rgba[o + 3];
       if (a < 128) continue;
-      out[y * width + x] = wordmarkIndex(pal, rgba[o], rgba[o + 1], rgba[o + 2], a);
+      out[dy * width + x] = wordmarkIndex(pal, rgba[o], rgba[o + 1], rgba[o + 2], a);
     }
   }
 
