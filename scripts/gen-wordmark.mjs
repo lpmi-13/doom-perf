@@ -27,7 +27,7 @@ const tmp = process.env.TMPDIR ?? "/tmp";
 
 // TITLEPIC is 320x200; the wordmark sits on the red wall between the demon (left)
 // and the right edge. We author at full TITLEPIC resolution so the build can stamp
-// the layer at (0,0) for TITLEPIC and at (-81,-18) for the M_DOOM menu header.
+// the layer onto TITLEPIC (buildPerfTitlePic lifts it up by TITLE_Y_SHIFT there).
 const W = 320, H = 200;
 
 // Engraved-chrome vertical ramp (top→bottom grayscale), sampled verbatim from the

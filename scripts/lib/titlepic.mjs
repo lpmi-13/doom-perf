@@ -1,7 +1,7 @@
-// Builds the DooMPERF title-screen lumps: the caps "DooMPERF" chrome wordmark
+// Builds the DooMPERF title-screen lump: the caps "DooMPERF" chrome wordmark
 // authored once (scripts/gen-wordmark.mjs -> scripts/assets/perfdoom-wordmark.png,
 // full TITLEPIC resolution, transparent except the letters), composited here onto
-// the two IWAD lumps. This module is the "PNG -> Doom patch" converter.
+// the IWAD's TITLEPIC lump. This module is the "PNG -> Doom patch" converter.
 //
 // TITLEPIC's BACKGROUND is no longer Freedoom's demon/gore scene: buildPerfTitlePic
 // throws it away and renders a Brendan-Gregg flame graph rising out of a dark ember
@@ -9,9 +9,10 @@
 // deep-red/orange flame keeps the DOOM heat palette while being non-violent and
 // on-theme — the hell you stare into is your own call stack.
 //
-// The wordmark appears in TWO lumps, both drawn, so both are built here:
-//   * TITLEPIC (320x200) — title-screen background (flame graph) + wordmark.
-//   * M_DOOM   (159x37)  — the main-menu header, wordmark only, shifted (-81,-18).
+// TITLEPIC (320x200) is the title-screen background (flame graph) + wordmark, and
+// the data-source menu composites over it (d_main.c D_PageDrawer), so it doubles as
+// the menu's "DOOMPERF" header. (Freedoom also has an M_DOOM menu-title lump, but the
+// classic main menu that drew it was removed, so it is no longer built/overridden.)
 //
 // The lowercase "oo" is tagged with reserved palette indices the engine remaps each
 // frame into a live, load-driven amber pulse — see [[title-oo-load-pulse]].
@@ -166,31 +167,4 @@ export const buildPerfTitlePic = ({ titlepicLump, playpalLump, buildPatch }) => 
   }
 
   return buildPatch(out, width, height); // fully opaque
-};
-
-export const buildPerfMenuTitle = ({ mdoomLump, playpalLump, buildPatch }) => {
-  const pal = readPalette(playpalLump);
-  const pic = decodePatch(mdoomLump);
-  const { width, height } = pic;
-
-  const TRANSPARENT = -1;
-  const pixels = new Array(width * height).fill(TRANSPARENT);
-
-  // The authored asset is in TITLEPIC space; M_DOOM is that shifted by (-81,-18).
-  const { width: aw, height: ah, rgba } = getWordmark();
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      const ax = x + 81, ay = y + 18;
-      if (ax < 0 || ax >= aw || ay < 0 || ay >= ah) continue;
-      const o = (ay * aw + ax) * 4, a = rgba[o + 3];
-      if (a < 128) continue;
-      pixels[y * width + x] = wordmarkIndex(pal, rgba[o], rgba[o + 1], rgba[o + 2], a);
-    }
-  }
-
-  return buildPatch(pixels, width, height, {
-    leftOffset: pic.leftOffset,
-    topOffset: pic.topOffset,
-    transparent: TRANSPARENT,
-  });
 };

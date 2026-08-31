@@ -127,7 +127,7 @@ int doomperf_zone_static_peak = 0;
 
 // Doom Perf: title wordmark "oo" live-load pulse (see doom_emscripten_compat.h).
 // The oo is drawn with reserved palette indices DOOMPERF_OO_TAG[]; while
-// doomperf_title_remap is set (V_DrawPatch, around the TITLEPIC/M_DOOM draws) those
+// doomperf_title_remap is set (V_DrawPatch, around the TITLEPIC draw) those
 // indices are remapped through doomperf_title_lut to a bright amber darkened via
 // the engine's COLORMAP — dim at rest, brighter with CPU load plus a gentle pulse.
 extern lighttable_t* colormaps;

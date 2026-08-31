@@ -17,7 +17,28 @@
 # see scripts/build-doom-wasm.sh.
 --- a/m_menu.c
 +++ b/m_menu.c
-@@ -230,6 +230,10 @@
+@@ -180,12 +180,10 @@
+ //
+ // PROTOTYPES
+ //
+-void M_NewGame(int choice);
+ void M_Episode(int choice);
+ void M_ChooseSkill(int choice);
+ void M_LoadGame(int choice);
+ void M_SaveGame(int choice);
+-void M_Options(int choice);
+ void M_EndGame(int choice);
+ void M_ReadThis(int choice);
+ void M_ReadThis2(int choice);
+@@ -207,7 +205,6 @@
+ void M_QuickSave(void);
+ void M_QuickLoad(void);
+ 
+-void M_DrawMainMenu(void);
+ void M_DrawReadThis1(void);
+ void M_DrawReadThis2(void);
+ void M_DrawNewGame(void);
+@@ -230,41 +227,81 @@
  void M_StopMessage(void);
  void M_ClearMenus (void);
  
@@ -28,42 +49,33 @@
  
  
  
-@@ -240,22 +244,13 @@
+ //
+-// DOOM MENU
++// Doom Perf DATA-SOURCE ("LEVEL") SELECT
++// Picking an item sets doomperf_sim_mode (read by the CPU room renderer) and
++// starts the lab map. Item names are empty so M_Drawer skips patch lookups;
++// M_DrawMode paints the labels with the small font instead.
+ //
+ enum
  {
-     newgame = 0,
-     options,
+-    newgame = 0,
+-    options,
 -    loadgame,
 -    savegame,
 -    readthis,
 -    quitdoom,
-     main_end
- } main_e;
- 
- menuitem_t MainMenu[]=
- {
-     {1,"M_NGAME",M_NewGame,'n'},
+-    main_end
+-} main_e;
+-
+-menuitem_t MainMenu[]=
+-{
+-    {1,"M_NGAME",M_NewGame,'n'},
 -    {1,"M_OPTION",M_Options,'o'},
 -    {1,"M_LOADG",M_LoadGame,'l'},
 -    {1,"M_SAVEG",M_SaveGame,'s'},
 -    // Another hickup with Special edition.
 -    {1,"M_RDTHIS",M_ReadThis,'r'},
 -    {1,"M_QUITG",M_QuitDOOM,'q'}
-+    {1,"M_OPTION",M_Options,'o'}
- };
- 
- menu_t  MainDef =
-@@ -268,6 +263,77 @@
-     0
- };
- 
-+//
-+// Doom Perf DATA-SOURCE ("LEVEL") SELECT
-+// Picking an item sets doomperf_sim_mode (read by the CPU room renderer) and
-+// starts the lab map. Item names are empty so M_Drawer skips patch lookups;
-+// M_DrawMode paints the labels with the small font instead.
-+//
-+enum
-+{
 +    mode_live = 0,
 +    mode_simutil,
 +    mode_simsat,
@@ -112,25 +124,36 @@
 +    {1,"",M_ChooseMode,'n'},
 +    {1,"",M_ChooseMode,'r'},
 +    {1,"",M_ChooseMode,'x'}
-+};
-+
+ };
+ 
+-menu_t  MainDef =
 +menu_t  ModeDef =
-+{
+ {
+-    main_end,
 +    mode_end,
 +    // Doom Perf: the data-source list is the ROOT menu — the NEW GAME / OPTIONS
 +    // screen was removed, so there is nothing to back out to. NULL makes Backspace
 +    // a no-op here (M_Responder guards on prevMenu); Escape still closes the menu.
-+    NULL,
+     NULL,
+-    MainMenu,
+-    M_DrawMainMenu,
+-    97,64,
 +    ModeMenu,
 +    M_DrawMode,
 +    60,80,
-+    0
-+};
-+
+     0
+ };
  
- //
- // EPISODE SELECT
-@@ -338,11 +404,6 @@
+@@ -292,7 +329,7 @@
+ menu_t  EpiDef =
+ {
+     ep_end,		// # of menu items
+-    &MainDef,		// previous menu
++    &ModeDef,		// previous menu
+     EpisodeMenu,	// menuitem_t ->
+     M_DrawEpisode,	// drawing routine ->
+     48,63,              // x,y
+@@ -338,11 +375,6 @@
  //
  enum
  {
@@ -142,7 +165,7 @@
      mousesens,
      option_empty2,
      soundvol,
-@@ -351,11 +412,6 @@
+@@ -351,11 +383,6 @@
  
  menuitem_t OptionsMenu[]=
  {
@@ -154,34 +177,78 @@
      {2,"M_MSENS",	M_ChangeSensitivity,'m'},
      {-1,"",0},
      {1,"M_SVOL",	M_Sound,'s'}
-@@ -855,7 +911,10 @@
- //
- void M_DrawMainMenu(void)
+@@ -364,7 +391,7 @@
+ menu_t  OptionsDef =
  {
-+    DoomPerf_UpdateTitleLut();
-+    doomperf_title_remap = 1;
-     V_DrawPatchDirect (94,2,0,W_CacheLumpName("M_DOOM",PU_CACHE));
-+    doomperf_title_remap = 0;
+     opt_end,
+-    &MainDef,
++    &ModeDef,
+     OptionsMenu,
+     M_DrawOptions,
+     60,37,
+@@ -388,7 +415,7 @@
+ menu_t  ReadDef1 =
+ {
+     read1_end,
+-    &MainDef,
++    &ModeDef,
+     ReadMenu1,
+     M_DrawReadThis1,
+     280,185,
+@@ -473,7 +500,7 @@
+ menu_t  LoadDef =
+ {
+     load_end,
+-    &MainDef,
++    &ModeDef,
+     LoadMenu,
+     M_DrawLoad,
+     80,54,
+@@ -496,7 +523,7 @@
+ menu_t  SaveDef =
+ {
+     load_end,
+-    &MainDef,
++    &ModeDef,
+     SaveMenu,
+     M_DrawSave,
+     80,54,
+@@ -851,18 +878,7 @@
+ 
+ 
+ //
+-// M_DrawMainMenu
+-//
+-void M_DrawMainMenu(void)
+-{
+-    V_DrawPatchDirect (94,2,0,W_CacheLumpName("M_DOOM",PU_CACHE));
+-}
+-
+-
+-
+-
+-//
+-// M_NewGame
++// M_DrawNewGame
+ //
+ void M_DrawNewGame(void)
+ {
+@@ -870,18 +886,112 @@
+     V_DrawPatchDirect (54,38,0,W_CacheLumpName("M_SKILL",PU_CACHE));
  }
  
- 
-@@ -877,11 +936,120 @@
- 	M_StartMessage(NEWGAME,NULL,false);
- 	return;
-     }
+-void M_NewGame(int choice)
+-{
+-    if (netgame && !demoplayback)
+-    {
+-	M_StartMessage(NEWGAME,NULL,false);
+-	return;
+-    }
 -	
 -    if ( gamemode == commercial )
 -	M_SetupNextMenu(&NewDef);
 -    else
 -	M_SetupNextMenu(&EpiDef);
-+
-+    // Always open the data-source list on the first page (item 0), regardless of
-+    // which scenario was picked last -- M_DrawMode pages off itemOn, and
-+    // M_SetupNextMenu restores it from lastOn, which the previous pick left deep.
-+    ModeDef.lastOn = 0;
-+    M_SetupNextMenu(&ModeDef);
-+}
-+
 +//
 +// Doom Perf data-source / "level" selection.
 +//
@@ -291,7 +358,7 @@
  }
  
  
-@@ -945,24 +1113,14 @@
+@@ -945,29 +1055,14 @@
  // M_Options
  //
  char    detailNames[2][9]	= {"M_GDHIGH","M_GDLOW"};
@@ -313,10 +380,24 @@
 -	
 -    M_DrawThermo(OptionsDef.x,OptionsDef.y+LINEHEIGHT*(scrnsize+1),
 -		 9,screenSize);
+-}
+-
+-void M_Options(int choice)
+-{
+-    M_SetupNextMenu(&OptionsDef);
  }
  
- void M_Options(int choice)
-@@ -1579,10 +1737,6 @@
+ 
+@@ -1042,7 +1137,7 @@
+ void M_FinishReadThis(int choice)
+ {
+     choice = 0;
+-    M_SetupNextMenu(&MainDef);
++    M_SetupNextMenu(&ModeDef);
+ }
+ 
+ 
+@@ -1579,10 +1674,6 @@
  	    M_EndGame(0);
  	    return true;
  				
@@ -327,20 +408,20 @@
  				
  	  case KEY_F9:            // Quickload
  	    S_StartSound(NULL,sfx_swtchn);
-@@ -1727,7 +1881,11 @@
+@@ -1727,7 +1818,11 @@
  	return;
      
      menuactive = 1;
 -    currentMenu = &MainDef;         // JDC
-+    // Doom Perf: open straight on the data-source list (the NEW GAME / OPTIONS
-+    // screen was removed). Always start at the top item / first page, matching the
-+    // reset the old M_NewGame did before it handed off to ModeDef.
-+    currentMenu = &ModeDef;         // was &MainDef
++    // Doom Perf: open straight on the data-source list. The classic NEW GAME /
++    // OPTIONS main menu (MainDef) was deleted, so ModeDef is the root; always
++    // start at the top item / first page.
++    currentMenu = &ModeDef;
 +    currentMenu->lastOn = 0;
      itemOn = currentMenu->lastOn;   // JDC
  }
  
-@@ -1846,7 +2004,8 @@
+@@ -1846,7 +1941,8 @@
  //
  void M_Init (void)
  {
@@ -350,7 +431,7 @@
      menuactive = 0;
      itemOn = currentMenu->lastOn;
      whichSkull = 0;
-@@ -1864,12 +2023,6 @@
+@@ -1864,13 +1960,7 @@
      switch ( gamemode )
      {
        case commercial:
@@ -360,6 +441,8 @@
 -	MainMenu[readthis] = MainMenu[quitdoom];
 -	MainDef.numitems--;
 -	MainDef.y += 8;
- 	NewDef.prevMenu = &MainDef;
+-	NewDef.prevMenu = &MainDef;
++	NewDef.prevMenu = &ModeDef;
  	ReadDef1.routine = M_DrawReadThis1;
  	ReadDef1.x = 330;
+ 	ReadDef1.y = 165;

@@ -266,8 +266,8 @@ char* M_DoomPerfModeTitle(int mode);
 
 // Doom Perf: the title wordmark's "oo" pulses with live CPU load. The oo is drawn
 // with reserved palette indices (free in TITLEPIC); V_DrawPatch remaps them through
-// doomperf_title_lut while doomperf_title_remap is set (around the TITLEPIC and
-// M_DOOM draws). DoomPerf_UpdateTitleLut rebuilds the LUT each frame (load + pulse),
+// doomperf_title_lut while doomperf_title_remap is set (around the TITLEPIC
+// draw). DoomPerf_UpdateTitleLut rebuilds the LUT each frame (load + pulse),
 // DoomPerf_SetTitleLoad feeds the per-mille load. All defined in i_video_ems.c.
 extern int doomperf_title_remap;
 extern unsigned char doomperf_title_lut[256];
