@@ -246,6 +246,36 @@ The Doom Perf tab should open through the iximiuz-generated HTTPS domain. Click
 `Open Game` from that tab to launch `/game/` in a separate browser tab; the
 browser should connect to telemetry using the same origin at `/telemetry`.
 
+### Bundled use-practice load generator
+
+The image also bundles the [use-practice](https://github.com/lpmi-13/use-practice)
+load generator so lab users can create real host CPU/memory/disk/network load and
+watch it in the game's live-stats mode:
+
+```bash
+use-practice run            # pick a resource + profile
+use-practice run cpu        # or target cpu|memory|disk|network directly
+use-practice status         # active run + PIDs
+use-practice reveal         # show the answer
+use-practice stop           # end the run
+```
+
+The Dockerfile copies the prebuilt dispatcher, workload binaries, scenarios, and
+privileged helper out of a pinned use-practice rootfs image (only those paths
+ship — the rest of that image is build-time cache, not baked in):
+
+```dockerfile
+ARG USE_PRACTICE_ROOTFS=ghcr.io/lpmi-13/use-practice-rootfs:v12
+```
+
+To adopt a newer use-practice, publish its rootfs image first, then bump that tag
+(or override at build time with `--build-arg USE_PRACTICE_ROOTFS=...:vNN`) and
+rebuild doom-perf. The image adds `iproute2`, `sudo`, and `sysstat` for the
+namespace/cgroup privilege paths and the terminal USE tools the scenarios print
+as hints. CPU, memory, and disk load are host-global and show up in the game
+immediately; the network scenario drives traffic inside a network namespace, so
+confirm how it surfaces in the network wing on a live lab.
+
 ## Architecture
 
 ```text

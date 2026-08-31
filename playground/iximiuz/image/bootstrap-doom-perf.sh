@@ -7,6 +7,13 @@ ready_marker="${state_dir}/ready"
 mkdir -p "${state_dir}"
 rm -f "${ready_marker}"
 
+# Ensure the bundled use-practice load generator has a laborant-writable runtime
+# state dir. Created at image build time, re-ensured here in case it was reset.
+if id laborant >/dev/null 2>&1; then
+  install -d -m 0755 /var/lib/use-practice
+  install -d -o laborant -g laborant -m 0755 /var/lib/use-practice/state
+fi
+
 for cmd in curl doomperf-telemetry nginx; do
   command -v "${cmd}" >/dev/null 2>&1 || {
     echo "missing expected tool: ${cmd}" >&2

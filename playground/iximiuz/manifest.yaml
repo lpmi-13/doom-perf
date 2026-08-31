@@ -22,6 +22,17 @@ playground:
             Open the "Doom Perf" tab, then click "Open Game" to launch it
             in a separate browser tab with direct keyboard input.
 
+            Generate real host load to watch in the game's live-stats mode:
+              use-practice run          # pick a resource + profile
+              use-practice run cpu      # or target cpu|memory|disk|network
+              use-practice status       # active run + PIDs
+              use-practice reveal       # show the answer
+              use-practice stop         # end the run
+
+            The scenarios intentionally stress CPU, memory, disk, or network;
+            this VM is disposable. CPU/memory/disk load appears in the game
+            immediately; network runs in a namespace, so verify it live.
+
             Useful checks:
               curl -fsS http://127.0.0.1:8080/healthz
               systemctl status doomperf-telemetry nginx
