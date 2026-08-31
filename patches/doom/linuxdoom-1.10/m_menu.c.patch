@@ -15,7 +15,6 @@
 # Order-independent: this is the only Doom Perf patch that touches m_menu.c.
 # Regenerate by diffing a clean tree against the staged build tree;
 # see scripts/build-doom-wasm.sh.
-
 --- a/m_menu.c
 +++ b/m_menu.c
 @@ -230,6 +230,10 @@
@@ -53,7 +52,7 @@
  };
  
  menu_t  MainDef =
-@@ -268,6 +263,74 @@
+@@ -268,6 +263,77 @@
      0
  };
  
@@ -118,7 +117,10 @@
 +menu_t  ModeDef =
 +{
 +    mode_end,
-+    &MainDef,
++    // Doom Perf: the data-source list is the ROOT menu — the NEW GAME / OPTIONS
++    // screen was removed, so there is nothing to back out to. NULL makes Backspace
++    // a no-op here (M_Responder guards on prevMenu); Escape still closes the menu.
++    NULL,
 +    ModeMenu,
 +    M_DrawMode,
 +    60,80,
@@ -128,7 +130,7 @@
  
  //
  // EPISODE SELECT
-@@ -338,11 +401,6 @@
+@@ -338,11 +404,6 @@
  //
  enum
  {
@@ -140,7 +142,7 @@
      mousesens,
      option_empty2,
      soundvol,
-@@ -351,11 +409,6 @@
+@@ -351,11 +412,6 @@
  
  menuitem_t OptionsMenu[]=
  {
@@ -152,7 +154,7 @@
      {2,"M_MSENS",	M_ChangeSensitivity,'m'},
      {-1,"",0},
      {1,"M_SVOL",	M_Sound,'s'}
-@@ -855,7 +908,10 @@
+@@ -855,7 +911,10 @@
  //
  void M_DrawMainMenu(void)
  {
@@ -163,7 +165,7 @@
  }
  
  
-@@ -877,11 +933,111 @@
+@@ -877,11 +936,120 @@
  	M_StartMessage(NEWGAME,NULL,false);
  	return;
      }
@@ -255,6 +257,13 @@
 +    // though only the current page is painted, starting at MODE_FIRST_Y.
 +    ModeDef.y = MODE_FIRST_Y - start * LINEHEIGHT;
 +
++    // Recolour this menu's HUD-font text to high-contrast cool white so it reads
++    // over the flame-graph title background (Freedoom's red font was red-on-red).
++    // The remap is scoped to these draws only; the skull cursor (M_Drawer, after
++    // this routine) and all other menus keep the stock font. See i_video_ems.c.
++    DoomPerf_EnsureMenuLut();
++    doomperf_menu_remap = 1;
++
 +    M_WriteText(60, MODE_TITLE_Y, "SELECT DATA SOURCE");
 +    for (i = start; i < stop; i++)
 +        M_WriteText(ModeDef.x, MODE_FIRST_Y + (i - start) * LINEHEIGHT, ModeLabels[i]);
@@ -264,6 +273,8 @@
 +        sprintf(hint, "PAGE %d/%d - UP/DOWN WRAPS", page + 1, pages);
 +        M_WriteText(ModeDef.x, MODE_FIRST_Y + MODE_PER_PAGE * LINEHEIGHT + 4, hint);
 +    }
++
++    doomperf_menu_remap = 0;
 +}
 +
 +void M_ChooseMode(int choice)
@@ -280,7 +291,7 @@
  }
  
  
-@@ -945,24 +1101,14 @@
+@@ -945,24 +1113,14 @@
  // M_Options
  //
  char    detailNames[2][9]	= {"M_GDHIGH","M_GDLOW"};
@@ -305,7 +316,7 @@
  }
  
  void M_Options(int choice)
-@@ -1579,10 +1725,6 @@
+@@ -1579,10 +1737,6 @@
  	    M_EndGame(0);
  	    return true;
  				
@@ -316,7 +327,30 @@
  				
  	  case KEY_F9:            // Quickload
  	    S_StartSound(NULL,sfx_swtchn);
-@@ -1864,12 +2006,6 @@
+@@ -1727,7 +1881,11 @@
+ 	return;
+     
+     menuactive = 1;
+-    currentMenu = &MainDef;         // JDC
++    // Doom Perf: open straight on the data-source list (the NEW GAME / OPTIONS
++    // screen was removed). Always start at the top item / first page, matching the
++    // reset the old M_NewGame did before it handed off to ModeDef.
++    currentMenu = &ModeDef;         // was &MainDef
++    currentMenu->lastOn = 0;
+     itemOn = currentMenu->lastOn;   // JDC
+ }
+ 
+@@ -1846,7 +2004,8 @@
+ //
+ void M_Init (void)
+ {
+-    currentMenu = &MainDef;
++    // Doom Perf: the data-source list is the root menu (NEW GAME / OPTIONS removed).
++    currentMenu = &ModeDef;
+     menuactive = 0;
+     itemOn = currentMenu->lastOn;
+     whichSkull = 0;
+@@ -1864,12 +2023,6 @@
      switch ( gamemode )
      {
        case commercial:

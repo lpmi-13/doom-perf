@@ -273,4 +273,13 @@ extern int doomperf_title_remap;
 extern unsigned char doomperf_title_lut[256];
 void DoomPerf_UpdateTitleLut(void);
 
+// Doom Perf: the data-source ("SELECT DATA SOURCE") menu font is recoloured to a
+// high-contrast cool white so it reads over the flame-graph title. V_DrawPatch
+// remaps font pixels through doomperf_menu_lut while doomperf_menu_remap is set
+// (m_menu.c M_DrawMode). DoomPerf_EnsureMenuLut builds it once from PLAYPAL. All
+// defined in i_video_ems.c.
+extern int doomperf_menu_remap;
+extern unsigned char doomperf_menu_lut[256];
+void DoomPerf_EnsureMenuLut(void);
+
 #endif

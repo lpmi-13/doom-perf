@@ -1,26 +1,27 @@
-// Relabels the Freedoom Phase 1 chrome wordmark from "FREED∞M" to "PERFD∞M".
+// Builds the DooMPERF title-screen lumps: the caps "DooMPERF" chrome wordmark
+// authored once (scripts/gen-wordmark.mjs -> scripts/assets/perfdoom-wordmark.png,
+// full TITLEPIC resolution, transparent except the letters), composited here onto
+// the two IWAD lumps. This module is the "PNG -> Doom patch" converter.
 //
-// Rather than cut-and-paste the IWAD glyphs (which lacked a P and a uniform-height
-// M, so reconstructing them never read as one cleanly-designed logo — see the
-// history in LOGO_PLAN.md), the caps P E R F D M are authored once as a single
-// chrome wordmark image (scripts/gen-wordmark.mjs -> scripts/assets/
-// perfdoom-wordmark.png, full TITLEPIC resolution, transparent except the
-// letters). This module is the "PNG -> Doom patch" converter: it decodes that
-// asset and composites the letters onto the two IWAD lumps, keeping the original
-// orange ∞ (in place of "OO") and — for TITLEPIC — the red-wall scene.
+// TITLEPIC's BACKGROUND is no longer Freedoom's demon/gore scene: buildPerfTitlePic
+// throws it away and renders a Brendan-Gregg flame graph rising out of a dark ember
+// gradient (scripts/lib/titlepic-bg.mjs), then stamps the wordmark on top. The
+// deep-red/orange flame keeps the DOOM heat palette while being non-violent and
+// on-theme — the hell you stare into is your own call stack.
 //
-// The same wordmark appears in TWO lumps, both drawn, so both are replaced:
-//   * TITLEPIC (320x200) — title-screen background; wordmark on the red wall.
-//   * M_DOOM   (159x37)  — the main-menu header, shifted by (-81,-18) vs TITLEPIC.
-// We erase the old chrome lettering (red-fill on TITLEPIC / clear on M_DOOM), stamp
-// the authored letters, then re-stamp the orange ∞ in front so it stays a single
-// unbroken ribbon weaving over the D and M, exactly as the IWAD authored it.
+// The wordmark appears in TWO lumps, both drawn, so both are built here:
+//   * TITLEPIC (320x200) — title-screen background (flame graph) + wordmark.
+//   * M_DOOM   (159x37)  — the main-menu header, wordmark only, shifted (-81,-18).
+//
+// The lowercase "oo" is tagged with reserved palette indices the engine remaps each
+// frame into a live, load-driven amber pulse — see [[title-oo-load-pulse]].
 //
 // buildPerf* are pure w.r.t. their lump inputs (they additionally read the one
 // committed PNG asset) and return replacement lump bytes via the shared encoder.
 import { readFileSync } from "node:fs";
 import { inflateSync } from "node:zlib";
 import { fileURLToPath } from "node:url";
+import { renderFlameBackground } from "./titlepic-bg.mjs";
 
 const wordmarkAssetPath = fileURLToPath(new URL("../assets/perfdoom-wordmark.png", import.meta.url));
 
@@ -70,7 +71,7 @@ const PAETH = (a, b, c) => {
   const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c);
   return pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
 };
-const decodePNG = (buf) => {
+export const decodePNG = (buf) => {
   const sig = [137, 80, 78, 71, 13, 10, 26, 10];
   for (let i = 0; i < 8; i += 1) if (buf[i] !== sig[i]) throw new Error("wordmark asset is not a PNG");
   let off = 8, width = 0, height = 0, colorType = 0, bitDepth = 0;
@@ -117,24 +118,8 @@ const getWordmark = () => {
   return wordmark;
 };
 
-// ---- pixel classifiers (operate on a decoded patch + palette) ----
-const isLetterColor = (pal, i) => {
-  const [r, g, b] = pal[i];
-  const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
-  return mx <= 46 || (mx - mn <= 30 && mx >= 46); // chrome gray or near-black outline
-};
-const isBgColor = (pal, i) => {
-  const [r, g, b] = pal[i];
-  return r >= 40 && r > g * 1.3 && r > b * 1.3 && Math.max(r, g, b) - Math.min(r, g, b) >= 18;
-};
-const isOrangeColor = (pal, i) => {
-  const [r, g, b] = pal[i]; // warm orange ∞ ramp, distinct from the red wall
-  return r > 120 && g > 40 && g < 170 && b < 80 && r > g + 30;
-};
-
-// The wordmark spans this band on TITLEPIC; M_DOOM is the same shifted by (-81,-18).
-const BAND = { x0: 81, x1: 242, y0: 14, y1: 57 };
-const grain = (x, y) => ((x * 73 + y * 151) % 7) - 3; // deterministic ±3 wall grain
+// Exposed for the offline title preview (scripts/preview-titlepic.mjs).
+export const loadWordmarkRGBA = () => getWordmark();
 
 // gen-wordmark tags the "oo" pixels with this alpha (vs 255 for caps). They map to
 // reserved palette indices (free in TITLEPIC) that the engine remaps each frame to
@@ -153,37 +138,12 @@ const wordmarkIndex = (pal, r, g, b, a) => {
 
 export const buildPerfTitlePic = ({ titlepicLump, playpalLump, buildPatch }) => {
   const pal = readPalette(playpalLump);
-  const pic = decodePatch(titlepicLump);
-  const { width, height, idx } = pic;
-  const out = idx.slice();
-  const at = (x, y) => idx[y * width + x];
-  const op = (x, y) => pic.mask[y * width + x];
-  // The whole old wordmark is replaced (the "oo" supersedes the old orange ∞ too),
-  // so erase both the chrome lettering and the orange.
-  const isOldMark = (x, y) => op(x, y) === 1 && (isLetterColor(pal, at(x, y)) || isOrangeColor(pal, at(x, y)));
+  const pic = decodePatch(titlepicLump); // read only for the canonical 320x200 dims
+  const { width, height } = pic;
 
-  // Erase the old wordmark (FREED + ∞ + M), red-filling each column with the wall's
-  // local vertical gradient + grain. Dilated to catch the dark anti-alias fringe.
-  for (let x = BAND.x0; x < BAND.x1; x += 1) {
-    const top = pal[at(x, BAND.y0)];
-    let by = BAND.y1;
-    while (by > BAND.y0 && !(op(x, by) === 1 && isBgColor(pal, at(x, by)))) by -= 1;
-    const bot = op(x, by) === 1 && isBgColor(pal, at(x, by)) ? pal[at(x, by)] : top;
-    const span = Math.max(1, by - BAND.y0);
-    for (let y = BAND.y0; y <= BAND.y1; y += 1) {
-      let near = false;
-      for (let dy = -2; dy <= 2 && !near; dy += 1) for (let dx = -2; dx <= 2; dx += 1) {
-        const nx = x + dx, ny = y + dy;
-        if (nx >= 0 && nx < width && ny >= 0 && ny < height && isOldMark(nx, ny)) { near = true; break; }
-      }
-      if (!near) continue;
-      const t = Math.min(1, (y - BAND.y0) / span), gg = grain(x, y);
-      out[y * width + x] = nearest(pal,
-        top[0] + (bot[0] - top[0]) * t + gg,
-        top[1] + (bot[1] - top[1]) * t + gg,
-        top[2] + (bot[2] - top[2]) * t + gg);
-    }
-  }
+  // Replace Freedoom's demon scene entirely with a flame-graph vista. Reserved
+  // "oo" indices are held out of the ember quantisation so none of them pulses.
+  const out = renderFlameBackground({ pal, width, height, reserved: new Set(OO_TAGS) });
 
   // Stamp the authored wordmark (asset is already in TITLEPIC coordinates).
   const { width: aw, height: ah, rgba } = getWordmark();

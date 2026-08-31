@@ -7,7 +7,6 @@
 # Order-independent: this is the only Doom Perf patch that touches v_video.c.
 # Regenerate by diffing a clean tree against the staged build tree;
 # see scripts/build-doom-wasm.sh.
-
 --- a/v_video.c
 +++ b/v_video.c
 @@ -253,7 +253,7 @@
@@ -15,7 +14,7 @@
  	    while (count--) 
  	    { 
 -		*dest = *source++; 
-+		{ byte _ts = *source++; *dest = doomperf_title_remap ? doomperf_title_lut[_ts] : _ts; }
++		{ byte _ts = *source++; *dest = doomperf_title_remap ? doomperf_title_lut[_ts] : doomperf_menu_remap ? doomperf_menu_lut[_ts] : _ts; }
  		dest += SCREENWIDTH; 
  	    } 
  	    column = (column_t *)(  (byte *)column + column->length 
@@ -24,7 +23,7 @@
  	    while (count--) 
  	    { 
 -		*dest = *source++; 
-+		{ byte _ts = *source++; *dest = doomperf_title_remap ? doomperf_title_lut[_ts] : _ts; }
++		{ byte _ts = *source++; *dest = doomperf_title_remap ? doomperf_title_lut[_ts] : doomperf_menu_remap ? doomperf_menu_lut[_ts] : _ts; }
  		dest += SCREENWIDTH; 
  	    } 
  	    column = (column_t *)(  (byte *)column + column->length 
@@ -33,7 +32,7 @@
  	    while (count--) 
  	    { 
 -		*dest = *source++; 
-+		{ byte _ts = *source++; *dest = doomperf_title_remap ? doomperf_title_lut[_ts] : _ts; }
++		{ byte _ts = *source++; *dest = doomperf_title_remap ? doomperf_title_lut[_ts] : doomperf_menu_remap ? doomperf_menu_lut[_ts] : _ts; }
  		dest += SCREENWIDTH/4; 
  	    } 
  	    column = (column_t *)(  (byte *)column + column->length 

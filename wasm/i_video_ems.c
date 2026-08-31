@@ -16,6 +16,8 @@
 #include "m_random.h"
 #include "p_mobj.h"
 #include "r_main.h"
+#include "w_wad.h"
+#include "z_zone.h"
 
 // Doom Perf: CPU room telemetry in per-mille (0..1000), pushed from the
 // browser telemetry SSE stream. Declared extern in doom_emscripten_compat.h
@@ -164,6 +166,56 @@ void DoomPerf_UpdateTitleLut(void)
         if (lvl > 31) lvl = 31;
         doomperf_title_lut[DOOMPERF_OO_TAG[i]] = colormaps[lvl * 256 + DOOMPERF_AMBER_BASE];
     }
+}
+
+// Doom Perf: high-contrast recolour for the data-source ("SELECT DATA SOURCE")
+// menu. Freedoom's HUD font (STCFN*, used by M_WriteText) is a dark red that now
+// sits red-on-red over the flame-graph title background. While doomperf_menu_remap
+// is set (m_menu.c M_DrawMode, around the mode-menu text only), each font pixel is
+// remapped through doomperf_menu_lut to a luminance-PRESERVING cool-white tint: the
+// glyph's dark outline stays dark and its body/highlights go near-white, so the
+// letters read cleanly against the warm flame. The LUT is built once, lazily, from
+// PLAYPAL (index 0 palette), independent of I_SetPalette timing.
+int doomperf_menu_remap = 0;
+unsigned char doomperf_menu_lut[256];
+static int doomperf_menu_lut_built = 0;
+
+void DoomPerf_EnsureMenuLut(void)
+{
+    const unsigned char* pal;
+    int i, j;
+    if (doomperf_menu_lut_built)
+        return;
+    pal = (const unsigned char*)W_CacheLumpName("PLAYPAL", PU_CACHE);
+    for (i = 0; i < 256; i++)
+    {
+        // Freedoom's HUD font is pure red, whose *luminance* tops out low (red
+        // weighs ~0.30), so a luminance tint would leave the body dark grey. Key
+        // off the font's intensity = its max channel instead, and stretch the
+        // glyph's observed range [~30..215] to full so the body reaches near-white
+        // while the dark outline (low intensity) stays dark.
+        int r = pal[i * 3], g = pal[i * 3 + 1], b = pal[i * 3 + 2];
+        int mx = r > g ? (r > b ? r : b) : (g > b ? g : b);
+        int t = ((mx - 30) * 255) / (215 - 30);
+        if (t < 0) t = 0;
+        if (t > 255) t = 255;
+        // Target = a faintly cool white, scaled by that stretched intensity.
+        int tr = (236 * t) / 255;
+        int tg = (240 * t) / 255;
+        int tb = (248 * t) / 255;
+        int best = 0;
+        long bd = 0x7fffffffL;
+        for (j = 0; j < 256; j++)
+        {
+            int dr = pal[j * 3] - tr;
+            int dg = pal[j * 3 + 1] - tg;
+            int db = pal[j * 3 + 2] - tb;
+            long d = (long)dr * dr + (long)dg * dg + (long)db * db;
+            if (d < bd) { bd = d; best = j; }
+        }
+        doomperf_menu_lut[i] = (unsigned char)best;
+    }
+    doomperf_menu_lut_built = 1;
 }
 
 EMSCRIPTEN_KEEPALIVE
