@@ -6,7 +6,6 @@
     "build:map": "node scripts/build-doomperf-map.mjs && node scripts/lib/validate-wad.mjs",
     "build": "node scripts/build-web.mjs",
     "build:engine": "bash scripts/build-doom-wasm.sh",
-    "dev": "node scripts/build-web.mjs --watch --serve",
     "dev:telemetry": "bash scripts/dev-with-telemetry.sh",
     "perf": "node scripts/perf-harness.mjs",
     "typecheck": "tsc --noEmit",
