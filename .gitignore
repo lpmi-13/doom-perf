@@ -16,6 +16,9 @@ public/dist/
 # Perf-harness output (scripts/perf-harness.mjs writes JSON snapshots here)
 perf-results/
 
+# Reproducible trailer working files (raw captures, stems, titles, and renders).
+.trailer-work/
+
 # Local base IWADs. Doom Perf map PWADs under public/maps/ are authored here.
 public/wads/*.wad
 public/wads/*.WAD
@@ -32,3 +35,8 @@ playwright-*
 notes.txt
 
 *.md
+
+# trailer composition
+trailer
+.tmp
+videos

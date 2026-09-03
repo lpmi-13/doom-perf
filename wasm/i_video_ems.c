@@ -9,11 +9,13 @@
 #include "d_main.h"
 #include "doomdef.h"
 #include "doomstat.h"
+#include "g_game.h"
 #include "i_system.h"
 #include "i_video.h"
 #include "v_video.h"
 #include "m_fixed.h"
 #include "m_random.h"
+#include "p_local.h"
 #include "p_mobj.h"
 #include "r_main.h"
 #include "w_wad.h"
@@ -688,6 +690,52 @@ EMSCRIPTEN_KEEPALIVE
 int DoomPerf_GetSimMode(void)
 {
     return doomperf_sim_mode;
+}
+
+// Doom Perf trailer harness: start a validated scenario without timing a blind
+// sequence through the title/menu UI. The browser only calls this behind the
+// explicit ?trailer=1 capture flag; ordinary players continue through M_ChooseMode.
+// G_DeferedInitNew is the same level-start path the menu uses, so this changes
+// setup reliability without bypassing normal game initialization.
+EMSCRIPTEN_KEEPALIVE
+int DoomPerf_StartScenario(int mode)
+{
+    if (mode < 0 || mode > 11)
+        return 0;
+
+    doomperf_sim_mode = mode;
+    G_DeferedInitNew(sk_medium, 1, 1);
+    return 1;
+}
+
+// Doom Perf trailer harness: exact setup pose for a reproducible autonomous
+// take. This is called only before MediaRecorder starts. P_TeleportMove keeps
+// the blockmap/subsector links valid and rejects solid geometry; the recorded
+// portion still uses ordinary player movement and collision.
+EMSCRIPTEN_KEEPALIVE
+int DoomPerf_SetCapturePose(int x, int y, int angle_degrees)
+{
+    mobj_t* actor;
+    uint32_t angle;
+
+    if (gamestate != GS_LEVEL || !players[0].mo)
+        return 0;
+
+    actor = players[0].mo;
+    if (!P_TeleportMove(actor,
+                        (fixed_t)((int64_t)x * FRACUNIT),
+                        (fixed_t)((int64_t)y * FRACUNIT)))
+        return 0;
+
+    angle_degrees %= 360;
+    if (angle_degrees < 0)
+        angle_degrees += 360;
+    angle = (uint32_t)(((uint64_t)(unsigned int)angle_degrees << 32) / 360u);
+    actor->angle = (angle_t)angle;
+    actor->momx = actor->momy = actor->momz = 0;
+    actor->z = actor->floorz;
+    players[0].viewz = actor->z + players[0].viewheight;
+    return 1;
 }
 
 // Doom Perf: profiling harness render-frame counter (PERF_TUNE_PLAN.md Part 0).

@@ -249,6 +249,7 @@ const resolveScenarioMode = (name: string | null): number | null => {
   return Number.isInteger(numeric) && numeric >= 0 && numeric <= 11 ? numeric : null;
 };
 const scenarioMode = resolveScenarioMode(new URLSearchParams(window.location.search).get("scenario"));
+const trailerCaptureEnabled = new URLSearchParams(window.location.search).get("trailer") === "1";
 
 const wadParam = new URLSearchParams(window.location.search).get("wad")?.toLowerCase();
 const wadMap: Record<string, string> = {
@@ -366,6 +367,7 @@ type DoomPerfEngine = {
   _DoomPerf_SetNetQdiscFill?: (permille: number) => void;
   _DoomPerf_SetNetQdiscKnown?: (known: number) => void;
   _DoomPerf_GetSimMode?: () => number;
+  _DoomPerf_StartScenario?: (mode: number) => number;
   _DoomPerf_GetEffectiveCpuCoreCount?: () => number;
   _DoomPerf_GetEffectiveCpuCore?: (id: number) => number;
   _DoomPerf_GetEffectiveCpuRunQueuePressure?: () => number;
@@ -1922,6 +1924,18 @@ const start = async () => {
         return (engine?._DoomPerf_GetSimMode?.() ?? -1) === scenarioMode && !!engine?._DoomPerf_PlayerActive?.();
       };
       void (async () => {
+        // The release-trailer harness needs deterministic scenario entry before
+        // it records a frame. Use the capture-only engine hook when explicitly
+        // requested; it follows the same G_DeferedInitNew path as M_ChooseMode.
+        if (trailerCaptureEnabled) {
+          const accepted = getEngine()?._DoomPerf_StartScenario?.(scenarioMode) === 1;
+          for (let waited = 0; accepted && waited < 5000 && !confirmed(); waited += 100) await wait(100);
+          console[confirmed() ? "log" : "warn"](
+            `[trailer] direct scenario mode ${scenarioMode} ${confirmed() ? "active" : "NOT confirmed"} ` +
+              `(sim=${getEngine()?._DoomPerf_GetSimMode?.() ?? "?"})`
+          );
+          if (confirmed()) return;
+        }
         for (let attempt = 0; attempt < 3 && !confirmed(); attempt++) {
           await tapKey("Escape", 27, 320); // title -> main menu
           await tapKey("Enter", 13, 320); // NEW GAME -> data-source list
