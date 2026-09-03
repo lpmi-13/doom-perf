@@ -12,7 +12,8 @@ explorable systems observability space where CPU, memory, storage, and network
 utilization, saturation, and errors become Doom rooms, visualizations, and salient
 signals.
 
-![Game trailer](doom-perf-trailer.mp4)
+Launch Release Trailer:
+https://youtu.be/px4bUnA8-M4
 
 ![Title screen](images/title-screen.png)
 
