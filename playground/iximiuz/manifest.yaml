@@ -2,7 +2,7 @@ kind: playground
 name: doom-perf-c0bd32e1
 base: flexbox
 title: Doom Perf Lab
-description: Explore host CPU telemetry as an interactive Doom diagnostics lab.
+description: Explore host CPU telemetry as an interactive Doom diagnostics lab with use-tool and use-practice preinstalled.
 categories:
   - linux
   - observability
@@ -33,9 +33,9 @@ playground:
             this VM is disposable. CPU/memory/disk load appears in the game
             immediately; network runs in a namespace, so verify it live.
 
-            Useful checks:
-              curl -fsS http://127.0.0.1:8080/healthz
-              systemctl status doomperf-telemetry nginx
+            You can also run checks via use-tool:
+              use-tool practice system
+
       drives:
         - source: oci://ghcr.io/lpmi-13/doom-perf-rootfs:v14
           mount: /
@@ -69,6 +69,34 @@ playground:
         #!/bin/bash
         set -euo pipefail
 
+        install_use_tool_latest() {
+          local release_repo tag version arch asset base_url tmp
+
+          release_repo="lpmi-13/use-tool"
+
+          case "$(uname -m)" in
+            amd64|x86_64) arch="amd64" ;;
+            arm64|aarch64) arch="arm64" ;;
+            *) echo "unsupported use-tool release architecture: $(uname -m)" >&2; exit 1 ;;
+          esac
+
+          tag="$(curl -fsSL "https://api.github.com/repos/${release_repo}/releases/latest" | jq -r '.tag_name // empty')"
+          [[ -n "${tag}" ]] || { echo "could not resolve latest use-tool release tag" >&2; exit 1; }
+
+          version="${tag#v}"
+          asset="use-tool_${version}_linux_${arch}.tar.gz"
+          base_url="https://github.com/${release_repo}/releases/download/${tag}"
+          tmp="$(mktemp -d /tmp/use-tool-release.XXXXXX)"
+          trap 'rm -rf "${tmp}"' RETURN
+
+          curl -fsSL -o "${tmp}/${asset}" "${base_url}/${asset}"
+          curl -fsSL -o "${tmp}/checksums.txt" "${base_url}/checksums.txt"
+          (cd "${tmp}" && grep -F "  ${asset}" checksums.txt | sha256sum -c -)
+          tar -xzf "${tmp}/${asset}" -C "${tmp}" use-tool
+          install -m 0755 "${tmp}/use-tool" /usr/local/bin/use-tool
+        }
+
+        install_use_tool_latest
         /opt/iximiuz-labs/wait-doom-perf-ready.sh
   accessControl:
     canList:

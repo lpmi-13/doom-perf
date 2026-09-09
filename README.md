@@ -299,6 +299,14 @@ use-practice reveal         # show the answer
 use-practice stop           # end the run
 ```
 
+At playground startup, the init task also installs the latest `use-tool`
+release for the VM architecture and verifies the archive against the release
+checksums. For example:
+
+```bash
+use-tool practice system
+```
+
 The Dockerfile copies the prebuilt dispatcher, workload binaries, scenarios, and
 privileged helper out of a pinned use-practice rootfs image (only those paths
 ship — the rest of that image is build-time cache, not baked in):

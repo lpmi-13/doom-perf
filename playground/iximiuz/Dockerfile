@@ -54,6 +54,7 @@ RUN set -eu; \
     ca-certificates \
     curl \
     iproute2 \
+    jq \
     nginx \
     procps \
     sudo \
@@ -97,6 +98,7 @@ RUN set -eu; \
   command -v nginx >/dev/null; \
   command -v doomperf-telemetry >/dev/null; \
   command -v ip >/dev/null; \
+  command -v jq >/dev/null; \
   command -v sudo >/dev/null; \
   command -v setpriv >/dev/null; \
   command -v sar >/dev/null; \
