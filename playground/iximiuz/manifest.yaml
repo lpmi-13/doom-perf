@@ -3,7 +3,7 @@ name: doom-perf-c0bd32e1
 base: flexbox
 title: Doom Perf Lab
 description: Explore live host CPU/Memory/Disk/Network telemetry as an interactive Doom diagnostics lab. All the elements in the game react to system signals (eg, the cpu cores glow red when there's high utilization).
-cover: /content/files/playgrounds/doom-perf-c0bd32e1/__static__/title-screen.png?v=1788987472054
+cover: /content/files/playgrounds/doom-perf-c0bd32e1/__static__/title-screen.png?v=1789051139671
 categories:
     - linux
     - observability
@@ -12,7 +12,9 @@ markdown: |-
 
     This is a way to see the different system telemetry signals in a Doom environment. Based on the very cool https://github.com/pascalvanderheiden/doom-typescript.
 
+    ::highlight
     The elements in each of the wings actually respond to live system telemetry (in live stats mode), so cpu cores glow red, disk IO orbs fly around faster, and memory pages fly in and out of the physical RAM.
+    ::
 
     Play one of the sim modes to see what utilization/saturation looks like, or combine live stats mode with the `use-practice` tool bundled in the playground to generate real load on the VM.
 
@@ -36,15 +38,26 @@ markdown: |-
 
     You can wander freely, checking out the different visual elements of each wing, and there are also various wall terminals spaced around each wing so that you can see something closer to the output of real Linux commands.
 
-    ![](__static__/cpu-cores.png)
-
-    ![](__static__/disk-spire.png)
-
-    ![](__static__/major-minor-faults.png)
-
-    ![](/__static__/network-ethernet-tunnel.png)
-
-    ![](__static__/run-queue.png)
+    ::slide-show
+    ---
+    slides:
+    - image: __static__/cpu-cores.png
+      alt: "cpu cores glowing along with the amount of utilization"
+      description: "The CPU cores in the CPU wing will show the number of logical CPUs as well as the current utilization (color) and saturation (speed of motion) of the live VM."
+    - image: __static__/run-queue.png
+      alt: "run queue showing threads waiting for on-cpu time and blocked threads"
+      description: "The run queue shows both threads that are waiting for time on-cpu as well as threads in D state blocked on IO from the live VM system."
+    - image: __static__/disk-spire.png
+      alt: "disk element showing amount of disk utilization and IO requests"
+      description: "The central Disk wing element shows the utilization of the main disk in the live VM"
+    - image: __static__/major-minor-faults.png
+      alt: "the minor and major page faults as memory gets moved in and out of physical RAM"
+      description: "The minor and major page faults as pages get moved in and out of physical RAM on the live VM"
+    - image: __static__/network-ethernet-tunnel.png
+      alt: "network wing showing representative packet traffic"
+      description: "The network wing shows a downsampled representation of live network traffic from the VM"
+    ---
+    ::
 
     It's also got the [use-practice](https://github.com/lpmi-13/use-practice) and [use-tool](https://github.com/lpmi-13/use-tool) tools installed, so you can put real stress on the system to visualize in the Doom world. You can even run a random load and see if you can find it in the environment.
 
