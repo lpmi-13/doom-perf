@@ -5,7 +5,7 @@
 # none of its other layers ship in the final doom-perf image. Bump this pinned
 # tag to adopt a newer use-practice. The referenced image must be published
 # (ghcr.io/lpmi-13/use-practice-rootfs) before building doom-perf.
-ARG USE_PRACTICE_ROOTFS=ghcr.io/lpmi-13/use-practice-rootfs:v12
+ARG USE_PRACTICE_ROOTFS=ghcr.io/lpmi-13/use-practice-rootfs:v13
 
 FROM node:24-bookworm-slim AS web-build
 
