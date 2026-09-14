@@ -203,6 +203,77 @@ The current live feed includes:
   `/sys/class/net/*` for network throughput, backlog, socket queues, drops,
   and errors
 
+### Data source → visualization map
+
+The tables below map each live data source to the discrete in-world instrument
+it drives, by wing. This is the `LIVE STATS` path: in a `SIM:` scenario the
+selected wing synthesizes its own stressed values engine-side and ignores the
+live push, while the other three wings keep reading these live sources. Values
+are pushed into the engine through the exported `DoomPerf_Set*` functions
+(`src/index.ts`), so the "Data source" column is the ultimate origin, not an
+intermediate. Terminal overlays (opened with USE at each screen) carry the full
+per-resource detail beyond the geometry listed here.
+
+#### CPU wing
+
+| Visualized element | Data source | Reads as |
+| --- | --- | --- |
+| **Central core pillars — streak count** (per pillar) | `/proc/stat` per-CPU jiffies | Per-core utilization (USE: utilization) |
+| **Central core pillars — streak speed** (shared; inverted, calm = fast) | `/proc/loadavg` → run-queue pressure `max(nr_running − nCPU, 0) / nCPU` | Run-queue saturation (USE: saturation) |
+| Run-queue subway orbs (reservoir fill + overflow tokens) | `/proc/loadavg` running count (field 4 numerator) | Runnable-task count |
+| Blocked-task pen orbs | `/proc/stat` `procs_blocked` | Uninterruptible-sleep (D-state) I/O-wait tasks |
+| Load-average gauges (1 / 5 / 15 min) | `/proc/loadavg` load1 / load5 / load15 | Load averages |
+| Load-gauge band glow | `/proc/loadavg` load1 vs nCPU (load pressure) | Overall load pressure |
+| Title-screen `oo` pulse | `/proc/loadavg` load pressure | Overall CPU load (non-wing) |
+
+CPU **errors** are intentionally not visualized — see the section below.
+
+#### Memory wing
+
+| Visualized element | Data source | Reads as |
+| --- | --- | --- |
+| **Central book-fill spire — fill height** (green working-set books) | `/proc/meminfo` `1 − MemAvailable/MemTotal` | Memory utilization (USE: utilization) |
+| Central book-fill spire — cyan page-cache band | `/proc/meminfo` `(Buffers + Cached) / MemTotal` | Reclaimable page-cache share |
+| Swap/reclaim saturation sluice — pool level | `/proc/pressure/memory` (PSI); fallback `/proc/vmstat` refault/reclaim + swap + major-fault rate | Reclaim stalls / memory saturation (USE: saturation) |
+| Sluice swap relief vent — capped vs open | `/proc/meminfo` `SwapTotal` | Whether swap is configured |
+| Sluice swap relief vent — glow / steam | `/proc/vmstat` `pswpin + pswpout` | Swap paging rate |
+| Page-fault firing range — near (minor) meter | `/proc/vmstat` `pgfault − pgmajfault` | Minor faults/s (RAM-served) |
+| Page-fault firing range — far (major) meter | `/proc/vmstat` `pgmajfault` | Major faults/s (disk/swap refault) |
+| Per-process RSS barrels — count + height (top 5) | `/proc/<pid>/statm` via `ps --sort=-rss` | Largest resident sets |
+| Per-process RSS barrels — glow | `/proc/<pid>/oom_score` | Kernel OOM badness (USE: errors, precursor) |
+| OOM-killer Baron detonation | `/proc/vmstat` `oom_kill` (rising edge) | OOM-kill event (USE: errors) |
+
+#### Storage (disk) wing
+
+| Visualized element | Data source | Reads as |
+| --- | --- | --- |
+| Disk-usage sunburst (back wall) | `statfs("/")` (`df /`) | Root-filesystem capacity used |
+| **Latency causeway — read/write lane drag + pistons** (drags player speed) | `/proc/diskstats` r_await / w_await (worst-await device) | Per-op read/write service time (USE: saturation) |
+| Media-pit latency gauges | `/proc/diskstats` await (worst device) | Aggregate I/O service time |
+| Platter spindle pulse rings | `/proc/diskstats` %util | Device busy fraction (USE: utilization) |
+| Metrics-dashboard IOPS graph | `/proc/diskstats` (reads + writes)/s | Aggregate IOPS |
+| Per-device IOPS rain gauges — fall speed (top 5) | `/proc/diskstats` per-device ops/s | Per-device I/O rate |
+| Per-device IOPS rain gauges — density + brightness | `/proc/diskstats` per-device %util | Per-device utilization |
+| Two-tier IO queue rack — device magazine | `/proc/diskstats` in-flight (field 9) + `/sys/block/*/device/queue_depth` (cap) | Hardware queue occupancy (USE: saturation) |
+| Two-tier IO queue rack — scheduler magazine | `/proc/diskstats` `aqu-sz − in-flight` | Scheduler backlog (unbounded) |
+| Tower request circuit burstiness | `/proc/diskstats` `aqu-sz` (total queue length) | Total queue depth |
+
+#### Network wing
+
+| Visualized element | Data source | Reads as |
+| --- | --- | --- |
+| **RX / TX packet-orb lanes** — orb density (+ gate-metered block signals) | `/proc/net/dev` rx/tx bytes/s, scaled by `/sys/class/net/*/speed` | Throughput vs link rate (USE: utilization) |
+| Recv / send socket capacitor banks — current + fill | `/proc/net/tcp{,6}` Recv-Q / Send-Q bytes (+ backlogged-accept lift) | Socket-buffer backlog (USE: saturation) |
+| Socket capacitor banks — reverse flashover | `/proc/net/snmp` Rcv/SndbufErrors + `/proc/net/netstat` TCPRcvQDrop/TCPBacklogDrop (fill-proxy fallback) | Socket-buffer overflows (USE: errors) |
+| Softnet tesla coils — squeeze electrode | `/proc/net/softnet_stat` time_squeeze/s | Per-CPU input-queue budget exhaustion (kernel-RX saturation) |
+| Softnet tesla coils — drop electrode | `/proc/net/softnet_stat` dropped/s | Softnet backlog drops (USE: errors) |
+| Kernel-TX qdisc floor disc — violet pie fill | netlink `RTM_GETQDISC` (tc backlog bytes); "scanning" state when unreadable | Qdisc backlog (kernel-TX saturation) |
+| Kernel-TX lane drops | `/proc/net/dev` tx drops/s | Transmit-side drops |
+| NIC ring lock — fill + brim | `/proc/net/dev` rx/tx fifo overruns/s (+ ethtool ring depth for the brim line) | NIC ring overruns (NIC saturation/errors) |
+| Socket alcove SYN-RECV backlog column | `/proc/net/tcp{,6}` SYN-RECV count | Half-open connections |
+| RJ45 link / activity LEDs | `/proc/net/dev` rx/tx activity | Link up + per-packet blink |
+| TCP socket patch-panel / census | `/proc/net/tcp{,6}` per-state census | Sockets by TCP state |
+
 The browser accepts either `telemetry` events or JSON `message` events. With no
 query parameter it always connects same-origin to `/telemetry`:
 
