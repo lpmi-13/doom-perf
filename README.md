@@ -113,8 +113,6 @@ engine-driven visual instruments; none of them are static map geometry anymore.
 What is still left:
 
 - Add more per-room music or audio cues beyond the current interaction sting.
-- Clean up strict TypeScript checking in the copied browser sources. The
-  supported project build is currently `npm run build`, which uses esbuild.
 
 ## Installation And Running
 
