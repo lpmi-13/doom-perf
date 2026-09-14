@@ -309,7 +309,7 @@ type DoomPerfEngine = {
   // the IOPS section.
   _DoomPerf_TriggerStorageIopsSpike?: () => void;
   // Root-filesystem usage (`df /`) as permille of capacity, driving the disk-usage
-  // cistern's fluid level.
+  // sunburst (a radial "percent full" wheel; line tag 665).
   _DoomPerf_SetStorageUsage?: (permille: number) => void;
   // Aggregate completed-operations rate (reads+writes/s) as permille of a full
   // scale, driving the metrics-dashboard IOPS graph with the real signal.
@@ -503,7 +503,7 @@ const pushTelemetryToEngine = (
   // 3/4 synthesize a shallow-queue signature engine-side, so these are ignored then.
   engine?._DoomPerf_SetStorageDeviceQueue?.(storageDeviceFillPermille(telemetry.storage));
   engine?._DoomPerf_SetStorageSchedBacklog?.(storageSchedFillPermille(telemetry.storage));
-  // Root-filesystem usage (`df /`) fills the disk-usage cistern.
+  // Root-filesystem usage (`df /`) drives the disk-usage sunburst.
   engine?._DoomPerf_SetStorageUsage?.(Math.round(clampRatio(telemetry.storage.usedRatio ?? 0) * 1000));
   // Aggregate IOPS drives the dashboard's (now real) IOPS graph; the per-device
   // breakdown (busiest first) drives the IOPS counter bank's columns. Sims 3/4
@@ -996,8 +996,8 @@ const scenarioTelemetry = (
   // busy, but the queue and service time stay low) or full saturation (mode 4 —
   // the request queue and await blow out while throughput plateaus under
   // contention), and also stand up the two other USE axes with their own in-world
-  // instruments: root-filesystem capacity (`df /`, the disk-usage CUBE plinth, line
-  // tag 665) and per-device IOPS (the IOPS BANK, tags 630-633). In the disk sims
+  // instruments: root-filesystem capacity (`df /`, the disk-usage sunburst, line
+  // tag 665) and per-device IOPS (the IOPS BANK, tags 630-634). In the disk sims
   // the engine synthesizes ALL of these instruments itself (DoomPerf_UpdateDisk*),
   // so the terminal mirrors those synthesized values to tell the same story:
   // mode 3 is ~61% full with a busy-but-healthy bank, mode 4 ~93% full and shallow-

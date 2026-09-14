@@ -168,7 +168,7 @@ const freeColumns: [string, number][] = [
 const freeRow = (label: string, values: number[]) =>
   freeColumns.map(([, width], i) => padStart(i === 0 ? label : String(values[i - 1]), width)).join("");
 
-// MEMORY PAGE BANK: USE utilization from free(1) and /proc/meminfo. This is
+// MEMORY UTILIZATION: USE utilization from free(1) and /proc/meminfo. This is
 // intentionally distinct from saturation: low available memory is utilization;
 // swap movement and PSI prove stall/queueing.
 const formatMemory = (telemetry: TelemetrySnapshot): string => {
@@ -485,10 +485,10 @@ const formatStorage = (telemetry: TelemetrySnapshot): string => {
   lines.push(`utilization  ${bar(s.utilization)} ${pctText(s.utilization)}%`);
   lines.push(`saturation   ${bar(s.saturation)} ${pctText(s.saturation)}%   (queue + await)`);
   // Cross-reference the two dedicated instruments off this hall so the aggregate
-  // iostat readout points to where the per-device IOPS bank and capacity cistern live.
+  // iostat readout points to where the per-device IOPS bank and disk-usage sunburst live.
   const usedRatio = clamp(s.usedRatio ?? 0);
   lines.push(`IOPS         ${Math.round(rate(s.iops))} ops/s   (reads + writes; per-device on the IOPS bank)`);
-  lines.push(`disk usage   ${bar(usedRatio)} ${pctText(usedRatio)}%   (df / — the capacity cistern)`);
+  lines.push(`disk usage   ${bar(usedRatio)} ${pctText(usedRatio)}%   (df / — the disk-usage sunburst)`);
   return lines.join("\n");
 };
 
@@ -506,7 +506,7 @@ const humanBytes = (bytes: number): string => {
 };
 
 // STORAGE wing — root-filesystem capacity (`df -h /`), the input to the disk-usage
-// cistern. USE read is how full `/` is; a brimming cistern = a near-full disk.
+// sunburst. USE read is how full `/` is; a full wheel = a near-full disk.
 const formatStorageUsage = (telemetry: TelemetrySnapshot): string => {
   const s = telemetry.storage;
   const total = Math.max(0, s.totalBytes ?? 0);

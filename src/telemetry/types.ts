@@ -121,7 +121,7 @@ export interface StorageTelemetry extends ResourceTelemetry {
   // breakdown (busiest first) that feed the IOPS counter bank + `iostat -x` term.
   iops?: number;
   devices?: StorageDeviceTelemetry[];
-  // Root-filesystem capacity (`df /`) driving the disk-usage cistern. usedRatio
+  // Root-filesystem capacity (`df /`) driving the disk-usage sunburst. usedRatio
   // is df's capacity fraction (0..1).
   usedBytes?: number;
   totalBytes?: number;

@@ -345,9 +345,9 @@ void DoomPerf_TriggerStorageIopsSpike(void)
 }
 
 // Root-filesystem usage (`df /`) as a permille of capacity. Drives the disk-usage
-// CUBE plinth in the storage wing -- an isometric voxel gauge that fills bottom-up
-// (r_draw.c R_DoomPerfDiskCubePixel, line tag 665); ignored in a disk sim, which
-// synthesizes its own fill.
+// SUNBURST in the storage wing -- a radial "percent full" wheel whose used fraction
+// sweeps clockwise from the top (r_draw.c R_DoomPerfDiskDonutPixel, line tag 665);
+// ignored in a disk sim, which synthesizes its own fill.
 EMSCRIPTEN_KEEPALIVE
 void DoomPerf_SetStorageUsage(int permille)
 {
@@ -429,7 +429,7 @@ void DoomPerf_SetStorageSchedBacklog(int permille)
 }
 
 // Memory utilization is 1 - MemAvailable/MemTotal. It drives the memory wing's
-// page bank fill; memory saturation and errors drive the swap/PSI/OOM stations.
+// book-fill spire; memory saturation and errors drive the swap/PSI/OOM stations.
 EMSCRIPTEN_KEEPALIVE
 void DoomPerf_SetMemoryUtil(int permille)
 {

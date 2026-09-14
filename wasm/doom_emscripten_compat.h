@@ -72,8 +72,8 @@ extern int doomperf_storage_queue;
 extern int doomperf_storage_iops_spike;
 
 // Root-filesystem usage (`df /`) as a permille of capacity, set from the browser
-// telemetry stream and read by the disk-usage CUBE plinth's voxel gauge
-// (r_draw.c R_DoomPerfDiskCubePixel, line tag 665).
+// telemetry stream and read by the disk-usage sunburst
+// (r_draw.c R_DoomPerfDiskDonutPixel, line tag 665).
 extern int doomperf_storage_usage;
 
 // Aggregate completed-operations rate (reads+writes/s) as a permille of a full

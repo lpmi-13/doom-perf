@@ -168,7 +168,7 @@ type storageTelemetry struct {
 	// that feeds the per-device IOPS counter bank and its `iostat -x` terminal.
 	IOPS    float64               `json:"iops"`
 	Devices []diskDeviceTelemetry `json:"devices,omitempty"`
-	// Root-filesystem capacity (`df /`): the disk-usage cistern. UsedRatio matches
+	// Root-filesystem capacity (`df /`): the disk-usage sunburst. UsedRatio matches
 	// df's capacity% (reserved blocks excluded from the denominator).
 	UsedBytes  uint64  `json:"usedBytes"`
 	TotalBytes uint64  `json:"totalBytes"`
@@ -1271,8 +1271,8 @@ func reduceStorage(disks []diskCounter, previous map[string]diskCounter, elapsed
 	return result, current
 }
 
-// sampleRootFilesystem reports `df /` capacity for the disk-usage cistern. On any
-// statfs error it returns zeros (the cistern simply reads empty). UsedRatio
+// sampleRootFilesystem reports `df /` capacity for the disk-usage sunburst. On any
+// statfs error it returns zeros (the gauge simply reads empty). UsedRatio
 // matches df's capacity% by excluding root-reserved blocks from the denominator.
 func sampleRootFilesystem() (used, total, avail uint64, usedRatio float64) {
 	var stat syscall.Statfs_t

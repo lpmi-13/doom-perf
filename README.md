@@ -84,9 +84,10 @@ What currently works:
   - `SIM: NETWORK TRANSMIT SATURATION`
 - CPU wing instruments for per-core utilization, run queue pressure, blocked
   I/O-wait tasks, and load average pressure.
-- Memory wing instruments for page-bank utilization, a swap/reclaim saturation
-  sluice, minor/major page-fault firing range, an OOM-killer Baron, per-process
-  RSS barrels, and a book-fill spire.
+- Memory wing instruments for a central book-fill spire (physical-memory
+  utilization with a page-cache split), a swap/reclaim saturation sluice, a
+  minor/major page-fault firing range, an OOM-killer Baron, and per-process
+  RSS barrels.
 - Storage wing instruments for a disk-usage sunburst, per-device IOPS rain
   gauges, a two-tier IO queue circuit, a latency causeway that drags player
   movement by read/write await, a pulsing platter spindle, and a scrolling
@@ -111,8 +112,6 @@ engine-driven visual instruments; none of them are static map geometry anymore.
 
 What is still left:
 
-- Continue refining resource-wing visual language, especially making
-  metric-bearing instruments distinct from decorative Doom atmosphere.
 - Add more per-room music or audio cues beyond the current interaction sting.
 - Clean up strict TypeScript checking in the copied browser sources. The
   supported project build is currently `npm run build`, which uses esbuild.
@@ -447,7 +446,7 @@ in (or regenerate it by diffing a clean tree against the staged build tree).
 | `p_inter.c.patch` | Make the observer immune to damage. |
 | `p_map.c.patch` | Suppress the original USE wall-bump grunt around terminal screens. |
 | `p_mobj.c.patch` | Suppress monster and lost-soul spawning; strip normal gameplay items while keeping selected lab props. |
-| `p_tick.c.patch` | Per-tick instrument drivers for all four wings: CPU pillar sink and run-queue orbs; disk platter pulse/spindle, metrics dashboard, IOPS bank, df cistern, queue couriers, and latency-causeway pistons; memory page bank, RSS barrels, page-fault meters, reclaim sluice, OOM-killer Baron, and spire book-fill; network packet grove, gate-metered lane signals, softnet coils, qdisc, and ethernet LEDs. |
+| `p_tick.c.patch` | Per-tick instrument drivers for all four wings: CPU pillar sink and run-queue orbs; disk platter pulse/spindle, metrics dashboard, IOPS bank, df sunburst, queue couriers, and latency-causeway pistons; memory RSS barrels, page-fault meters, reclaim sluice, OOM-killer Baron, and spire book-fill; network packet grove, gate-metered lane signals, softnet coils, qdisc, and ethernet LEDs. |
 | `p_user.c.patch` | Latency causeway: scale player forward/side thrust by the storage wing's read/write await so the crossing is dragged, leaving turning instant. |
 | `r_bsp.c.patch` | Raise `MAXSEGS` (solidsegs clip table) 32→256 so a dense single-view can never overflow it into a black screen; capture the peak drawseg count for the perf harness. |
 | `r_data.c.patch` | Allow project sprite replacements for lab signs. |
@@ -486,9 +485,10 @@ engine-driven visuals and terminal read points.
 - CPU is instrumented with a core chamber (per-core utilization plus run-queue
   saturation on the core pillars), run-queue subway, blocked-task pen, and
   load-average gauge room.
-- Memory is instrumented with a page bank, a swap/reclaim saturation sluice, a
-  minor/major page-fault firing range, an OOM-killer Baron patrolling per-process
-  RSS barrels, a central book-fill spire, and its terminal read points.
+- Memory is instrumented with a central book-fill spire (physical-memory
+  utilization), a swap/reclaim saturation sluice, a minor/major page-fault firing
+  range, an OOM-killer Baron patrolling per-process RSS barrels, and its terminal
+  read points.
 - Storage is instrumented with a disk-usage sunburst, per-device IOPS rain
   gauges, a two-tier IO queue circuit, a latency causeway that drags the player,
   a pulsing platter spindle, a scrolling metrics dashboard, and terminals.
