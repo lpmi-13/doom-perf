@@ -118,6 +118,9 @@ export const createMovementPad = () => {
   const nub = pad.querySelector(".doomPad__nub") as HTMLElement;
   const held = new Set<ArrowCode>();
   let activePointer: number | null = null;
+  let bounds: DOMRect | null = null;
+  let latestPoint: { clientX: number; clientY: number } | null = null;
+  let updateFrame: number | null = null;
 
   const releaseAll = () => {
     held.forEach((code) => dispatchArrow("keyup", code));
@@ -139,7 +142,7 @@ export const createMovementPad = () => {
   };
 
   const update = (clientX: number, clientY: number) => {
-    const rect = pad.getBoundingClientRect();
+    const rect = bounds ?? (bounds = pad.getBoundingClientRect());
     const radius = rect.width / 2;
     const dx = clientX - (rect.left + radius);
     const dy = clientY - (rect.top + radius);
@@ -151,33 +154,69 @@ export const createMovementPad = () => {
     nub.style.transform = `translate(calc(-50% + ${nx}px), calc(-50% + ${ny}px))`;
   };
 
+  const cancelPendingUpdate = () => {
+    if (updateFrame !== null) cancelAnimationFrame(updateFrame);
+    updateFrame = null;
+    latestPoint = null;
+  };
+
+  const scheduleUpdate = (clientX: number, clientY: number) => {
+    latestPoint = { clientX, clientY };
+    if (updateFrame !== null) return;
+    updateFrame = requestAnimationFrame(() => {
+      updateFrame = null;
+      const point = latestPoint;
+      if (activePointer !== null && point) update(point.clientX, point.clientY);
+    });
+  };
+
+  const invalidateBounds = () => {
+    bounds = null;
+    if (activePointer !== null && latestPoint) {
+      scheduleUpdate(latestPoint.clientX, latestPoint.clientY);
+    }
+  };
+
+  if (typeof ResizeObserver !== "undefined") {
+    new ResizeObserver(invalidateBounds).observe(pad);
+  }
+  window.addEventListener("resize", invalidateBounds);
+  window.addEventListener("orientationchange", invalidateBounds);
+
   pad.addEventListener("pointerdown", (event) => {
+    if (activePointer !== null && activePointer !== event.pointerId) return;
     event.preventDefault();
+    cancelPendingUpdate();
     activePointer = event.pointerId;
     pad.setPointerCapture(event.pointerId);
+    bounds = pad.getBoundingClientRect();
+    latestPoint = { clientX: event.clientX, clientY: event.clientY };
+    // Apply the first position synchronously so steering acknowledges the touch
+    // immediately. Subsequent samples are coalesced to one update per frame.
     update(event.clientX, event.clientY);
   });
   pad.addEventListener("pointermove", (event) => {
     if (activePointer !== event.pointerId) return;
     event.preventDefault();
-    update(event.clientX, event.clientY);
+    scheduleUpdate(event.clientX, event.clientY);
   });
+  const resetPointer = () => {
+    activePointer = null;
+    cancelPendingUpdate();
+    releaseAll();
+  };
   const endPointer = (event: PointerEvent) => {
     if (activePointer !== event.pointerId) return;
-    activePointer = null;
-    releaseAll();
+    resetPointer();
   };
   pad.addEventListener("pointerup", endPointer);
   pad.addEventListener("pointercancel", endPointer);
-  pad.addEventListener("lostpointercapture", () => {
-    activePointer = null;
-    releaseAll();
-  });
+  pad.addEventListener("lostpointercapture", resetPointer);
 
   // Belt-and-braces against stuck keys when focus or the tab is lost mid-press.
-  window.addEventListener("blur", releaseAll);
+  window.addEventListener("blur", resetPointer);
   document.addEventListener("visibilitychange", () => {
-    if (document.hidden) releaseAll();
+    if (document.hidden) resetPointer();
   });
 
   let visible = false;
@@ -185,12 +224,14 @@ export const createMovementPad = () => {
     show() {
       if (visible) return;
       visible = true;
+      bounds = null;
       pad.style.display = "block";
     },
     hide() {
       if (!visible) return;
       visible = false;
-      releaseAll();
+      resetPointer();
+      bounds = null;
       pad.style.display = "none";
     },
   };

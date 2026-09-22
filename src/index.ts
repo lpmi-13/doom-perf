@@ -1,4 +1,4 @@
-import { bootstrapEngine } from "./engine_bootstrap";
+import { bootstrapEngine, prepareEngineAssets } from "./engine_bootstrap";
 import { D_DoomMain } from "./d_main";
 import { createTelemetryClient, createTerminalOverlay, resolveTelemetrySource } from "./telemetry";
 import type {
@@ -436,9 +436,12 @@ const STORAGE_DEVICE_NAME_MAX = 15;
 // cap or it would read as permanently empty; instead it scales to a slowly-decaying
 // peak so occupancy is still legible. The scheduler backlog is unbounded, so it
 // always scales to its own peak. Reset would only matter on a device-class change.
-const QUEUE_HIGH_WATER_DECAY = 0.995; // per telemetry frame; ~slow bleed toward calm
+// Preserve the old 0.995-per-250ms decay as an elapsed-time rate. Telemetry is
+// now pushed only for fresh samples, so tying decay to push count would otherwise
+// make the high-water mark bleed down roughly four times more slowly.
+const QUEUE_HIGH_WATER_DECAY_PER_SECOND = Math.pow(0.995, 4);
 const QUEUE_SHALLOW_CAP = 64; // at/below this the rack is literal (SATA-class tags)
-const queueHighWater = { device: 0 };
+const queueHighWater = { device: 0, updatedAt: 0 };
 
 // The plate pool the engine stacks per shaft (p_tick.c DOOMPERF_PLATE_MAX). Kept in
 // sync here so the browser can drive LITERAL whole-plate COUNTS (one plate per queued
@@ -461,7 +464,13 @@ const storageDeviceFillPermille = (storage: TelemetrySnapshot["storage"]): numbe
   if (cap > 0 && cap <= QUEUE_SHALLOW_CAP) {
     return plateCountPermille(Math.min(Math.round(dq), cap, DOOMPERF_PLATE_MAX));
   }
-  queueHighWater.device = Math.max(dq, queueHighWater.device * QUEUE_HIGH_WATER_DECAY);
+  const now = performance.now();
+  const elapsedSeconds = queueHighWater.updatedAt > 0
+    ? Math.max(0, now - queueHighWater.updatedAt) / 1000
+    : 0;
+  queueHighWater.updatedAt = now;
+  const decay = Math.pow(QUEUE_HIGH_WATER_DECAY_PER_SECOND, elapsedSeconds);
+  queueHighWater.device = Math.max(dq, queueHighWater.device * decay);
   const ref = Math.max(queueHighWater.device, 4); // floor so noise doesn't slam full
   return Math.round(clampRatio(dq / ref) * 1000);
 };
@@ -483,6 +492,39 @@ const storageSchedFillPermille = (storage: TelemetrySnapshot["storage"]): number
 // engine-side instead.
 let lastOomKills: number | undefined;
 
+// Cache the encoded value for each scalar engine field. Indexed setters use all
+// arguments except the final value as part of the key, so CPU cores, device
+// slots, and individual device-name characters are tracked independently. The
+// side-effecting Trigger methods deliberately bypass this cache.
+const engineTelemetryValueCache = new WeakMap<DoomPerfEngine, Map<string, number>>();
+const cachedTelemetryEngine = (
+  engine: DoomPerfEngine | undefined,
+  force: boolean
+): DoomPerfEngine | undefined => {
+  if (!engine) return undefined;
+  let cache = engineTelemetryValueCache.get(engine);
+  if (!cache) {
+    cache = new Map<string, number>();
+    engineTelemetryValueCache.set(engine, cache);
+  }
+  return new Proxy(engine, {
+    get(target, property, receiver) {
+      const member = Reflect.get(target, property, receiver) as unknown;
+      if (typeof member !== "function") return member;
+      if (typeof property !== "string" || !property.startsWith("_DoomPerf_Set")) {
+        return member.bind(target);
+      }
+      return (...args: number[]) => {
+        const value = args[args.length - 1];
+        const key = `${property}:${args.slice(0, -1).join(",")}`;
+        if (!force && cache?.get(key) === value) return;
+        (member as (...values: number[]) => void).apply(target, args);
+        cache?.set(key, value);
+      };
+    },
+  }) as DoomPerfEngine;
+};
+
 // Drives the in-world instruments. `telemetry` is the LIVE snapshot in live mode
 // and the SIMULATED snapshot in a scenario (stressed active wing + baseline
 // others), so the non-active wings' instruments show a simulated baseline rather
@@ -494,8 +536,10 @@ let lastOomKills: number | undefined;
 const pushTelemetryToEngine = (
   engine: DoomPerfEngine | undefined,
   telemetry: TelemetrySnapshot,
-  isLive: boolean
+  isLive: boolean,
+  force = false
 ) => {
+  engine = cachedTelemetryEngine(engine, force);
   const displayCores = telemetry.cpu.cores.filter(({ id }) => id < doomPerfCpuCoreCapacity);
   const lastDisplayCore = displayCores.reduce((largest, { id }) => Math.max(largest, id), -1);
   engine?._DoomPerf_SetCpuCoreCount?.(lastDisplayCore + 1);
@@ -1362,14 +1406,29 @@ const scenarioTelemetry = (
 
 const start = async () => {
   lockDocumentTitle("Doom Perf");
-  // Probe for the engine bundle by importing it directly rather than with a
-  // blocking HEAD round trip. A missing bundle (dev without a built engine)
-  // throws here and we fall back to the pure-TS stub renderer; the import is
-  // module-cached, so bootstrapEngine reuses it below without a second fetch.
+  const engineAssets = prepareEngineAssets({
+    wadUrl,
+    engineScriptUrl,
+    extraWads: [doomPerfMapWad],
+  });
+  // The WAD requests above are already in flight while this direct import probe
+  // settles. Only a missing local-development module gets the stub renderer;
+  // syntax/evaluation failures and production loading errors remain visible.
   let engineAvailable = true;
   try {
-    await import(engineScriptUrl);
-  } catch {
+    await engineAssets.engineModule;
+  } catch (error) {
+    const localDevelopmentHost =
+      location.hostname === "localhost" ||
+      location.hostname === "127.0.0.1" ||
+      location.hostname === "::1" ||
+      location.hostname === "[::1]";
+    const missingModule =
+      error instanceof TypeError &&
+      /fetch dynamically imported module|error loading dynamically imported module|importing a module script failed/i.test(
+        error.message
+      );
+    if (!localDevelopmentHost || !missingModule) throw error;
     engineAvailable = false;
   }
   if (engineAvailable) {
@@ -1503,8 +1562,15 @@ const start = async () => {
     const scenarioSampleMs = 1000;
     let lastScenario: TelemetrySnapshot | undefined;
     let lastScenarioAt = 0;
+    let lastScenarioMode = 0;
+    let lastPushedSnapshot: TelemetrySnapshot | undefined;
+    let lastPushedUpdatedAt: number | undefined;
+    let lastPushedMode: number | undefined;
 
-    const refreshEffectiveTelemetry = (forceScenarioSample = false) => {
+    const refreshEffectiveTelemetry = (
+      forceScenarioSample = false,
+      forceEnginePush = false
+    ) => {
       const engine = getEngine();
       const mode = engine?._DoomPerf_GetSimMode?.() ?? 0;
       // Must match scenarioTelemetry's own range check (1..11 — 3/4/5 disk, 6/7/8 memory,
@@ -1514,9 +1580,16 @@ const start = async () => {
       const now = Date.now();
       if (!inScenario) {
         lastScenario = undefined;
-      } else if (forceScenarioSample || !lastScenario || now - lastScenarioAt >= scenarioSampleMs) {
+        lastScenarioMode = 0;
+      } else if (
+        forceScenarioSample ||
+        !lastScenario ||
+        mode !== lastScenarioMode ||
+        now - lastScenarioAt >= scenarioSampleMs
+      ) {
         lastScenario = scenarioTelemetry(engine);
         lastScenarioAt = now;
+        lastScenarioMode = mode;
       }
       lastEffectiveTelemetry = lastScenario ?? lastLiveTelemetry;
       // Drive both the terminals AND the in-world instruments from the effective
@@ -1529,7 +1602,21 @@ const start = async () => {
         // ?swap=off seals the swap tributary, so it must reach the engine feed too,
         // not just the terminal (unlike ?psi=off, which is display-only).
         const shown = applySwapOverride(lastEffectiveTelemetry);
-        pushTelemetryToEngine(engine, shown, lastScenario === undefined);
+        const sampleChanged =
+          lastEffectiveTelemetry !== lastPushedSnapshot ||
+          lastEffectiveTelemetry.updatedAt !== lastPushedUpdatedAt;
+        const modeChanged = mode !== lastPushedMode;
+        if (engine && (forceEnginePush || sampleChanged || modeChanged)) {
+          pushTelemetryToEngine(
+            engine,
+            shown,
+            lastScenario === undefined,
+            forceEnginePush || modeChanged
+          );
+          lastPushedSnapshot = lastEffectiveTelemetry;
+          lastPushedUpdatedAt = lastEffectiveTelemetry.updatedAt;
+          lastPushedMode = mode;
+        }
         terminal.update(applyPsiOverride(shown));
       }
     };
@@ -1892,6 +1979,7 @@ const start = async () => {
       extraWads: [doomPerfMapWad],
       args: ["doom", "-file", doomPerfMapWad.name],
       onStatus: (message) => console.log(message),
+      preparedAssets: engineAssets,
       onEngineReady: (engine) => {
         const inputEngine = engine as DoomPerfEngine;
         if (inputEngine._DoomPerf_SetInputKeyState) {
@@ -1900,6 +1988,11 @@ const start = async () => {
         }
       },
     });
+
+    // The engine may have appeared between interval ticks; force one complete
+    // synchronization now so every field is initialized before the first useful
+    // frame, even if the latest telemetry sample itself has not changed.
+    refreshEffectiveTelemetry(true, true);
 
     // bootstrapEngine returns once callMain has handed control back (the
     // Asyncify game loop is scheduled); the first frame lands a tick later.

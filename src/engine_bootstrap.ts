@@ -9,12 +9,21 @@ export interface EngineBootstrapOptions {
   extraWads?: EngineWadFile[];
   args?: string[];
   onStatus?: (message: string) => void;
+  preparedAssets?: EngineBootstrapAssets;
   onEngineReady?: (engine: Record<string, unknown>) => void;
 }
 
 export interface EngineWadFile {
   url: string;
   name: string;
+}
+
+type LoadedExtraWad = { name: string; bytes: Uint8Array };
+
+export interface EngineBootstrapAssets {
+  engineModule: Promise<Record<string, unknown>>;
+  wadBytes: Promise<Uint8Array>;
+  extraWadBytes: Promise<LoadedExtraWad[]>;
 }
 
 type EngineModule = {
@@ -34,6 +43,37 @@ type EngineModule = {
 const defaultEngineScriptUrl = "/engine/doom.js";
 const defaultWasmUrl = "/engine/doom.wasm";
 
+const fetchWad = async (url: string, name?: string): Promise<Uint8Array> => {
+  const response = await fetch(url);
+  if (!response.ok) {
+    const label = name ? ` ${name}` : "";
+    throw new Error(`Failed to load WAD${label}: ${response.status} ${response.statusText}`);
+  }
+  return new Uint8Array(await response.arrayBuffer());
+};
+
+// Start the engine module and every WAD request together. Callers may await the
+// engine promise to decide whether a development fallback is needed without
+// serializing the large IWAD request behind that probe.
+export const prepareEngineAssets = ({
+  wadUrl,
+  engineScriptUrl = defaultEngineScriptUrl,
+  extraWads = [],
+}: Pick<EngineBootstrapOptions, "wadUrl" | "engineScriptUrl" | "extraWads">): EngineBootstrapAssets => {
+  const assets: EngineBootstrapAssets = {
+    engineModule: import(engineScriptUrl) as Promise<Record<string, unknown>>,
+    wadBytes: fetchWad(wadUrl),
+    extraWadBytes: Promise.all(
+      extraWads.map(async ({ name, url }) => ({ name, bytes: await fetchWad(url, name) }))
+    ),
+  };
+  // The engine import can settle first. Keep early WAD failures handled until
+  // bootstrapEngine awaits and propagates the original error.
+  assets.wadBytes.catch(() => {});
+  assets.extraWadBytes.catch(() => {});
+  return assets;
+};
+
 export async function bootstrapEngine({
   wadUrl,
   canvas,
@@ -43,6 +83,7 @@ export async function bootstrapEngine({
   extraWads = [],
   args = [],
   onStatus,
+  preparedAssets,
   onEngineReady,
 }: EngineBootstrapOptions): Promise<void> {
   // Derive the in-FS filename from the URL, dropping any "?v=" cache-bust query
@@ -56,29 +97,9 @@ export async function bootstrapEngine({
   // the WADs rather than dead last. The WASM is deliberately left to the
   // engine's own fetch so WebAssembly.instantiateStreaming keeps compiling it
   // as it arrives; pre-fetching it here would disable streaming compilation.
-  const enginePromise = import(engineScriptUrl) as Promise<Record<string, unknown>>;
-  const wadBytesPromise = fetch(wadUrl).then(async (response) => {
-    if (!response.ok) {
-      throw new Error(`Failed to load WAD: ${response.status} ${response.statusText}`);
-    }
-    return new Uint8Array(await response.arrayBuffer());
-  });
-  const extraWadBytesPromise = Promise.all(
-    extraWads.map(async ({ name, url }) => {
-      const extraResponse = await fetch(url);
-      if (!extraResponse.ok) {
-        throw new Error(`Failed to load WAD ${name}: ${extraResponse.status} ${extraResponse.statusText}`);
-      }
-      return { name, bytes: new Uint8Array(await extraResponse.arrayBuffer()) };
-    })
-  );
-  // If createModule throws before these are awaited, swallow the resulting
-  // unhandled rejection here; the underlying error still propagates when we
-  // await them once the module's filesystem is ready.
-  wadBytesPromise.catch(() => {});
-  extraWadBytesPromise.catch(() => {});
+  const assets = preparedAssets ?? prepareEngineAssets({ wadUrl, engineScriptUrl, extraWads });
 
-  const engineModule = await enginePromise;
+  const engineModule = await assets.engineModule;
   const createModule =
     (engineModule.default as (options: Record<string, unknown>) => Promise<EngineModule>) ??
     (engineModule.createDoomModule as (options: Record<string, unknown>) => Promise<EngineModule>) ??
@@ -116,8 +137,8 @@ export async function bootstrapEngine({
 
   // The WAD bytes have been downloading in parallel since the top of this
   // function (and alongside the streaming WASM); collect them now.
-  const wadBytes = await wadBytesPromise;
-  const extraWadBytes = await extraWadBytesPromise;
+  const wadBytes = await assets.wadBytes;
+  const extraWadBytes = await assets.extraWadBytes;
 
   const names = new Set<string>();
   names.add(wadNameLower);

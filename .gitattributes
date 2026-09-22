@@ -1,0 +1,4 @@
+# These files are unified diffs against id Software's 1997 source, whose
+# whitespace (including trailing spaces and tab indentation) must be preserved
+# verbatim so `patch` can apply without a whitespace-loosening mode.
+patches/doom/linuxdoom-1.10/*.patch whitespace=-blank-at-eol,-space-before-tab

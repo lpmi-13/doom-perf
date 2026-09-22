@@ -113,6 +113,11 @@ engine-driven visual instruments; none of them are static map geometry anymore.
 What is still left:
 
 - Add more per-room music or audio cues beyond the current interaction sting.
+  The supported audio path is currently sound-effects-only. MIDI playback is
+  intentionally absent from the product experience, and the unused experimental
+  Tone.js/MIDI stack has been removed to reduce startup cost. Future MIDI music
+  will need a deliberately lazy-loaded, audio-clock-based implementation rather
+  than restoring dormant music assets to the initial application bundle.
 
 ## Installation And Running
 

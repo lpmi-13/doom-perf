@@ -42,7 +42,6 @@ const hashOf = (paths) => {
 const wadVersion = watch ? "dev" : hashOf(["public/maps/doomperf-lab.wad"]);
 const iwadVersion = watch ? "dev" : hashOf(["public/wads/freedoom1.wad"]);
 const engineVersion = watch ? "dev" : hashOf(["public/engine/doom.js", "public/engine/doom.wasm"]);
-
 const htmlPath = "public/game/index.html";
 const bundlePath = "public/dist/index.js";
 
@@ -73,6 +72,7 @@ const stampPlugin = {
 const options = {
   entryPoints: ["src/index.ts"],
   bundle: true,
+  minify: !watch,
   sourcemap: true,
   outdir: "public/dist",
   define: {
