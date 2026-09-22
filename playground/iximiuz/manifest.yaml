@@ -94,7 +94,7 @@ playground:
                 You can also run checks via use-tool:
                   use-tool practice system
           drives:
-            - source: oci://ghcr.io/lpmi-13/doom-perf-rootfs:v16
+            - source: oci://ghcr.io/lpmi-13/doom-perf-rootfs:v17
               mount: /
               size: 20GiB
           network:
