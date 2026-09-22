@@ -16,6 +16,13 @@ import { createMenuButton } from "./ui/menuButton";
 import { mapManifest } from "./doomperf-map-manifest";
 import { playAssetSound, preloadAssetSound } from "./asset_sounds";
 import { installPerfProbe } from "./perf_probe";
+import { installInputLease } from "./input_lease";
+import { I_SetInputKeyState } from "./i_system";
+import {
+  KEY_RALT,
+  KEY_RCTRL,
+  KEY_RSHIFT,
+} from "./doomdef";
 
 // Cache-bust versions injected at build time by scripts/build-web.mjs (content
 // hashes of the WAD / engine). Under `--watch` they arrive as the "dev" sentinel,
@@ -109,6 +116,19 @@ if (!canvas) {
 if (!audio) {
   throw new Error("Missing #audio element.");
 }
+
+// Bound physical movement-key presses even when the browser loses a matching
+// keyup while an OS shortcut owns the keyboard.
+const inputLease = installInputLease();
+let inputLeaseConnected = false;
+const connectInputLease = (
+  setKeyState: (doomKey: number, pressed: boolean) => void,
+) => {
+  if (inputLeaseConnected) return;
+  inputLeaseConnected = true;
+  inputLease.connect(setKeyState);
+  window.addEventListener("pagehide", () => inputLease.close(), { once: true });
+};
 
 // Flipped true once the WASM engine has produced its first frame; gates both
 // the loading veil and the touch controls (see updatePrompt / finishLoading).
@@ -386,6 +406,9 @@ type DoomPerfEngine = {
   _DoomPerf_SetRenderInterp?: (enabled: number) => void; // 1.5 sub-tic interpolation toggle (off = ~35 fps cap)
   _DoomPerf_SetWingSleep?: (enabled: number) => void; // Part 3: freeze off-screen wings (off = keep all wings live)
   _DoomPerf_NotifyActivity?: () => void; // reset the idle timer from DOM-side interaction
+  _DoomPerf_ReleaseAllInput?: () => void; // clear held keys/buttons after browser focus transitions
+  _DoomPerf_GetNativeKeyDown?: (doomKey: number) => number;
+  _DoomPerf_SetInputKeyState?: (doomKey: number, pressed: number) => void;
 };
 
 const getEngine = () =>
@@ -1869,6 +1892,13 @@ const start = async () => {
       extraWads: [doomPerfMapWad],
       args: ["doom", "-file", doomPerfMapWad.name],
       onStatus: (message) => console.log(message),
+      onEngineReady: (engine) => {
+        const inputEngine = engine as DoomPerfEngine;
+        if (inputEngine._DoomPerf_SetInputKeyState) {
+          connectInputLease((doomKey, pressed) =>
+            inputEngine._DoomPerf_SetInputKeyState?.(doomKey, pressed ? 1 : 0));
+        }
+      },
     });
 
     // bootstrapEngine returns once callMain has handed control back (the
@@ -1887,8 +1917,35 @@ const start = async () => {
     //       idle/hibernate coast, so nudge the idle timer on those.
     //   ?perf-idle=off / ?interp=off — one-shot engine config from the querystrings.
     {
-      const applyHidden = () => getEngine()?._DoomPerf_SetHidden?.(document.hidden ? 1 : 0);
+      const releaseEngineInput = () => getEngine()?._DoomPerf_ReleaseAllInput?.();
+      const applyHidden = () => {
+        getEngine()?._DoomPerf_SetHidden?.(document.hidden ? 1 : 0);
+        if (document.hidden) releaseEngineInput();
+      };
       document.addEventListener("visibilitychange", applyHidden);
+      // Browser chrome and OS media/function keys can take focus before the page
+      // receives keyup. Release Doom's tracked inputs on both sides of a focus
+      // transition so a missed event can never latch movement or firing.
+      window.addEventListener("blur", releaseEngineInput);
+      window.addEventListener("focus", releaseEngineInput);
+      window.addEventListener("pagehide", releaseEngineInput);
+      window.addEventListener(
+        "keydown",
+        (event) => {
+          const engine = getEngine();
+          const modifiers: [string, number][] = [
+            ["Alt", KEY_RALT],
+            ["Control", KEY_RCTRL],
+            ["Shift", KEY_RSHIFT],
+          ];
+          for (const [name, doomKey] of modifiers) {
+            if (engine?._DoomPerf_GetNativeKeyDown?.(doomKey) && !event.getModifierState(name)) {
+              engine._DoomPerf_SetInputKeyState?.(doomKey, 0);
+            }
+          }
+        },
+        { capture: true }
+      );
       applyHidden();
       const notifyActivity = () => getEngine()?._DoomPerf_NotifyActivity?.();
       window.addEventListener("pointerdown", notifyActivity, { capture: true, passive: true });
@@ -1970,6 +2027,7 @@ const start = async () => {
     return;
   }
   console.warn("Engine bundle not found, falling back to stub renderer.");
+  connectInputLease(I_SetInputKeyState);
   await D_DoomMain(wadUrl, canvas);
   finishLoading();
 };

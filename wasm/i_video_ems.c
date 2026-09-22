@@ -1056,6 +1056,17 @@ static SDL_Texture* texture;
 static uint32_t rgba_framebuffer[SCREENWIDTH * SCREENHEIGHT];
 static uint32_t palette_rgba[256];
 static boolean graphics_initialized = false;
+// Track the keyboard state posted to Doom so browser lifecycle cleanup and the
+// bounded movement-key lease can repair a keyup lost to an OS shortcut.
+static boolean doomperf_keys_down[256];
+
+EMSCRIPTEN_KEEPALIVE
+int DoomPerf_GetNativeKeyDown(int doom_key)
+{
+    if (doom_key < 0 || doom_key >= 256)
+        return 0;
+    return doomperf_keys_down[doom_key] != 0;
+}
 
 static int TranslateKey(SDL_Keycode key)
 {
@@ -1167,6 +1178,9 @@ static void PostKeyEvent(evtype_t type, SDL_Keycode key)
     event.data2 = 0;
     event.data3 = 0;
     D_PostEvent(&event);
+
+    if (doom_key >= 0 && doom_key < (int)(sizeof(doomperf_keys_down) / sizeof(doomperf_keys_down[0])))
+        doomperf_keys_down[doom_key] = type == ev_keydown;
 }
 
 static void PostMouseEvent(int buttons, int xrel, int yrel)
@@ -1178,6 +1192,80 @@ static void PostMouseEvent(int buttons, int xrel, int yrel)
     event.data2 = xrel << 2;
     event.data3 = -yrel << 2;
     D_PostEvent(&event);
+}
+
+static boolean DoomPerf_ValidKey(int doom_key)
+{
+    return doom_key >= 0
+        && doom_key < (int)(sizeof(doomperf_keys_down) / sizeof(doomperf_keys_down[0]));
+}
+
+// Posting a duplicate keyup is harmless and repairs Doom's key state when the
+// browser loses a release during an OS-owned keyboard shortcut.
+static void DoomPerf_ReleaseInputKey(int doom_key)
+{
+    event_t event;
+
+    if (!DoomPerf_ValidKey(doom_key))
+        return;
+
+    event.type = ev_keyup;
+    event.data1 = doom_key;
+    event.data2 = 0;
+    event.data3 = 0;
+    D_PostEvent(&event);
+    doomperf_keys_down[doom_key] = false;
+}
+
+// Apply a bounded movement-key lease transition. Down is idempotent; release is
+// always posted so Doom's authoritative state is repaired after a lost keyup.
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_SetInputKeyState(int doom_key, int pressed)
+{
+    event_t event;
+
+    if (!DoomPerf_ValidKey(doom_key))
+        return;
+
+    if (!pressed)
+    {
+        DoomPerf_ReleaseInputKey(doom_key);
+        return;
+    }
+    if (doomperf_keys_down[doom_key])
+        return;
+
+    event.type = ev_keydown;
+    event.data1 = doom_key;
+    event.data2 = 0;
+    event.data3 = 0;
+    D_PostEvent(&event);
+    doomperf_keys_down[doom_key] = true;
+}
+
+EMSCRIPTEN_KEEPALIVE
+void DoomPerf_ReleaseAllInput(void)
+{
+    event_t event;
+    int doom_key;
+
+    event.type = ev_keyup;
+    event.data2 = 0;
+    event.data3 = 0;
+    for (doom_key = 0;
+         doom_key < (int)(sizeof(doomperf_keys_down) / sizeof(doomperf_keys_down[0]));
+         doom_key++)
+    {
+        if (!doomperf_keys_down[doom_key])
+            continue;
+
+        event.data1 = doom_key;
+        D_PostEvent(&event);
+        doomperf_keys_down[doom_key] = false;
+    }
+
+    // Mouse buttons are stateful in Doom too; clear them on the same transition.
+    PostMouseEvent(0, 0, 0);
 }
 
 static void PollEvents(void)
@@ -1194,6 +1282,8 @@ static void PollEvents(void)
         {
         case SDL_KEYDOWN:
         case SDL_KEYUP:
+            doomperf_last_input_ms = (uint32_t) SDL_GetTicks();
+            break;
         case SDL_MOUSEBUTTONDOWN:
         case SDL_MOUSEBUTTONUP:
         case SDL_MOUSEMOTION:

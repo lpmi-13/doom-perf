@@ -9,6 +9,7 @@ export interface EngineBootstrapOptions {
   extraWads?: EngineWadFile[];
   args?: string[];
   onStatus?: (message: string) => void;
+  onEngineReady?: (engine: Record<string, unknown>) => void;
 }
 
 export interface EngineWadFile {
@@ -42,6 +43,7 @@ export async function bootstrapEngine({
   extraWads = [],
   args = [],
   onStatus,
+  onEngineReady,
 }: EngineBootstrapOptions): Promise<void> {
   // Derive the in-FS filename from the URL, dropping any "?v=" cache-bust query
   // so it stays a clean ".wad" name (IdentifyVersion keys on doom1.wad etc.).
@@ -104,6 +106,7 @@ export async function bootstrapEngine({
   // Expose the running engine so the telemetry client can push live metrics
   // into the WASM module (e.g. DoomPerf_SetCpuCore for CPU room instruments).
   (globalThis as { DoomEngine?: unknown }).DoomEngine = moduleInstance;
+  onEngineReady?.(moduleInstance as Record<string, unknown>);
 
   if (moduleInstance.FS?.chdir) {
     moduleInstance.FS.chdir("/");

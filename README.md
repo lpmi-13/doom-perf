@@ -561,6 +561,20 @@ composite with software GL and have no real vsync, so absolute fps is only
 `--headed` or `--mode manual` for real GPU-composited fps, and `--repeat N` to
 take the median of N tour runs against per-run noise.
 
+## Stuck-input protection
+
+Browsers can lose a movement-key release while an operating-system shortcut
+owns the keyboard. Physical arrow-key presses therefore use a bounded lease:
+four seconds without a trusted down, repeat, or up event releases the key, and
+a non-renewable 60-second cap bounds the press even if repeats continue.
+Expired repeats are ignored until a fresh non-repeat keydown begins a new
+press. This deliberately prefers a possible early release during an unusually
+long silent hold over movement remaining latched indefinitely.
+
+Blur, focus, page-hide, and hidden-visibility transitions also clear held
+input. Later keyboard events reconcile stale Alt, Control, and Shift state.
+The same behavior is used by the WebAssembly engine and TypeScript fallback.
+
 ## Repository Map
 
 | Path | Role |

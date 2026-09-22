@@ -20,6 +20,9 @@ import {
   KEY_MINUS,
   KEY_PAUSE,
   KEY_RIGHTARROW,
+  KEY_RALT,
+  KEY_RCTRL,
+  KEY_RSHIFT,
   KEY_TAB,
   KEY_UPARROW,
   TICRATE,
@@ -27,6 +30,7 @@ import {
 import { D_PostEvent, EvType, type Event } from "./d_event";
 
 const pendingEvents: Event[] = [];
+const heldKeys = new Set<number>();
 let startTime = 0;
 let isInitialized = false;
 
@@ -57,6 +61,9 @@ const specialKeyMap: Record<string, number> = {
   Pause: KEY_PAUSE,
   "-": KEY_MINUS,
   "=": KEY_EQUALS,
+  Alt: KEY_RALT,
+  Control: KEY_RCTRL,
+  Shift: KEY_RSHIFT,
 };
 
 const toDoomKey = (event: KeyboardEvent): number | null => {
@@ -73,12 +80,36 @@ const toDoomKey = (event: KeyboardEvent): number | null => {
 };
 
 const handleKeyEvent = (type: EvType) => (event: KeyboardEvent) => {
+  const modifiers: [string, number][] = [
+    ["Alt", KEY_RALT],
+    ["Control", KEY_RCTRL],
+    ["Shift", KEY_RSHIFT],
+  ];
+  for (const [name, key] of modifiers) {
+    if (heldKeys.has(key) && !event.getModifierState(name)) releaseInputKey(key);
+  }
   const key = toDoomKey(event);
   if (key === null) {
     return;
   }
   event.preventDefault();
+  if (type === EvType.ev_keydown) {
+    heldKeys.add(key);
+  } else {
+    heldKeys.delete(key);
+  }
   pendingEvents.push({ type, data1: key });
+};
+
+const releaseInputKey = (key: number) => {
+  pendingEvents.push({ type: EvType.ev_keyup, data1: key });
+  heldKeys.delete(key);
+};
+
+const releaseAllInput = () => {
+  heldKeys.forEach((key) => pendingEvents.push({ type: EvType.ev_keyup, data1: key }));
+  heldKeys.clear();
+  pendingEvents.push({ type: EvType.ev_mouse, data1: 0, data2: 0, data3: 0 });
 };
 
 const handleMouseEvent = (event: MouseEvent) => {
@@ -106,6 +137,12 @@ export const I_Init = () => {
   window.addEventListener("mousemove", handleMouseEvent);
   window.addEventListener("mousedown", handleMouseEvent);
   window.addEventListener("mouseup", handleMouseEvent);
+  window.addEventListener("blur", releaseAllInput);
+  window.addEventListener("focus", releaseAllInput);
+  window.addEventListener("pagehide", releaseAllInput);
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) releaseAllInput();
+  });
 };
 
 export const I_GetTime = () => {
@@ -120,4 +157,17 @@ export const I_StartTic = () => {
       D_PostEvent(event);
     }
   }
+};
+
+// Apply a movement-key lease transition directly. Down is idempotent; up is
+// always posted so the fallback's authoritative state is repaired even if its
+// browser-facing tracker has drifted.
+export const I_SetInputKeyState = (key: number, pressed: boolean) => {
+  if (pressed) {
+    if (heldKeys.has(key)) return;
+    heldKeys.add(key);
+    pendingEvents.push({ type: EvType.ev_keydown, data1: key });
+    return;
+  }
+  releaseInputKey(key);
 };
