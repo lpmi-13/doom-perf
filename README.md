@@ -569,12 +569,12 @@ take the median of N tour runs against per-run noise.
 ## Stuck-input protection
 
 Browsers can lose a movement-key release while an operating-system shortcut
-owns the keyboard. Physical arrow-key presses therefore use a bounded lease:
-four seconds without a trusted down, repeat, or up event releases the key, and
-a non-renewable 60-second cap bounds the press even if repeats continue.
-Expired repeats are ignored until a fresh non-repeat keydown begins a new
-press. This deliberately prefers a possible early release during an unusually
-long silent hold over movement remaining latched indefinitely.
+owns the keyboard. Physical arrow-key presses therefore use a lease: the
+operating system auto-repeats only the most recently pressed key, so four
+seconds without a trusted down or repeat event from that key releases it. A key
+shadowed by a later arrow press (holding forward while tapping a turn key)
+legitimately stops repeating and is never released for silence. Expired
+repeats are ignored until a fresh non-repeat keydown begins a new press.
 
 Blur, focus, page-hide, and hidden-visibility transitions also clear held
 input. Later keyboard events reconcile stale Alt, Control, and Shift state.

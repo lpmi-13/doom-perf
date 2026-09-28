@@ -7,10 +7,11 @@ import {
 
 // Browser keyboard events are not an authoritative physical-state source: an
 // OS shortcut can consume a matching keyup without blurring or hiding the page.
-// Bound every physical movement-key epoch so that this ambiguity can interrupt
-// a legitimate unusually long hold, but can never leave Doom moving forever.
+// The OS auto-repeats only the most recently pressed key, so that key's repeats
+// are evidence it is still held; silence from it means its keyup went missing.
+// A key shadowed by a later movement press legitimately stops repeating (hold
+// forward, tap a turn key) and is never expired for silence.
 const INPUT_LEASE_SILENCE_MS = 4_000;
-const INPUT_LEASE_MAX_HOLD_MS = 60_000;
 
 const movementKeys: Record<string, number> = {
   ArrowLeft: KEY_LEFTARROW,
@@ -21,7 +22,6 @@ const movementKeys: Record<string, number> = {
 
 type Lease = {
   doomKey: number;
-  pressedAt: number;
   lastEvidenceAt: number;
   expired: boolean;
   releaseDelivered: boolean;
@@ -35,6 +35,8 @@ export type InputLeaseController = {
 export const installInputLease = (): InputLeaseController => {
   const leases = new Map<string, Lease>();
   let setKeyState: ((doomKey: number, pressed: boolean) => void) | undefined;
+  // The movement key the OS is expected to be auto-repeating, if any.
+  let repeatingCode: string | undefined;
   let closed = false;
 
   const deliverRelease = (lease: Lease) => {
@@ -50,15 +52,11 @@ export const installInputLease = (): InputLeaseController => {
   };
 
   const check = () => {
-    const now = performance.now();
-    for (const lease of leases.values()) {
-      if (lease.expired) continue;
-      if (
-        now - lease.pressedAt >= INPUT_LEASE_MAX_HOLD_MS ||
-        now - lease.lastEvidenceAt >= INPUT_LEASE_SILENCE_MS
-      ) {
-        expire(lease);
-      }
+    if (repeatingCode === undefined) return;
+    const lease = leases.get(repeatingCode);
+    if (!lease || lease.expired) return;
+    if (performance.now() - lease.lastEvidenceAt >= INPUT_LEASE_SILENCE_MS) {
+      expire(lease);
     }
   };
 
@@ -83,11 +81,11 @@ export const installInputLease = (): InputLeaseController => {
       }
       leases.set(event.code, {
         doomKey,
-        pressedAt: now,
         lastEvidenceAt: now,
         expired: false,
         releaseDelivered: false,
       });
+      repeatingCode = event.code;
       return;
     }
 
@@ -101,11 +99,11 @@ export const installInputLease = (): InputLeaseController => {
       }
       leases.set(event.code, {
         doomKey,
-        pressedAt: now,
         lastEvidenceAt: now,
         expired: false,
         releaseDelivered: false,
       });
+      repeatingCode = event.code;
       // SDL can continue to label this as a repeat because its browser-side
       // keyboard state never saw the old keyup. Start the fresh epoch through
       // the idempotent engine API and keep the stale SDL state out of the path.
@@ -117,13 +115,17 @@ export const installInputLease = (): InputLeaseController => {
     }
 
     // Both a flagged repeat and a duplicate down provide recent evidence for
-    // the current epoch. The absolute cap remains anchored to pressedAt.
+    // the current epoch, and mark this key as the one the OS is repeating.
     current.lastEvidenceAt = now;
+    repeatingCode = event.code;
   };
 
   const onKeyUp = (event: KeyboardEvent) => {
     if (!event.isTrusted || movementKeys[event.code] === undefined) return;
     leases.delete(event.code);
+    // Releasing the repeating key does not resume repeats for any key still
+    // held underneath it, so nothing is left to time out.
+    if (repeatingCode === event.code) repeatingCode = undefined;
   };
 
   const expireForLifecycle = () => {
@@ -139,11 +141,7 @@ export const installInputLease = (): InputLeaseController => {
   window.addEventListener("pagehide", expireForLifecycle);
   document.addEventListener("visibilitychange", expireWhenHidden);
 
-  const checkEveryMs = Math.max(
-    16,
-    Math.min(100, INPUT_LEASE_SILENCE_MS / 4, INPUT_LEASE_MAX_HOLD_MS / 4),
-  );
-  const interval = window.setInterval(check, checkEveryMs);
+  const interval = window.setInterval(check, 100);
 
   return {
     connect(nextSetKeyState) {
@@ -162,6 +160,7 @@ export const installInputLease = (): InputLeaseController => {
       window.removeEventListener("pagehide", expireForLifecycle);
       document.removeEventListener("visibilitychange", expireWhenHidden);
       leases.clear();
+      repeatingCode = undefined;
       setKeyState = undefined;
     },
   };
