@@ -94,7 +94,7 @@ playground:
                 You can also run checks via use-tool:
                   use-tool practice system
           drives:
-            - source: oci://ghcr.io/lpmi-13/doom-perf-rootfs:v17
+            - source: oci://ghcr.io/lpmi-13/doom-perf-rootfs:v18
               mount: /
               size: 20GiB
           network:
@@ -137,8 +137,12 @@ playground:
                     *) echo "unsupported use-tool release architecture: $(uname -m)" >&2; exit 1 ;;
                   esac
 
-                  tag="$(curl -fsSL "https://api.github.com/repos/${release_repo}/releases/latest" | jq -r '.tag_name // empty')"
-                  [[ -n "${tag}" ]] || { echo "could not resolve latest use-tool release tag" >&2; exit 1; }
+                  # Resolve the tag from the web redirect (/releases/latest -> /releases/tag/<tag>),
+                  # NOT api.github.com: playground VMs share egress IPs, so the unauthenticated
+                  # API limit (60/hr/IP) is routinely exhausted and returns 403.
+                  tag="$(curl -fsSL -o /dev/null -w '%{url_effective}' "https://github.com/${release_repo}/releases/latest")"
+                  tag="${tag##*/releases/tag/}"
+                  [[ -n "${tag}" && "${tag}" != http* ]] || { echo "could not resolve latest use-tool release tag" >&2; exit 1; }
 
                   version="${tag#v}"
                   asset="use-tool_${version}_linux_${arch}.tar.gz"
