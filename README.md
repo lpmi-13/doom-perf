@@ -13,7 +13,7 @@ utilization, saturation, and errors become Doom rooms, visualizations, and salie
 signals.
 
 Launch Release Trailer:
-https://youtu.be/px4bUnA8-M4
+https://youtu.be/j_Fe7hDtjzg
 
 ![Title screen](images/title-screen.png)
 
