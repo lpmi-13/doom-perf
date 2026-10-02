@@ -11,8 +11,9 @@ set -euo pipefail
 # engine modifications reproducible from doom-typescript alone.
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SRC_DIR="${DOOM_SRC_DIR:-$ROOT_DIR/DOOM/linuxdoom-1.10}"
+SRC_DIR="${DOOM_SRC_DIR:-$ROOT_DIR/../doom/linuxdoom-1.10}"
 PLATFORM_DIR="${DOOM_PLATFORM_DIR:-$ROOT_DIR/wasm}"
+export EM_CACHE="${EM_CACHE:-$HOME/.emscripten_cache}"
 PATCH_DIR="${DOOM_PATCH_DIR:-$ROOT_DIR/patches/doom/linuxdoom-1.10}"
 BUILD_DIR="$ROOT_DIR/.build/doom"
 STAGE_SRC="$BUILD_DIR/linuxdoom-1.10"
@@ -81,6 +82,14 @@ fi
 
 mkdir -p "$OUT_DIR"
 
+# Fail before compiling if a renderer safety patch went missing. The sentinel
+# must be 16 bits: 0xff is a valid row on a 400/600-line framebuffer.
+grep -Eq '^  unsigned short[[:space:]]+top\[SCREENWIDTH\];' "$STAGE_SRC/r_defs.h"
+grep -Eq '^  unsigned short[[:space:]]+bottom\[SCREENWIDTH\];' "$STAGE_SRC/r_defs.h"
+[[ $(grep -c '0xffff' "$STAGE_SRC/r_plane.c") -eq 3 ]]
+grep -Fq '#define MAXSEGS' "$STAGE_SRC/r_bsp.c"
+grep -Fq '(SCREENWIDTH/2 + 96)' "$STAGE_SRC/r_bsp.c"
+
 # Memory sizing (PERF_TUNE_PLAN Part 4.1). The 16 MB zone heap (m_misc.c mb_used)
 # means boot alone needs ~20 MB, and the measured working-set peak from the perf
 # harness is a stable ~27.3 MB when the full map is toured. INITIAL_MEMORY=32 MB
@@ -95,9 +104,18 @@ while IFS= read -r file; do
 done < <(find "$STAGE_SRC" -maxdepth 1 -name '*.c' \
   ! -name 'i_video.c' ! -name 'i_sound.c' ! -name 'i_net.c')
 
-SRC_FILES+=("$PLATFORM_DIR/i_video_ems.c" "$PLATFORM_DIR/i_sound_ems.c" "$PLATFORM_DIR/i_net_ems.c")
+SRC_FILES+=("$PLATFORM_DIR/i_video_ems.c" "$PLATFORM_DIR/i_sound_ems.c" "$PLATFORM_DIR/i_net_ems.c" "$PLATFORM_DIR/menu_font.c")
 
-emcc "${SRC_FILES[@]}" \
+build_variant() {
+  local width="$1" height="$2" target="$3"
+  local resolution_line="#define SCREENWIDTH  $width"
+  local height_line="#define SCREENHEIGHT $height"
+  sed -i -E "s/^#define SCREENWIDTH  [0-9]+$/$resolution_line/; s/^#define SCREENHEIGHT [0-9]+$/$height_line/" "$STAGE_SRC/doomdef.h"
+  grep -Fxq "$resolution_line" "$STAGE_SRC/doomdef.h" || { echo "WIDTH edit failed: $width" >&2; exit 1; }
+  grep -Fxq "$height_line" "$STAGE_SRC/doomdef.h" || { echo "HEIGHT edit failed: $height" >&2; exit 1; }
+  mkdir -p "$target"
+  printf 'Building %sx%s engine in %s\n' "$width" "$height" "$target"
+  emcc "${SRC_FILES[@]}" \
   -I"$STAGE_SRC" \
   -include "$PLATFORM_DIR/doom_emscripten_compat.h" \
   -O2 \
@@ -114,6 +132,11 @@ emcc "${SRC_FILES[@]}" \
   -s NO_EXIT_RUNTIME=1 \
   -s "EXPORTED_RUNTIME_METHODS=['FS','FS_createDataFile','FS_analyzePath','FS_createPath','FS_chdir','callMain']" \
   -s FILESYSTEM=1 \
-  -o "$OUT_DIR/doom.js"
+  -o "$target/doom.js"
+  test -s "$target/doom.js" && test -s "$target/doom.wasm"
+}
 
-printf 'Engine build complete: %s/doom.js, %s/doom.wasm\n' "$OUT_DIR" "$OUT_DIR"
+build_variant 320 200 "$OUT_DIR"
+build_variant 640 400 "$OUT_DIR/640x400"
+build_variant 960 600 "$OUT_DIR/960x600"
+printf 'All three engine resolutions built.\n'

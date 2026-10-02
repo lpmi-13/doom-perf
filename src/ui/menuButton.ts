@@ -1,10 +1,5 @@
-// A small, always-visible "menu" icon for touch devices, pinned to the top-right
-// of the screen. Tapping it opens the in-game Doom menu (data-source / options) —
-// a far more discoverable affordance than the prior hold-to-open long-press,
-// which left no hint that the menu existed at all. Shown only during active
-// gameplay (the same times as the movement pad); the menu's own BACK button
-// closes it again. Like the other touch controls it is created unconditionally
-// but only ever shown on touch devices (updatePrompt gates show/hide).
+// Touch menu button pinned to the top-right during gameplay. It sends Escape
+// to open the native Doom menu over the current game view.
 
 export const createMenuButton = (onActivate: () => void) => {
   const button = document.createElement("button");

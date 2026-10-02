@@ -1,7 +1,7 @@
 // On-screen menu controls for touch devices. A phone has no keyboard, so the
-// title/menu screens (data-source select, options) need a way to navigate:
-// ▲/▼ move the selection, SELECT confirms (Enter), BACK steps out / toggles the
-// menu (Escape — also a fallback to open it if the auto-open is ever missed).
+// title/menu screens (mode and resolution) need a way to navigate:
+// ▲/▼ move the selection, SELECT confirms (Enter), BACK goes up one level
+// (closing the menu at the root) (Backspace). Escape still closes it.
 // Shown only while no level is active; the movement pad takes over in-game.
 // Like the pad, it drives the WASM engine with synthetic KeyboardEvents on
 // `document` (the engine reads keys from a document-level listener).
@@ -12,7 +12,7 @@ const KEYS: Record<MenuAction, { code: string; keyCode: number }> = {
   up: { code: "ArrowUp", keyCode: 38 },
   down: { code: "ArrowDown", keyCode: 40 },
   select: { code: "Enter", keyCode: 13 },
-  back: { code: "Escape", keyCode: 27 },
+  back: { code: "Backspace", keyCode: 8 },
 };
 
 const dispatchKey = (type: "keydown" | "keyup", action: MenuAction) => {

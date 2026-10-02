@@ -25,6 +25,7 @@
  // just for profiling 
  int			dccount;
  
+-//
 +// Doom Perf: CPU core pillar streaks. r_segs.c sets these globals before
 +// each colfunc() call; R_DrawColumn switches into a procedural rising-streak
 +// pattern when active. The streak helper is defined further below alongside
@@ -75,7 +76,7 @@
 +static byte R_DoomPerfDiskDonutPixel (int tx, int ty, byte background);
 +static byte R_DoomPerfPistonPixel (int tx, int ty, int lane);
 +
- //
++//
 +// Doom Perf: network ethernet-jack GREY SHELL (display 40). The wall above the stepped-arch
 +// mouth reads as an RJ45 jack: a grey metal SHELL (a flat-topped rectangle hugging the top of
 +// the tunnel) framed by the wing's blue computer-tile wall. The bed's upper texture is pegged
@@ -1310,3 +1311,12 @@
  	
  	xfrac += ds_xstep; 
  	yfrac += ds_ystep; 
+@@ -744,7 +1976,7 @@
+ 
+     char*	name;
+ 	
+-    if (scaledviewwidth == 320)
++    if (scaledviewwidth == SCREENWIDTH)
+ 	return;
+ 	
+     if ( gamemode == commercial)

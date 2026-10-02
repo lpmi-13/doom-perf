@@ -3,6 +3,12 @@
 
 #include <alloca.h>
 
+// The native menu requests a different engine build; the browser consumes the
+// request and reloads with the matching WASM bundle.
+extern int doomperf_resolution_request;
+// Temporary per-patch font enlargement used by the native menu renderer.
+extern int doomperf_patch_scale;
+
 // Emscripten's compat string header declares strupr with a different signature
 // than the local helper in Linux Doom's w_wad.c.
 #define strupr emscripten_compat_strupr
@@ -276,10 +282,24 @@ void DoomPerf_UpdateTitleLut(void);
 // Doom Perf: the data-source ("SELECT DATA SOURCE") menu font is recoloured to a
 // high-contrast cool white so it reads over the flame-graph title. V_DrawPatch
 // remaps font pixels through doomperf_menu_lut while doomperf_menu_remap is set
-// (m_menu.c M_DrawMode). DoomPerf_EnsureMenuLut builds it once from PLAYPAL. All
-// defined in i_video_ems.c.
+// (m_menu.c M_DpDraw). DoomPerf_EnsureMenuLut builds it once from PLAYPAL;
+// DoomPerf_SetMenuTone picks the bright (0) or muted (1) table. All defined in
+// i_video_ems.c.
 extern int doomperf_menu_remap;
-extern unsigned char doomperf_menu_lut[256];
+extern unsigned char* doomperf_menu_lut;
 void DoomPerf_EnsureMenuLut(void);
+void DoomPerf_SetMenuTone(int muted);
+
+// Anti-aliased menu typeface (wasm/menu_font.c) for the 640x400 / 960x600
+// engines; Available() is 0 at 320x200, where the menu keeps the HUD font.
+// style 0 = item, 1 = small; tone 0 = bright, 1 = muted. UI-unit coordinates.
+int DoomPerf_MenuFontAvailable(void);
+int DoomPerf_MenuTextWidth(int style, const char* s);
+void DoomPerf_MenuDrawText(int x, int y, int style, int tone, const char* s);
+extern int doomperf_ui_scale;
+
+// Set by DoomPerf_ResumeMode (i_video_ems.c); D_Display skips the title->level
+// melt once when it is set.
+extern int doomperf_skip_wipe;
 
 #endif

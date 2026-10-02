@@ -1,0 +1,15 @@
+# Doom Perf engine patch: am_map.c
+#
+# Higher-resolution modes have no status bar, so their automap uses the full
+# framebuffer. Keep the original 320x200 layout unchanged.
+
+--- a/am_map.c
++++ b/am_map.c
+@@ -221,6 +221,6 @@
+ boolean    	automapactive = false;
+ static int 	finit_width = SCREENWIDTH;
+-static int 	finit_height = SCREENHEIGHT - 32;
++static int 	finit_height = SCREENWIDTH == 320 ? SCREENHEIGHT - 32 : SCREENHEIGHT;
+ 
+ // location of window on screen
+ static int 	f_x;

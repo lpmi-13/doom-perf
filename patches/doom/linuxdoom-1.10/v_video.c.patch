@@ -9,7 +9,66 @@
 # see scripts/build-doom-wasm.sh.
 --- a/v_video.c
 +++ b/v_video.c
-@@ -253,7 +253,7 @@
+@@ -197,6 +197,12 @@
+  
+ 
+ //
++// 2D art uses Doom's original 320x200 coordinates even when the world renderer
++// uses a larger framebuffer. D_Display enables scaling for the title and menus;
++// the same high-resolution path clips native-coordinate game overlays at edges.
++int doomperf_ui_scale = 0;
++int doomperf_patch_scale = 1;
++
+ // V_DrawPatch
+ // Masks a column based masked pic to the screen. 
+ //
+@@ -215,6 +221,45 @@
+     byte*	dest;
+     byte*	source; 
+     int		w; 
++
++    if (scrn == 0 && (SCREENWIDTH > 320 || doomperf_patch_scale > 1))
++    {
++        int ui_scale = doomperf_ui_scale ? SCREENWIDTH / 320 : 1;
++        int scale = ui_scale * doomperf_patch_scale;
++        int colno, row, dx, dy;
++        int px, py, xbase, ybase;
++        byte color;
++        xbase = x * ui_scale - SHORT(patch->leftoffset) * scale;
++        ybase = y * ui_scale - SHORT(patch->topoffset) * scale;
++        for (colno = 0; colno < SHORT(patch->width); colno++)
++        {
++            column = (column_t *)((byte *)patch + LONG(patch->columnofs[colno]));
++            while (column->topdelta != 0xff)
++            {
++                source = (byte *)column + 3;
++                for (row = 0; row < column->length; row++)
++                {
++                    color = source[row];
++                    color = doomperf_title_remap ? doomperf_title_lut[color]
++                        : doomperf_menu_remap ? doomperf_menu_lut[color] : color;
++                    for (dy = 0; dy < scale; dy++)
++                    {
++                        py = ybase + (column->topdelta + row) * scale + dy;
++                        if ((unsigned)py >= SCREENHEIGHT) continue;
++                        for (dx = 0; dx < scale; dx++)
++                        {
++                            px = xbase + colno * scale + dx;
++                            if ((unsigned)px < SCREENWIDTH)
++                                screens[0][py * SCREENWIDTH + px] = color;
++                        }
++                    }
++                }
++                column = (column_t *)((byte *)column + column->length + 4);
++            }
++        }
++        V_MarkRect(0, 0, SCREENWIDTH, SCREENHEIGHT);
++        return;
++    }
+ 	 
+     y -= SHORT(patch->topoffset); 
+     x -= SHORT(patch->leftoffset); 
+@@ -253,7 +298,7 @@
  			 
  	    while (count--) 
  	    { 
@@ -18,7 +77,7 @@
  		dest += SCREENWIDTH; 
  	    } 
  	    column = (column_t *)(  (byte *)column + column->length 
-@@ -318,7 +318,7 @@
+@@ -318,7 +363,7 @@
  			 
  	    while (count--) 
  	    { 
@@ -27,7 +86,7 @@
  		dest += SCREENWIDTH; 
  	    } 
  	    column = (column_t *)(  (byte *)column + column->length 
-@@ -384,7 +384,7 @@
+@@ -384,7 +429,7 @@
   
  	    while (count--) 
  	    { 

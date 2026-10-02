@@ -41,7 +41,17 @@ const hashOf = (paths) => {
 // so the bundle expands "dev" to a fresh runtime timestamp instead).
 const wadVersion = watch ? "dev" : hashOf(["public/maps/doomperf-lab.wad"]);
 const iwadVersion = watch ? "dev" : hashOf(["public/wads/freedoom1.wad"]);
-const engineVersion = watch ? "dev" : hashOf(["public/engine/doom.js", "public/engine/doom.wasm"]);
+const enginePairVersion = (directory) => {
+  if (watch) return "dev";
+  const paths = [`${directory}/doom.js`, `${directory}/doom.wasm`];
+  return paths.every(existsSync) ? hashOf(paths) : "missing";
+};
+const engineVersion = enginePairVersion("public/engine");
+const engine640Version = enginePairVersion("public/engine/640x400");
+const engine960Version = enginePairVersion("public/engine/960x600");
+if (!watch && [engineVersion, engine640Version, engine960Version].includes("missing")) {
+  throw new Error("Build all three engine resolutions before building the production web bundle.");
+}
 const htmlPath = "public/game/index.html";
 const bundlePath = "public/dist/index.js";
 
@@ -63,7 +73,7 @@ const stampPlugin = {
       if (result.errors.length > 0) return;
       const bundleVersion = stampBundleVersion();
       if (bundleVersion) {
-        console.log(`[build-web] bundle=${bundleVersion} wad=${wadVersion} iwad=${iwadVersion} engine=${engineVersion}`);
+        console.log(`[build-web] bundle=${bundleVersion} wad=${wadVersion} iwad=${iwadVersion} engine=${engineVersion} high=${engine640Version} ultra=${engine960Version}`);
       }
     });
   },
@@ -79,6 +89,8 @@ const options = {
     __WAD_VERSION__: JSON.stringify(wadVersion),
     __IWAD_VERSION__: JSON.stringify(iwadVersion),
     __ENGINE_VERSION__: JSON.stringify(engineVersion),
+    __ENGINE_640_VERSION__: JSON.stringify(engine640Version),
+    __ENGINE_960_VERSION__: JSON.stringify(engine960Version),
   },
   plugins: [stampPlugin],
 };

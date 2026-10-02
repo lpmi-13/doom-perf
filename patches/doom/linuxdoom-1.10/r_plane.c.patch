@@ -80,7 +80,15 @@
 +
      lastvisplane = visplanes;
      lastopening = openings;
-     
+    
+@@ -297,6 +334,6 @@
+ 
+     for (x=intrl ; x<= intrh ; x++)
+-	if (pl->top[x] != 0xff)
++	if (pl->top[x] != 0xffff)
+ 	    break;
+ 
+     if (x > intrh)
 @@ -420,6 +457,21 @@
  	}
  	
@@ -103,6 +111,15 @@
  	ds_source = W_CacheLumpNum(firstflat +
  				   flattranslation[pl->picnum],
  				   PU_STATIC);
+@@ -435,6 +487,6 @@
+ 	planezlight = zlight[light];
+ 
+-	pl->top[pl->maxx+1] = 0xff;
+-	pl->top[pl->minx-1] = 0xff;
++	pl->top[pl->maxx+1] = 0xffff;
++	pl->top[pl->minx-1] = 0xffff;
+ 		
+ 	stop = pl->maxx + 1;
 @@ -449,5 +501,6 @@
  	}
  	

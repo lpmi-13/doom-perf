@@ -48,11 +48,11 @@
 +// wings put many separated solid structures in one sightline (the network
 +// hall's pillars, bus housings, alcove edges and edge-on stair risers down its
 +// full length), which pushed the disjoint-span count past 32. The count is
-+// provably bounded by viewwidth/2 + 2 sentinels (<= 162 at SCREENWIDTH 320)
-+// since every entry needs a >= 1px visible gap to the next, so 256 can NEVER
-+// overflow for ANY view or geometry; it costs ~2 KB of BSS. Same class of fix
++// provably bounded by viewwidth/2 + 2 sentinels, since every entry needs a
++// >= 1px visible gap to the next. Keep at least 256 entries at 320x200 and
++// scale the bound with resolution. Same class of fix
 +// as MAXVISPLANES / MAXVISSPRITES / MAXDRAWSEGS.
-+#define MAXSEGS		256
++#define MAXSEGS		(SCREENWIDTH/2 + 96)
  
  // newend is one past the last valid seg
  cliprange_t*	newend;

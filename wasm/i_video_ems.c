@@ -86,6 +86,7 @@ int doomperf_net_qdisc_known = 0;
 int doomperf_net_qdisc_flow = 0;
 int doomperf_net_qdisc_sat = 0;
 int doomperf_sim_mode = 0;
+int doomperf_resolution_request = 0;
 
 // Doom Perf: render-pacing controller (PERF_TUNE_PLAN.md Part 1 — "stop rendering
 // frames nobody asked for"). The Asyncify loop presents a software-rendered frame
@@ -173,19 +174,46 @@ void DoomPerf_UpdateTitleLut(void)
 // Doom Perf: high-contrast recolour for the data-source ("SELECT DATA SOURCE")
 // menu. Freedoom's HUD font (STCFN*, used by M_WriteText) is a dark red that now
 // sits red-on-red over the flame-graph title background. While doomperf_menu_remap
-// is set (m_menu.c M_DrawMode, around the mode-menu text only), each font pixel is
+// is set (m_menu.c M_DpDraw, around the menu text only), each font pixel is
 // remapped through doomperf_menu_lut to a luminance-PRESERVING cool-white tint: the
 // glyph's dark outline stays dark and its body/highlights go near-white, so the
 // letters read cleanly against the warm flame. The LUT is built once, lazily, from
 // PLAYPAL (index 0 palette), independent of I_SetPalette timing.
+//
+// Two tones share the one remap: BRIGHT for menu items and the current screen,
+// MUTED (a slate grey) for secondary text -- breadcrumb ancestors, group
+// captions, notes, key hints. DoomPerf_SetMenuTone points doomperf_menu_lut at
+// one or the other, so V_DrawPatch indexes whichever is active unchanged.
 int doomperf_menu_remap = 0;
-unsigned char doomperf_menu_lut[256];
+static unsigned char doomperf_menu_lut_bright[256];
+static unsigned char doomperf_menu_lut_muted[256];
+unsigned char* doomperf_menu_lut = doomperf_menu_lut_bright;
 static int doomperf_menu_lut_built = 0;
+
+void DoomPerf_SetMenuTone(int muted)
+{
+    doomperf_menu_lut = muted ? doomperf_menu_lut_muted : doomperf_menu_lut_bright;
+}
+
+static unsigned char DoomPerf_NearestColor(const unsigned char* pal, int tr, int tg, int tb)
+{
+    int j, best = 0;
+    long bd = 0x7fffffffL;
+    for (j = 0; j < 256; j++)
+    {
+        int dr = pal[j * 3] - tr;
+        int dg = pal[j * 3 + 1] - tg;
+        int db = pal[j * 3 + 2] - tb;
+        long d = (long)dr * dr + (long)dg * dg + (long)db * db;
+        if (d < bd) { bd = d; best = j; }
+    }
+    return (unsigned char)best;
+}
 
 void DoomPerf_EnsureMenuLut(void)
 {
     const unsigned char* pal;
-    int i, j;
+    int i;
     if (doomperf_menu_lut_built)
         return;
     pal = (const unsigned char*)W_CacheLumpName("PLAYPAL", PU_CACHE);
@@ -201,21 +229,12 @@ void DoomPerf_EnsureMenuLut(void)
         int t = ((mx - 30) * 255) / (215 - 30);
         if (t < 0) t = 0;
         if (t > 255) t = 255;
-        // Target = a faintly cool white, scaled by that stretched intensity.
-        int tr = (236 * t) / 255;
-        int tg = (240 * t) / 255;
-        int tb = (248 * t) / 255;
-        int best = 0;
-        long bd = 0x7fffffffL;
-        for (j = 0; j < 256; j++)
-        {
-            int dr = pal[j * 3] - tr;
-            int dg = pal[j * 3 + 1] - tg;
-            int db = pal[j * 3 + 2] - tb;
-            long d = (long)dr * dr + (long)dg * dg + (long)db * db;
-            if (d < bd) { bd = d; best = j; }
-        }
-        doomperf_menu_lut[i] = (unsigned char)best;
+        // Targets = a faintly cool white / a cool slate, scaled by that
+        // stretched intensity.
+        doomperf_menu_lut_bright[i] = DoomPerf_NearestColor(pal,
+            (236 * t) / 255, (240 * t) / 255, (248 * t) / 255);
+        doomperf_menu_lut_muted[i] = DoomPerf_NearestColor(pal,
+            (140 * t) / 255, (150 * t) / 255, (168 * t) / 255);
     }
     doomperf_menu_lut_built = 1;
 }
@@ -692,11 +711,22 @@ int DoomPerf_GetSimMode(void)
     return doomperf_sim_mode;
 }
 
-// Doom Perf trailer harness: start a validated scenario without timing a blind
-// sequence through the title/menu UI. The browser only calls this behind the
-// explicit ?trailer=1 capture flag; ordinary players continue through M_ChooseMode.
-// G_DeferedInitNew is the same level-start path the menu uses, so this changes
-// setup reliability without bypassing normal game initialization.
+EMSCRIPTEN_KEEPALIVE
+int DoomPerf_GetMenuActive(void)
+{
+    return menuactive;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int DoomPerf_TakeResolutionRequest(void)
+{
+    int requested = doomperf_resolution_request;
+    doomperf_resolution_request = 0;
+    return requested;
+}
+
+// Start a validated scenario for the perf harness without navigating the menu.
+// G_DeferedInitNew is the same level-start path as M_ChooseMode.
 EMSCRIPTEN_KEEPALIVE
 int DoomPerf_StartScenario(int mode)
 {
@@ -705,6 +735,22 @@ int DoomPerf_StartScenario(int mode)
 
     doomperf_sim_mode = mode;
     G_DeferedInitNew(sk_medium, 1, 1);
+    return 1;
+}
+
+// Doom Perf: restart the level in `mode` after a resolution change reloaded the
+// page onto another engine build. Like DoomPerf_StartScenario, but the player
+// was already in a level, so the melt from the title is skipped and the page
+// reveals the atrium directly (src/index.ts keeps its loading veil up until
+// the player is active).
+int doomperf_skip_wipe = 0;
+
+EMSCRIPTEN_KEEPALIVE
+int DoomPerf_ResumeMode(int mode)
+{
+    if (!DoomPerf_StartScenario(mode))
+        return 0;
+    doomperf_skip_wipe = 1;
     return 1;
 }
 
@@ -753,6 +799,8 @@ unsigned int DoomPerf_GetRenderFrameCount(void)
 // and the zone heap's peak used against its total, so the crash-headroom limits
 // (MAXVISPLANES/etc. and the 16 MB zone) can be right-sized from real numbers.
 EMSCRIPTEN_KEEPALIVE int DoomPerf_GetPeakVisplanes(void)  { return doomperf_peak_visplanes; }
+EMSCRIPTEN_KEEPALIVE int DoomPerf_GetScreenWidth(void) { return SCREENWIDTH; }
+EMSCRIPTEN_KEEPALIVE int DoomPerf_GetScreenHeight(void) { return SCREENHEIGHT; }
 EMSCRIPTEN_KEEPALIVE int DoomPerf_GetPeakDrawsegs(void)   { return doomperf_peak_drawsegs; }
 EMSCRIPTEN_KEEPALIVE int DoomPerf_GetPeakVissprites(void) { return doomperf_peak_vissprites; }
 EMSCRIPTEN_KEEPALIVE int DoomPerf_GetCapVisplanes(void)   { return doomperf_cap_visplanes; }

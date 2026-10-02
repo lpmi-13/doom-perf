@@ -209,16 +209,32 @@ const holdKey = async (page, key, ms) => {
   await page.keyboard.up(key);
 };
 
-// Hold a movement key for `ms` while tapping USE (Space) every ~250ms, so the
+// Hold a movement key for `ms` while tapping USE (Space) every ~3s, so the
 // manual DR hub doors (special 1, USE within 64 units) open on approach — and
-// reopen from the far side on the way back. Closed doors block the hall view, so
+// reopen from the far side on the way back. The pause between taps lets an
+// opening door lift enough for the player to pass before another USE toggles it.
+// Closed doors block the hall view, so
 // the worst-case drive can't reach the wings without this.
 const holdKeyWithUse = async (page, key, ms) => {
   if (ms <= 0) return;
   await page.keyboard.down(key);
   const end = Date.now() + ms;
+  let renewedAt = Date.now();
+  let usedAt = -Infinity;
   while (Date.now() < end) {
-    await page.keyboard.press("Space");
+    // The game's input lease releases a key after 4s without another keydown.
+    // A held synthetic Playwright key does not repeat like a physical keyboard.
+    if (Date.now() - renewedAt >= 2000) {
+      await page.keyboard.up(key);
+      await page.keyboard.down(key);
+      renewedAt = Date.now();
+    }
+    if (Date.now() - usedAt >= 3000) {
+      await page.keyboard.down("Space");
+      await sleep(Math.max(0, Math.min(90, end - Date.now())));
+      await page.keyboard.up("Space");
+      usedAt = Date.now();
+    }
     await sleep(Math.max(0, Math.min(250, end - Date.now())));
   }
   await page.keyboard.up(key);
@@ -264,16 +280,41 @@ const runMotion = async (page, motion, durationMs) => {
   // deep into its wing, then spins at the far end so the long look-back-down-the-
   // wing and cross-hub sightlines (which balloon visplanes/drawsegs) plus each
   // wing's instrument sprites all land in-frame at some point. Navigation is
-  // open-loop and imperfect, but the counters are maxima over the window, so
-  // approximate aim still captures the worst frames; a longer --duration just
-  // adds coverage and repeats (one N,E,S,W cycle is ~45s — recommend >= 90).
+  // reset-to-hub pose hook (when present) avoids cumulative turn error between
+  // wings. A full N,E,S,W cycle takes about 40s; use >=45s for all four.
   if (motion === "wings") {
     const clamp = (ms) => Math.max(0, Math.min(ms, end - Date.now()));
     const SPIN = 2900; // ~one full turn (65536 BAM / ~640 per tic / 35 tics)
     const TURN90 = 760; // ~quarter turn to the next cardinal (turning right = N->E->S->W)
-    const PUSH = 3600; // drive through the opened door and deep into the wing
-    const BACK = 3600; // retreat toward the hub (USE reopens the door if it closed)
+    const PUSH = 7000; // allow the door to lift before driving deep into the wing
+    const BACK = 6000; // retreat toward the hub (USE reopens the door if it closed)
     const cardinals = ["cpu-N", "memory-E", "storage-S", "network-W"];
+    // A normal Doom Perf engine exposes the capture pose setter. Resetting to
+    // the hub before each leg removes accumulated open-loop turn error and lets
+    // this run actually sample every wing; movement and doors remain real.
+    const exactPose = await page.evaluate(() =>
+      typeof globalThis.DoomEngine?._DoomPerf_SetCapturePose === "function");
+    if (exactPose) {
+      const headings = [90, 0, 270, 180];
+      let leg = 0;
+      while (Date.now() < end) {
+        const index = leg % 4;
+        const accepted = await page.evaluate((angle) =>
+          globalThis.DoomEngine._DoomPerf_SetCapturePose(0, 0, angle) === 1, headings[index]);
+        if (!accepted) throw new Error(`Could not start ${cardinals[index]} wing leg at the hub`);
+        await dropMarker(page, `wing:${cardinals[index]}`);
+        await holdKeyWithUse(page, "ArrowUp", clamp(PUSH));
+        const position = await page.evaluate(() => ({
+          x: globalThis.DoomEngine._DoomPerf_PlayerX(),
+          y: globalThis.DoomEngine._DoomPerf_PlayerY(),
+        }));
+        console.log(`  wing ${cardinals[index]} reached ${position.x}, ${position.y}`);
+        await dropMarker(page, `wing:${cardinals[index]}:spin`);
+        await holdKey(page, "ArrowRight", clamp(SPIN));
+        leg++;
+      }
+      return;
+    }
     // Hub-centre spin first: frames all four doorways from the middle.
     await dropMarker(page, "hub-spin");
     await holdKey(page, "ArrowRight", clamp(SPIN));
@@ -317,7 +358,12 @@ const runMotion = async (page, motion, durationMs) => {
 const buildUrl = (base, { scenario, profile, wingSleep }) => {
   const u = new URL(base);
   u.searchParams.set("perf-bench", "1");
-  if (scenario) u.searchParams.set("scenario", scenario);
+  if (scenario) {
+    u.searchParams.set("scenario", scenario);
+    // Headless scenario runs cannot confirm the first-visit quality chooser.
+    // Keep an explicit resolution in --url for cross-resolution comparisons.
+    if (!u.searchParams.has("resolution")) u.searchParams.set("resolution", "640");
+  }
   if (profile) u.searchParams.set("perf", profile);
   if (wingSleep === false) u.searchParams.set("perf-sleep", "off"); // Part 3 A/B baseline
   return u.toString();
@@ -328,11 +374,11 @@ const wireConsole = (page) => {
   const state = { seenActive: false, onActive: null };
   page.on("console", (msg) => {
     const text = msg.text();
-    if (/\[perf\] scenario mode \d+ active/.test(text)) {
+    if (/\[(?:perf|trailer)\] (?:direct )?scenario mode \d+ active/.test(text)) {
       state.seenActive = true;
       state.onActive?.();
     }
-    if (/\[perf\]/.test(text) || msg.type() === "error") {
+    if (/\[(?:perf|trailer)\]/.test(text) || msg.type() === "error") {
       console.log(`  [page:${msg.type()}] ${text}`);
     }
   });
@@ -495,9 +541,17 @@ const runTourOnce = async (args, resolvedScenario) => {
     if (args.hidden) await setPageHidden(page, false);
 
     const final = await collect(page, cdp);
+    const player = await page.evaluate(() => {
+      const engine = globalThis.DoomEngine;
+      return engine?._DoomPerf_PlayerActive?.()
+        ? { x: engine._DoomPerf_PlayerX?.(), y: engine._DoomPerf_PlayerY?.() }
+        : null;
+    });
+    if (player) console.log(`  player position ${player.x}, ${player.y}`);
     const aggregate = {
       durationMs,
       probe: final.probe,
+      player,
       cdp: { baseline: cdpBaseline, final: final.metrics, delta: cdpDelta(cdpBaseline, final.metrics) },
     };
     return commonMeta(args, resolvedScenario, { aggregate });

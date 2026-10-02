@@ -15,16 +15,21 @@
       }
       canvas#canvas {
         display: block;
-        width: 100%;
-        height: 100%;
-        /* Nearest-neighbour upscaling so the 320x200 framebuffer stays crisp
-           when CSS stretches it to the viewport. `crisp-edges` is the older
+        position: fixed;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        /* All three backing resolutions occupy the same 8:5 screen area. */
+        /* SDL writes inline width/height:100%; keep the same visible area. */
+        width: min(100vw, 160vh) !important;
+        height: min(100vh, 62.5vw) !important;
+        /* Nearest-neighbour upscaling keeps the framebuffer crisp.
+           `crisp-edges` is the older
            Firefox/Safari spelling and must come FIRST so the well-defined
            `pixelated` wins the cascade — Chromium smooths (bilinear) for
            `crisp-edges` but honours nearest for `pixelated`. */
         image-rendering: crisp-edges;
         image-rendering: pixelated;
-        object-fit: contain;
         background: #000;
       }
       /* Loading veil shown until the WASM engine renders its first frame. It is
@@ -71,6 +76,16 @@
       @media (prefers-reduced-motion: reduce) {
         .loading__spinner { animation-duration: 2.4s; }
       }
+      .resolution-error-button {
+        padding: 9px 14px;
+        border: 1px solid #51e07a;
+        border-radius: 4px;
+        background: #183f23;
+        color: #fff;
+        font: 14px/1.5 "DejaVu Sans Mono", "Courier New", monospace;
+        cursor: pointer;
+      }
+      .resolution-error-button:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
     </style>
   </head>
   <body>
@@ -80,6 +95,6 @@
       <p class="loading__text">Loading lab…</p>
     </div>
     <audio id="audio" preload="auto"></audio>
-    <script type="module" src="/dist/index.js?v=f3683e9b89b1"></script>
+    <script type="module" src="/dist/index.js?v=7f507593b1ca"></script>
   </body>
 </html>

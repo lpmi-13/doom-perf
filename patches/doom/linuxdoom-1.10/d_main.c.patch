@@ -6,6 +6,7 @@
 #   0011  title-page-only
 #   0031  uncapped-render-loop
 #   0038  title-oo-load-pulse
+#   (+)   skip the title->level melt once for a resolution-change resume
 #
 # Order-independent: this is the only Doom Perf patch that touches d_main.c.
 # Regenerate by diffing a clean tree against the staged build tree;
@@ -13,7 +14,88 @@
 
 --- a/d_main.c
 +++ b/d_main.c
-@@ -391,8 +391,41 @@
+@@ -190,6 +190,8 @@
+ extern  int             showMessages;
+ void R_ExecuteSetViewSize (void);
+ 
++extern int doomperf_ui_scale;
++
+ void D_Display (void)
+ {
+     static  boolean		viewactivestate = false;
+@@ -220,6 +222,14 @@
+     }
+ 
+     // save the current screen if about to wipe
++    // Doom Perf: a level resumed after a resolution reload cuts straight in
++    // (the page held its loading veil over the title until now), so the melt
++    // from the title is skipped once. See DoomPerf_ResumeMode.
++    if (doomperf_skip_wipe && gamestate == GS_LEVEL)
++    {
++	doomperf_skip_wipe = 0;
++	wipegamestate = gamestate;
++    }
+     if (gamestate != wipegamestate)
+     {
+ 	wipe = true;
+@@ -239,12 +249,12 @@
+ 	    break;
+ 	if (automapactive)
+ 	    AM_Drawer ();
+-	if (wipe || (viewheight != 200 && fullscreen) )
++	if (wipe || (viewheight != SCREENHEIGHT && fullscreen) )
+ 	    redrawsbar = true;
+ 	if (inhelpscreensstate && !inhelpscreens)
+ 	    redrawsbar = true;              // just put away the help screen
+-	ST_Drawer (viewheight == 200, redrawsbar );
+-	fullscreen = viewheight == 200;
++	ST_Drawer (viewheight == SCREENHEIGHT, redrawsbar );
++	fullscreen = viewheight == SCREENHEIGHT;
+ 	break;
+ 
+       case GS_INTERMISSION:
+@@ -268,7 +278,11 @@
+ 	R_RenderPlayerView (&players[displayplayer]);
+ 
+     if (gamestate == GS_LEVEL && gametic)
++    {
++	doomperf_ui_scale = 1;
+ 	HU_Drawer ();
++	doomperf_ui_scale = 0;
++    }
+     
+     // clean up border stuff
+     if (gamestate != oldgamestate && gamestate != GS_LEVEL)
+@@ -282,7 +296,7 @@
+     }
+ 
+     // see if the border needs to be updated to the screen
+-    if (gamestate == GS_LEVEL && !automapactive && scaledviewwidth != 320)
++    if (gamestate == GS_LEVEL && !automapactive && scaledviewwidth != SCREENWIDTH)
+     {
+ 	if (menuactive || menuactivestate || !viewactivestate)
+ 	    borderdrawcount = 3;
+@@ -312,7 +326,9 @@
+ 
+ 
+     // menus go directly to the screen
++    doomperf_ui_scale = 1;
+     M_Drawer ();          // menu is drawn even on top of everything
++    doomperf_ui_scale = 0;
+     NetUpdate ();         // send out any new accumulation
+ 
+ 
+@@ -339,7 +355,9 @@
+ 	done = wipe_ScreenWipe(wipe_Melt
+ 			       , 0, 0, SCREENWIDTH, SCREENHEIGHT, tics);
+ 	I_UpdateNoBlit ();
++	doomperf_ui_scale = 1;
+ 	M_Drawer ();                            // menu is drawn even on top of wipes
++	doomperf_ui_scale = 0;
+ 	I_FinishUpdate ();                      // page flip or blit buffer
+     } while (!done);
+ }
+@@ -391,8 +409,41 @@
  		
  	S_UpdateSounds (players[consoleplayer].mo);// move positional sounds
  
@@ -57,7 +139,7 @@
  
  #ifndef SNDSERV
  	// Sound mixing for the buffer is snychronous.
-@@ -422,8 +455,9 @@
+@@ -422,8 +473,9 @@
  //
  void D_PageTicker (void)
  {
@@ -69,18 +151,20 @@
  }
  
  
-@@ -433,7 +467,10 @@
+@@ -433,7 +485,12 @@
  //
  void D_PageDrawer (void)
  {
 +    int titleremap = pagename && !strcmp(pagename, "TITLEPIC");
 +    if (titleremap) { DoomPerf_UpdateTitleLut(); doomperf_title_remap = 1; }
++    doomperf_ui_scale = 1;
      V_DrawPatch (0,0, 0, W_CacheLumpName(pagename, PU_CACHE));
++    doomperf_ui_scale = 0;
 +    doomperf_title_remap = 0;
  }
  
  
-@@ -1020,8 +1057,8 @@
+@@ -1020,8 +1077,8 @@
      printf ("W_Init: Init WADfiles.\n");
      W_InitMultipleFiles (wadfiles);
      
@@ -91,7 +175,7 @@
      if (modifiedgame)
      {
  	// These are the lumps that will be checked in IWAD,
-@@ -1034,10 +1071,6 @@
+@@ -1034,10 +1091,6 @@
  	};
  	int i;
  	
@@ -102,7 +186,7 @@
  	// Check for fake IWAD with right name,
  	// but w/o all the lumps of the registered version. 
  	if (gamemode == registered)
-@@ -1057,7 +1090,7 @@
+@@ -1057,7 +1110,7 @@
  	    "                      press enter to continue\n"
  	    "===========================================================================\n"
  	    );

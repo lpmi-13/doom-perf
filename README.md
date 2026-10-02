@@ -59,8 +59,9 @@ What currently works:
 - Browser launcher at `public/index.html` and the full-screen game host at
   `public/game/index.html`.
 - TypeScript bundle built from `src/index.ts` into `public/dist/index.js`.
-- Patched Doom WASM engine artifacts committed at `public/engine/doom.js` and
-  `public/engine/doom.wasm`.
+- Patched Doom WASM engine artifacts at `public/engine/` for Low (320×200),
+  `public/engine/640x400/` for Regular (640×400), and
+  `public/engine/960x600/` for High (960×600).
 - Generated Doom Perf map PWAD at `public/maps/doomperf-lab.wad`.
 - Central atrium with four themed resource wings: CPU, memory, disk, and
   network.
@@ -68,7 +69,8 @@ What currently works:
 - Telemetry client in the browser that normalizes live/simulated resource data
   and pushes live CPU, memory, storage, and network values into the WASM engine
   through exported `DoomPerf_*` functions.
-- Doom menu flow narrowed to Doom Perf's data-source selection.
+- Native Doom menu over the animated title or current game view, with live/
+  simulated modes and screen resolution.
 - Twelve current data-source choices from the splash/menu flow:
   - `LIVE STATS`
   - `SIM: HIGH CPU UTILIZATION`
@@ -142,6 +144,11 @@ npm run build:map
 npm run build
 ```
 
+To rebuild the three engine resolutions locally, run `npm run build:engine`
+before `npm run build`. The engine script reads a clean
+`../doom/linuxdoom-1.10` checkout by default; set `DOOM_SRC_DIR` if yours is
+elsewhere. The build stages and patches its own copy of that source.
+
 Start the browser host and Linux telemetry SSE service:
 
 ```bash
@@ -159,7 +166,22 @@ Useful URL variants:
 ```text
 http://localhost:8000/
 http://localhost:8000/?telemetry=off
+http://localhost:8000/game/?resolution=320
+http://localhost:8000/game/?resolution=640
+http://localhost:8000/game/?resolution=960
 ```
+
+On a first visit to `/game/`, Regular (640×400) loads by default. The native
+menu appears over the animated flamegraph title with **Mode** and **Screen
+Resolution** as its two top-level choices. Use Up/Down to choose, Enter to open
+a submenu, and Backspace or Left Arrow to return to the top level. Escape closes
+the menu. The resolution submenu offers Low (320×200), Regular (640×400), and
+High (960×600) in larger text. All three
+occupy the same 8:5 screen area; the internal render detail changes. Press Esc
+during play to open that menu over the current game view. Changing resolution
+restarts the engine and loses the current position. The choice is saved in the
+browser. A valid
+`?resolution=` value applies to that visit without changing the saved choice.
 
 ## Controls
 
@@ -168,18 +190,17 @@ http://localhost:8000/?telemetry=off
 | Arrow keys | Move and turn |
 | Space | Open doors, use, or open/close nearby Doom Perf terminal overlays |
 | Shift | Run |
-| Esc | Menu or close terminal overlay |
+| Esc | Open/close menu or close terminal overlay |
 | Tab | Automap |
 
 Combat and weapon switching are intentionally disabled by engine patches. Doom
 Perf is currently an observational lab, not a combat game.
 
-On touch devices, the browser host adds menu buttons on the title/menu screens,
-a movement pad in-game, and an on-screen USE/interact prompt near doors and
-terminal screens. A long-press on the game view acts as Esc: it reopens the
-data-source menu so you can back out of the running sim and pick a different one
-(the ▲▼/SELECT/BACK buttons replace the movement pad while it is open), and a
-second long-press closes it again.
+On touch devices, the browser host adds menu controls on the title, a menu
+button and movement pad during play, and an on-screen USE/interact prompt near
+doors and terminal screens. Tap the menu button to open the native mode and
+resolution menu over the current game view. BACK returns from a submenu to the
+top level, then closes the menu.
 
 ## Data Sources
 
@@ -589,7 +610,7 @@ The same behavior is used by the WebAssembly engine and TypeScript fallback.
 | `src/telemetry/` | Telemetry source resolution, SSE client, normalization, and shared types. |
 | `src/ui/terminalOverlay.ts` | Linux-command-style terminal overlay renderers for the resource wings. |
 | `src/ui/movementPad.ts` | Touch movement controls. |
-| `src/ui/menuControls.ts` | Touch menu controls. |
+| `src/ui/menuControls.ts` | Touch controls for the native Doom menu. |
 | `src/engine_bootstrap.ts` | WASM engine bootstrap and data file mounting. |
 | `src/perf_probe.ts` | In-page profiling probe (`window.__perfProbe`) behind `?perf-bench=1`. |
 | `scripts/perf-harness.mjs` | Playwright + CDP profiling harness (tour/manual/attach + compare). |

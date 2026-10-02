@@ -11,12 +11,13 @@ import type {
 } from "./telemetry";
 import { createInteractPrompt } from "./interact";
 import { createMovementPad } from "./ui/movementPad";
-import { createMenuControls, type MenuAction } from "./ui/menuControls";
+import { createMenuControls } from "./ui/menuControls";
 import { createMenuButton } from "./ui/menuButton";
 import { mapManifest } from "./doomperf-map-manifest";
 import { playAssetSound, preloadAssetSound } from "./asset_sounds";
 import { installPerfProbe } from "./perf_probe";
 import { installInputLease } from "./input_lease";
+import { applyResolutionRequest, chooseResolution, takeResumeMode, engineUrls, showResolutionError, type Resolution } from "./resolution";
 import { I_SetInputKeyState } from "./i_system";
 import {
   KEY_RALT,
@@ -29,6 +30,8 @@ import {
 // which we expand to a runtime timestamp so dev never serves a stale copy.
 declare const __WAD_VERSION__: string;
 declare const __ENGINE_VERSION__: string;
+declare const __ENGINE_640_VERSION__: string;
+declare const __ENGINE_960_VERSION__: string;
 declare const __IWAD_VERSION__: string;
 const assetVersion = (version: string): string => (version === "dev" ? String(Date.now()) : version);
 
@@ -287,9 +290,7 @@ const doomPerfMapWad = {
 const doomPerfCpuCoreCapacity = 64;
 console.log(`Loading WAD from ${wadUrl}.`);
 
-const engineAssetVersion = assetVersion(__ENGINE_VERSION__);
-const engineScriptUrl = `/engine/doom.js?v=${engineAssetVersion}`;
-const engineWasmUrl = `/engine/doom.wasm?v=${engineAssetVersion}`;
+let selectedResolution: Resolution = "640";
 const interactionSound = {
   name: "interaction-sting",
   url: "/assets/sounds/interaction-sting.ogg",
@@ -297,6 +298,10 @@ const interactionSound = {
 } as const;
 
 type DoomPerfEngine = {
+  _DoomPerf_GetScreenWidth?: () => number;
+  _DoomPerf_GetScreenHeight?: () => number;
+  _DoomPerf_GetMenuActive?: () => number;
+  _DoomPerf_TakeResolutionRequest?: () => number;
   _DoomPerf_SetCpuCoreCount?: (count: number) => void;
   _DoomPerf_SetCpuCore?: (id: number, permille: number) => void;
   _DoomPerf_SetCpuRunQueuePressure?: (permille: number) => void;
@@ -388,6 +393,7 @@ type DoomPerfEngine = {
   _DoomPerf_SetNetQdiscKnown?: (known: number) => void;
   _DoomPerf_GetSimMode?: () => number;
   _DoomPerf_StartScenario?: (mode: number) => number;
+  _DoomPerf_ResumeMode?: (mode: number) => number;
   _DoomPerf_GetEffectiveCpuCoreCount?: () => number;
   _DoomPerf_GetEffectiveCpuCore?: (id: number) => number;
   _DoomPerf_GetEffectiveCpuRunQueuePressure?: () => number;
@@ -1406,6 +1412,11 @@ const scenarioTelemetry = (
 
 const start = async () => {
   lockDocumentTitle("Doom Perf");
+  selectedResolution = await chooseResolution();
+  const version = selectedResolution === "320" ? __ENGINE_VERSION__
+    : selectedResolution === "640" ? __ENGINE_640_VERSION__ : __ENGINE_960_VERSION__;
+  const { script: engineScriptUrl, wasm: engineWasmUrl } =
+    engineUrls(selectedResolution, assetVersion(version));
   const engineAssets = prepareEngineAssets({
     wadUrl,
     engineScriptUrl,
@@ -1428,62 +1439,28 @@ const start = async () => {
       /fetch dynamically imported module|error loading dynamically imported module|importing a module script failed/i.test(
         error.message
       );
-    if (!localDevelopmentHost || !missingModule) throw error;
+    if (selectedResolution !== "320" || !localDevelopmentHost || !missingModule) throw error;
     engineAvailable = false;
   }
   if (engineAvailable) {
     attachAudioUnlock();
     preloadAssetSound(interactionSound);
 
-    // --- Mobile menu ---------------------------------------------------------
-    // A phone has no Esc key, so the top-right menu icon opens the Doom
-    // data-source menu (the "new game" / sim picker) just like Esc on desktop,
-    // letting the player abandon a running sim and choose a different one. While
-    // it is open we show the ▲▼/SELECT/BACK menu buttons instead of the movement
-    // pad. The prebuilt engine exposes no menuactive flag, so we mirror the menu
-    // here: on touch every menu key comes from our own buttons or the menu icon,
-    // so this model tracks what the engine is showing. menuScreen "closed" means
-    // ordinary gameplay (or, when the player isn't in a level, the title screen).
-    type MenuScreen = "closed" | "main" | "mode" | "options";
-    let menuScreen: MenuScreen = "closed";
-    let mainItem = 0; // main-menu cursor row: 0 = NEW GAME, 1 = OPTIONS
-    let lastSimMode = 0;
+    const terminal = createTerminalOverlay();
+    const movementPad = createMovementPad();
+    const menuControls = createMenuControls();
+    const menuButton = createMenuButton(() => onOpenMenu());
 
     const synthesizeEscapePress = () => {
-      const dispatchEscape = (type: "keydown" | "keyup") => {
+      const dispatch = (type: "keydown" | "keyup") => {
         const event = new KeyboardEvent(type, { key: "Escape", code: "Escape", bubbles: true, cancelable: true });
         Object.defineProperty(event, "keyCode", { get: () => 27 });
         Object.defineProperty(event, "which", { get: () => 27 });
         document.dispatchEvent(event);
       };
-      dispatchEscape("keydown");
-      window.setTimeout(() => dispatchEscape("keyup"), 90);
+      dispatch("keydown");
+      window.setTimeout(() => dispatch("keyup"), 90);
     };
-
-    // Keep menuScreen in step with the on-screen Doom menu as the player drives
-    // it from the touch buttons. Mirrors m_menu.c: BACK (Esc) closes the whole
-    // menu; on the main menu SELECT opens NEW GAME's data-source list or the
-    // options page; on the data-source list SELECT starts the chosen sim and
-    // closes the menu; ▲▼ move the main-menu cursor between its two items.
-    const handleMenuAction = (action: MenuAction) => {
-      if (menuScreen === "closed") return; // title-screen menu: the engine drives it
-      if (action === "back") {
-        menuScreen = "closed";
-      } else if (menuScreen === "main") {
-        if (action === "select") menuScreen = mainItem === 0 ? "mode" : "options";
-        else mainItem = mainItem === 0 ? 1 : 0; // up/down toggles the two rows
-      } else if (menuScreen === "mode" && action === "select") {
-        menuScreen = "closed"; // a data source was chosen; the sim (re)starts
-      }
-    };
-
-    const terminal = createTerminalOverlay();
-    const movementPad = createMovementPad();
-    const menuControls = createMenuControls(handleMenuAction);
-    // The discoverable top-right menu icon: the way to open the in-game menu on a
-    // phone. It toggles the menu via onOpenMenu, forward-declared so the icon can
-    // close over it before toggleInGameMenu is defined below.
-    const menuButton = createMenuButton(() => onOpenMenu());
 
     // On touch, the engine's SDL layer turns canvas drags into mouse-look. Stop
     // canvas-targeted touch/pointer/mouse events in the capture phase (which runs
@@ -1495,9 +1472,7 @@ const start = async () => {
     // tap handler is assigned once the easter-egg helpers below exist; the canvas
     // swallow (which already sees every canvas touch) calls it.
     let onCanvasTap: (fractionX: number) => void = () => {};
-    // Opens/closes the in-game menu (the phone's Esc). Fired by the top-right
-    // menu icon. Assigned below once the menu helpers exist; forward-declared
-    // here so the icon (created above) can close over it.
+    // Assigned below once the menu helpers exist; the touch button closes over it.
     let onOpenMenu: () => void = () => {};
     if (isTouchDevice) {
       // A tap is a brief, near-stationary touch; a drag is a look/steer gesture
@@ -1792,7 +1767,7 @@ const start = async () => {
     };
 
     onCanvasTap = (fractionX: number) => {
-      if (terminal.isOpen() || menuScreen !== "closed") return;
+      if (terminal.isOpen() || getEngine()?._DoomPerf_GetMenuActive?.()) return;
       const pose = currentPlayerPose();
       if (!pose.active) return;
       if (easterEggs.some((egg) => easterEggTapHits(egg, pose, fractionX))) {
@@ -1877,40 +1852,33 @@ const start = async () => {
         prompt.hide();
         return;
       }
-      // The touch controls ride the same poll. In a live level the movement pad
-      // shows; on the title/menu screens the menu controls show instead; while a
-      // terminal overlay is open, neither does. pad.hide() also releases any
-      // held arrow keys.
+      const engine = getEngine();
+      const requestedResolution = engine?._DoomPerf_TakeResolutionRequest?.() ?? 0;
+      if (requestedResolution) {
+        const resumeMode = engine?._DoomPerf_PlayerActive?.() ? engine._DoomPerf_GetSimMode?.() ?? null : null;
+        applyResolutionRequest(requestedResolution, selectedResolution, resumeMode);
+      }
+
+      // The native menu is drawn into the same framebuffer as the title or
+      // current game view. Its active state controls the touch keys as well.
+      const menuActive = !!engine?._DoomPerf_GetMenuActive?.();
       if (isTouchDevice) {
-        const playerActive = !!getEngine()?._DoomPerf_PlayerActive?.();
-        // Safety nets that keep the in-game menu overlay in step with the
-        // engine: it can only be open inside a running level, and choosing a
-        // data source (by any path, even an external keyboard) changes the sim
-        // mode. Either condition means we are no longer in that menu.
-        const simMode = getEngine()?._DoomPerf_GetSimMode?.() ?? 0;
-        if (!playerActive || (menuScreen !== "closed" && simMode !== lastSimMode)) {
-          menuScreen = "closed";
-        }
-        lastSimMode = simMode;
+        const playerActive = !!engine?._DoomPerf_PlayerActive?.();
         if (terminal.isOpen()) {
           movementPad.hide();
           menuControls.hide();
           menuButton.hide();
-        } else if (playerActive && menuScreen === "closed") {
-          // Ordinary gameplay: movement pad plus the top-right menu icon, which
-          // opens the in-game menu.
+        } else if (playerActive && !menuActive) {
           menuControls.hide();
           movementPad.show();
           menuButton.show();
         } else {
-          // Title/menu screen, or our in-game menu overlay: either way the player
-          // navigates with the ▲▼/SELECT/BACK buttons, so the icon steps aside.
           movementPad.hide();
           menuButton.hide();
           menuControls.show();
         }
       }
-      if (terminal.isOpen() || menuScreen !== "closed") {
+      if (terminal.isOpen() || menuActive) {
         prompt.hide();
         return;
       }
@@ -1926,32 +1894,29 @@ const start = async () => {
       prompt.show(target.kind);
     };
 
-    // The top-right menu icon is the phone's Esc key: it opens the Doom
-    // data-source menu so the player can back out of the running sim and pick a
-    // different one, and closes it again. While it is open updatePrompt swaps the
-    // movement pad for the ▲▼/SELECT/BACK buttons (see menuScreen above).
-    const toggleInGameMenu = () => {
+    onOpenMenu = () => {
       if (!engineReady || terminal.isOpen()) return;
-      const playerActive = !!getEngine()?._DoomPerf_PlayerActive?.();
-      // Only act inside a running level. On the title/menu screens the menu
-      // buttons are already shown and the engine owns Esc, so leave them be.
-      if (!playerActive && menuScreen === "closed") return;
+      getEngine()?._DoomPerf_ReleaseAllInput?.();
       synthesizeEscapePress();
-      menuScreen = menuScreen === "closed" ? "main" : "closed";
-      navigator.vibrate?.(20); // a tick of haptic feedback that the tap registered
-      updatePrompt(); // swap the controls now rather than waiting for the poll
+      navigator.vibrate?.(20);
+      window.setTimeout(updatePrompt, 120);
     };
-    onOpenMenu = toggleInGameMenu;
 
     const promptRefresh = window.setInterval(updatePrompt, 120);
 
+    const onMenuKey = (event: KeyboardEvent) => {
+      if (event.code !== "Escape" || !terminal.isOpen()) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (event.type === "keydown" && !event.repeat) terminal.close();
+    };
+    window.addEventListener("keydown", onMenuKey, { capture: true });
+    window.addEventListener("keyup", onMenuKey, { capture: true });
+
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.repeat) return;
-      if (event.code === "Escape") {
-        terminal.close();
-        return;
-      }
       if (event.code !== "Space") return;
+      if (getEngine()?._DoomPerf_GetMenuActive?.()) return;
       interact(false);
     };
     window.addEventListener("keydown", onKeyDown);
@@ -1963,6 +1928,8 @@ const start = async () => {
         window.clearInterval(terminalRefresh);
         window.clearInterval(promptRefresh);
         window.removeEventListener("keydown", onKeyDown);
+        window.removeEventListener("keydown", onMenuKey, true);
+        window.removeEventListener("keyup", onMenuKey, true);
       },
       { once: true }
     );
@@ -1982,6 +1949,12 @@ const start = async () => {
       preparedAssets: engineAssets,
       onEngineReady: (engine) => {
         const inputEngine = engine as DoomPerfEngine;
+        const expectedWidth = Number(selectedResolution);
+        const expectedHeight = expectedWidth * 5 / 8;
+        if (inputEngine._DoomPerf_GetScreenWidth?.() !== expectedWidth ||
+            inputEngine._DoomPerf_GetScreenHeight?.() !== expectedHeight) {
+          throw new Error(`The ${expectedWidth}×${expectedHeight} engine has the wrong render resolution.`);
+        }
         if (inputEngine._DoomPerf_SetInputKeyState) {
           connectInputLease((doomKey, pressed) =>
             inputEngine._DoomPerf_SetInputKeyState?.(doomKey, pressed ? 1 : 0));
@@ -1998,6 +1971,16 @@ const start = async () => {
     // Asyncify game loop is scheduled); the first frame lands a tick later.
     // Hold the veil until that frame paints, then reveal the game.
     await waitForFirstFrame();
+
+    // A resolution change made mid-level reloads onto the new engine. Restart
+    // the level in the same mode with the title melt skipped, and keep the veil
+    // up until the player is in the atrium so the title never flashes by.
+    const resumeMode = scenarioMode === null ? takeResumeMode() : null;
+    if (resumeMode !== null && getEngine()?._DoomPerf_ResumeMode?.(resumeMode) === 1) {
+      const wait = (ms: number) => new Promise<void>((r) => window.setTimeout(r, ms));
+      for (let waited = 0; waited < 5000 && !getEngine()?._DoomPerf_PlayerActive?.(); waited += 50) await wait(50);
+      await wait(100); // let the first level frame present before the veil lifts
+    }
     finishLoading();
 
     // Render-pacing wiring (PERF_TUNE_PLAN.md Part 1). The engine does the actual
@@ -2048,65 +2031,29 @@ const start = async () => {
       if (wingSleepDisabled) getEngine()?._DoomPerf_SetWingSleep?.(0);
     }
 
-    // Perf harness: with ?scenario=NAME, boot straight into a fixed data source
-    // (deterministic load) instead of sitting on the menu. Drive the existing
-    // data-source menu exactly as the touch UI does — ESC opens the main menu,
-    // ENTER picks NEW GAME (the data-source list), DOWN steps to the requested
-    // mode, ENTER starts it — then confirm via the engine's sim-mode +
-    // player-active getters, retrying the sequence if the level didn't come up.
-    // No dedicated engine entry point is needed; this reuses the proven path.
+    if (resumeMode !== null) return;
+
+    // Perf harness: start a requested scenario through the engine's validated
+    // level-start entry point, then wait for the level to become active.
     if (scenarioMode !== null) {
       const wait = (ms: number) => new Promise<void>((r) => window.setTimeout(r, ms));
-      const dispatchKey = (type: "keydown" | "keyup", code: string, keyCode: number) => {
-        const event = new KeyboardEvent(type, { key: code, code, bubbles: true, cancelable: true });
-        Object.defineProperty(event, "keyCode", { get: () => keyCode });
-        Object.defineProperty(event, "which", { get: () => keyCode });
-        document.dispatchEvent(event);
-      };
-      const tapKey = async (code: string, keyCode: number, gapMs = 140) => {
-        dispatchKey("keydown", code, keyCode);
-        await wait(90);
-        dispatchKey("keyup", code, keyCode);
-        await wait(gapMs);
-      };
       const confirmed = () => {
         const engine = getEngine();
         return (engine?._DoomPerf_GetSimMode?.() ?? -1) === scenarioMode && !!engine?._DoomPerf_PlayerActive?.();
       };
       void (async () => {
-        // The release-trailer harness needs deterministic scenario entry before
-        // it records a frame. Use the capture-only engine hook when explicitly
-        // requested; it follows the same G_DeferedInitNew path as M_ChooseMode.
-        if (trailerCaptureEnabled) {
-          const accepted = getEngine()?._DoomPerf_StartScenario?.(scenarioMode) === 1;
-          for (let waited = 0; accepted && waited < 5000 && !confirmed(); waited += 100) await wait(100);
-          console[confirmed() ? "log" : "warn"](
-            `[trailer] direct scenario mode ${scenarioMode} ${confirmed() ? "active" : "NOT confirmed"} ` +
-              `(sim=${getEngine()?._DoomPerf_GetSimMode?.() ?? "?"})`
-          );
-          if (confirmed()) return;
-        }
-        for (let attempt = 0; attempt < 3 && !confirmed(); attempt++) {
-          await tapKey("Escape", 27, 320); // title -> main menu
-          await tapKey("Enter", 13, 320); // NEW GAME -> data-source list
-          for (let i = 0; i < scenarioMode; i++) await tapKey("ArrowDown", 40, 90);
-          await tapKey("Enter", 13, 0); // M_ChooseMode(mode): set sim + start level
-          for (let waited = 0; waited < 4000 && !confirmed(); waited += 120) await wait(120);
-        }
+        const accepted = getEngine()?._DoomPerf_StartScenario?.(scenarioMode) === 1;
+        for (let waited = 0; accepted && waited < 5000 && !confirmed(); waited += 100) await wait(100);
         console[confirmed() ? "log" : "warn"](
-          `[perf] scenario mode ${scenarioMode} ${confirmed() ? "active" : "NOT confirmed"} ` +
+          `[${trailerCaptureEnabled ? "trailer" : "perf"}] scenario mode ${scenarioMode} ${confirmed() ? "active" : "NOT confirmed"} ` +
             `(sim=${getEngine()?._DoomPerf_GetSimMode?.() ?? "?"})`
         );
       })();
       return;
     }
 
-    // Bring the main menu up automatically so neither desktop nor mobile needs
-    // an initial click to dismiss the title screen. We synthesize one ESC — the
-    // key Doom's title screen uses to open the menu — shortly after the engine
-    // starts, but skip it if the player already pressed or tapped something (a
-    // second ESC would just toggle the menu back off). On touch the menu BACK
-    // button (also ESC) is a fallback if this is ever missed.
+    // Reveal the native Doom menu over the animated title. Skip the automatic
+    // Escape if the player already interacted, since it would close the menu.
     let userActed = false;
     const noteUserAction = () => { userActed = true; };
     window.addEventListener("keydown", noteUserAction, { once: true, capture: true });
@@ -2114,8 +2061,7 @@ const start = async () => {
     window.setTimeout(() => {
       window.removeEventListener("keydown", noteUserAction, true);
       window.removeEventListener("pointerdown", noteUserAction, true);
-      if (userActed) return;
-      synthesizeEscapePress();
+      if (!userActed) synthesizeEscapePress();
     }, 800);
     return;
   }
@@ -2133,5 +2079,6 @@ void start().catch((error) => {
     loadingOverlay.querySelector(".loading__spinner")?.remove();
     const text = loadingOverlay.querySelector(".loading__text");
     if (text) text.textContent = "Failed to load — reload to retry";
+    showResolutionError(selectedResolution);
   }
 });

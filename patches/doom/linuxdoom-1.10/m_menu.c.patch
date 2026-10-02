@@ -10,7 +10,9 @@
 #   0036  automap-scenario-title
 #   0038  title-oo-load-pulse
 #   0039  trim-options-menu
-#   (+)   new-game opens the data-source list on page 1
+#   (+)   native root menu with data-source and screen-resolution submenus
+#   (+)   nested menu tree (mode -> live/simulated -> resource -> sims) with
+#         whitespace-grouped rows, breadcrumb, and a title-screen scrim
 #   (+)   disable F-key shortcuts; delete the classic Load/Save/Sound/Options/
 #         Episode/NewGame/Help(ReadThis) menus and the quicksave/quickload,
 #         quit-DOOM, and gamma-correction messages they opened
@@ -20,11 +22,10 @@
 # see scripts/build-doom-wasm.sh.
 --- a/m_menu.c
 +++ b/m_menu.c
-@@ -105,15 +105,6 @@
- void    (*messageRoutine)(int response);
+@@ -106,15 +106,6 @@
  
  #define SAVESTRINGSIZE 	24
--
+ 
 -char gammamsg[5][26] =
 -{
 -    GAMMALVL0,
@@ -33,10 +34,11 @@
 -    GAMMALVL3,
 -    GAMMALVL4
 -};
- 
+-
  // we are going to be entering a savegame string
  int			saveStringEnter;              
-@@ -180,48 +171,8 @@
+ int             	saveSlot;	// which slot to save in
+@@ -180,49 +171,11 @@
  //
  // PROTOTYPES
  //
@@ -83,32 +85,26 @@
 -void M_DrawEmptyCell(menu_t *menu,int item);
 -void M_DrawSelCell(menu_t *menu,int item);
  void M_WriteText(int x, int y, char *string);
++void M_WriteTextLarge(int x, int y, char *string);
++void M_GoBack(void);
  int  M_StringWidth(char *string);
  int  M_StringHeight(char *string);
-@@ -230,921 +181,221 @@
+ void M_StartControlPanel(void);
+@@ -230,921 +183,515 @@
  void M_StopMessage(void);
  void M_ClearMenus (void);
  
--
--
--
++// Doom Perf menu tree (see M_DpInitMenus).
++void M_DpInitMenus(void);
++void M_DpDrawCaret(int blink);
+ 
+ 
+ 
 -//
 -// DOOM MENU
-+// Doom Perf data-source selection ("level select").
-+void M_ChooseMode(int choice);
-+void M_DrawMode(void);
-+
-+
-+
-+
-+//
-+// Doom Perf DATA-SOURCE ("LEVEL") SELECT
-+// Picking an item sets doomperf_sim_mode (read by the CPU room renderer) and
-+// starts the lab map. Item names are empty so M_Drawer skips patch lookups;
-+// M_DrawMode paints the labels with the small font instead.
- //
- enum
- {
+-//
+-enum
+-{
 -    newgame = 0,
 -    options,
 -    loadgame,
@@ -127,6 +123,42 @@
 -    // Another hickup with Special edition.
 -    {1,"M_RDTHIS",M_ReadThis,'r'},
 -    {1,"M_QUITG",M_QuitDOOM,'q'}
+-};
+-
+-menu_t  MainDef =
+-{
+-    main_end,
+-    NULL,
+-    MainMenu,
+-    M_DrawMainMenu,
+-    97,64,
+-    0
+-};
+-
+ 
+ //
+-// EPISODE SELECT
++// Doom Perf DATA-SOURCE ("LEVEL") SELECT
++// Picking a mode sets doomperf_sim_mode (read by the CPU room renderer) and
++// starts the lab map. The numbering is shared with src/index.ts, so the menu
++// tree below can regroup modes freely but the values must not change.
+ //
+ enum
+ {
+-    ep1,
+-    ep2,
+-    ep3,
+-    ep4,
+-    ep_end
+-} episodes_e;
+-
+-menuitem_t EpisodeMenu[]=
+-{
+-    {1,"M_EPI1", M_Episode,'k'},
+-    {1,"M_EPI2", M_Episode,'t'},
+-    {1,"M_EPI3", M_Episode,'i'},
+-    {1,"M_EPI4", M_Episode,'t'}
+-};
 +    mode_live = 0,
 +    mode_simutil,
 +    mode_simsat,
@@ -161,67 +193,12 @@
 +    mode_end
 +} mode_e;
 +
-+menuitem_t ModeMenu[]=
-+{
-+    {1,"",M_ChooseMode,'l'},
-+    {1,"",M_ChooseMode,'u'},
-+    {1,"",M_ChooseMode,'s'},
-+    {1,"",M_ChooseMode,'d'},
-+    {1,"",M_ChooseMode,'k'},
-+    {1,"",M_ChooseMode,'q'},
-+    {1,"",M_ChooseMode,'m'},
-+    {1,"",M_ChooseMode,'p'},
-+    {1,"",M_ChooseMode,'o'},
-+    {1,"",M_ChooseMode,'n'},
-+    {1,"",M_ChooseMode,'r'},
-+    {1,"",M_ChooseMode,'x'}
- };
- 
--menu_t  MainDef =
--{
--    main_end,
-+menu_t  ModeDef =
-+{
-+    mode_end,
-+    // Doom Perf: the data-source list is the ROOT menu — the NEW GAME / OPTIONS
-+    // screen was removed, so there is nothing to back out to. NULL makes Backspace
-+    // a no-op here (M_Responder guards on prevMenu); Escape still closes the menu.
-     NULL,
--    MainMenu,
--    M_DrawMainMenu,
--    97,64,
-+    ModeMenu,
-+    M_DrawMode,
-+    60,80,
-     0
- };
- 
- 
--//
--// EPISODE SELECT
--//
--enum
--{
--    ep1,
--    ep2,
--    ep3,
--    ep4,
--    ep_end
--} episodes_e;
--
--menuitem_t EpisodeMenu[]=
--{
--    {1,"M_EPI1", M_Episode,'k'},
--    {1,"M_EPI2", M_Episode,'t'},
--    {1,"M_EPI3", M_Episode,'i'},
--    {1,"M_EPI4", M_Episode,'t'}
 +
 +//
 +// Doom Perf data-source / "level" selection.
 +//
-+// Doom Perf data-source labels, one per sim mode in mode_e order. The list is
-+// paged (MODE_PER_PAGE at a time) so the menu font stays large however many
-+// wings are present; the page shown follows the skull cursor (itemOn).
++// Full scenario names, one per sim mode in mode_e order, for the automap
++// heads-up. The menu shows shorter labels in context (see the menu tree).
 +static char* ModeLabels[] =
 +{
 +    "LIVE STATS",
@@ -245,7 +222,60 @@
 +    // drop bouncing back up the wire) surfaces here too, without a mode of its own.
 +    "SIM: NETWORK RECEIVE SATURATION",
 +    "SIM: NETWORK TRANSMIT SATURATION"
- };
++};
++
++//
++// Doom Perf: scenario title for the automap heads-up, derived from the active
++// data-source label (ModeLabels[doomperf_sim_mode]). The "SIM: " prefix is
++// dropped so the map reads as the condition it is showing ("HIGH CPU
++// UTILIZATION"); live telemetry stays "LIVE STATS". Reusing ModeLabels keeps
++// the scenario names in one place as wings are added.
++//
++char* M_DoomPerfModeTitle(int mode)
++{
++    char* label;
++
++    if (mode < 0 || mode >= mode_end)
++	mode = mode_live;
++    label = ModeLabels[mode];
++    if (!strncmp(label, "SIM: ", 5))
++	label += 5;
++    return label;
++}
++
++//
++// Doom Perf menu tree.
++//
++// Every screen is a dpscreen_t: a breadcrumb title plus rows laid out in
++// whitespace-separated groups. The engine's menu_t / menuitem_t arrays are
++// generated from those rows in M_DpInitMenus, so each row list is the single
++// source of truth -- there is no parallel label array to keep in step with the
++// selectable items.
++//
++//   MODE -> LIVE STATS
++//        -> SIMULATED -> CPU / MEMORY / DISK / NETWORK -> that resource's sims
++//   SCREEN RESOLUTION -> LOW / REGULAR / HIGH
++//
++// Layout, in Doom's 320x200 UI coordinates. Everything hangs off one left edge
++// (DP_X). Items use the large style; the breadcrumb, group captions, notes and
++// the key hint use the small style. Both are Chakra Petch at the engine's real
++// pixel size (wasm/menu_font.c) except at 320x200, where they fall back to the
++// HUD font at 2x / 1x and labels show upper-cased. Labels are written in
++// sentence case for the typeface. Proximity carries the grouping: rows in a group sit
++// DP_ROW apart, a new group adds DP_GROUP_GAP, and a group caption sits closer
++// to its own rows than to the group above it.
++//
++#define DP_X            60
++#define DP_HEAD_Y       58      // breadcrumb
++#define DP_LIST_Y       76      // first row's text top
++#define DP_ROW          20      // 11-unit caps (14 for the HUD font at 2x)
++#define DP_GROUP_GAP    12      // extra space before a new group
++#define DP_CAPTION_GAP  12      // caption top -> its first row's top
++#define DP_NOTE_GAP     6       // last row's top + DP_ROW + this -> note
++#define DP_HINT_Y       184
++#define DP_SCRIM_Y      50      // title-screen dim starts just under the wordmark
++#define DP_SCRIM_LEVEL  18      // colormap light level (0 = full, 31 = black)
++#define DP_MAX_ROWS     8
  
 -menu_t  EpiDef =
 -{
@@ -256,12 +286,14 @@
 -    48,63,              // x,y
 -    ep1			// lastOn
 -};
--
++typedef struct dpscreen_s dpscreen_t;
+ 
 -//
 -// NEW GAME
 -//
 -enum
--{
++typedef struct
+ {
 -    killthings,
 -    toorough,
 -    hurtme,
@@ -278,19 +310,42 @@
 -    {1,"M_ULTRA",	M_ChooseSkill, 'u'},
 -    {1,"M_NMARE",	M_ChooseSkill, 'n'}
 -};
--
++    char*       label;          // drawn with the 2x font
++    // NULL continues the group above; "" starts a new group after a gap;
++    // any other text starts a new group under that small caption.
++    char*       group;
++    dpscreen_t* next;           // submenu this row opens, or NULL for a leaf
++    int         value;          // leaf value handed to the screen's choose()
++} dprow_t;
+ 
 -menu_t  NewDef =
--{
++struct dpscreen_s
+ {
 -    newg_end,		// # of menu items
 -    &EpiDef,		// previous menu
 -    NewGameMenu,	// menuitem_t ->
 -    M_DrawNewGame,	// drawing routine ->
 -    48,63,              // x,y
 -    hurtme		// lastOn
--};
--
--
--
++    char*       title;          // breadcrumb segment; NULL on the root
++    dprow_t*    rows;
++    int         numrows;
++    void        (*choose)(int value);
++    char*       (*note)(void);  // small text under the list, or NULL
++    // Filled in by M_DpInitMenus.
++    dpscreen_t* parent;
++    menu_t      def;
++    menuitem_t  items[DP_MAX_ROWS];
+ };
+ 
++#define DP_ROWS(a) (sizeof(a) / sizeof((a)[0]))
+ 
++void M_DpChoose(int choice);
++void M_DpDraw(void);
++void M_DpStartMode(int mode);
++void M_DpSetResolution(int width);
++char* M_DpResolutionNote(void);
+ 
 -//
 -// OPTIONS MENU
 -//
@@ -337,22 +392,31 @@
 -    rdthsempty1,
 -    read1_end
 -} read_e;
--
++static dpscreen_t DpRoot, DpMode, DpSim, DpCpu, DpMem, DpDisk, DpNet, DpRes;
+ 
 -menuitem_t ReadMenu1[] =
--{
++static dprow_t DpRootRows[] =
+ {
 -    {1,"",M_ReadThis2,0}
--};
--
++    {"Mode",              NULL, &DpMode, 0},
++    // Starting a session and changing a display setting are different kinds
++    // of choice, so they sit in separate groups.
++    {"Screen resolution", "",   &DpRes,  0}
+ };
+ 
 -menu_t  ReadDef1 =
--{
++static dprow_t DpModeRows[] =
+ {
 -    read1_end,
 -    &MainDef,
 -    ReadMenu1,
 -    M_DrawReadThis1,
 -    280,185,
 -    0
--};
--
++    {"Live stats", NULL, NULL,   mode_live},
++    {"Simulated",  NULL, &DpSim, 0}
+ };
+ 
 -enum
 -{
 -    rdthsempty2,
@@ -360,25 +424,38 @@
 -} read_e2;
 -
 -menuitem_t ReadMenu2[]=
--{
++static dprow_t DpSimRows[] =
+ {
 -    {1,"",M_FinishReadThis,0}
--};
--
++    {"CPU",     NULL, &DpCpu,  0},
++    {"Memory",  NULL, &DpMem,  0},
++    {"Disk",    NULL, &DpDisk, 0},
++    {"Network", NULL, &DpNet,  0}
+ };
+ 
 -menu_t  ReadDef2 =
--{
++// Each resource screen leads with utilization, then a saturation group. Where
++// saturation has twins, they share a SATURATION caption and sit together: the
++// pair is meant to be flipped between back to back, so the contrast is the
++// lesson. The breadcrumb already names the resource, so labels don't repeat it.
++static dprow_t DpCpuRows[] =
+ {
 -    read2_end,
 -    &ReadDef1,
 -    ReadMenu2,
 -    M_DrawReadThis2,
 -    330,175,
 -    0
--};
--
++    {"High utilization", NULL, NULL, mode_simutil},
++    {"High saturation",  "",   NULL, mode_simsat}
+ };
+ 
 -//
 -// SOUND VOLUME MENU
 -//
 -enum
--{
++static dprow_t DpMemRows[] =
+ {
 -    sfx_vol,
 -    sfx_empty1,
 -    music_vol,
@@ -392,23 +469,31 @@
 -    {-1,"",0},
 -    {2,"M_MUSVOL",M_MusicVol,'m'},
 -    {-1,"",0}
--};
--
++    {"High utilization", NULL,         NULL, mode_simmemutil},
++    {"With swap",        "Saturation", NULL, mode_simmemsat},
++    {"Without swap",     NULL,         NULL, mode_simmemsatnoswap}
+ };
+ 
 -menu_t  SoundDef =
--{
++static dprow_t DpDiskRows[] =
+ {
 -    sound_end,
 -    &OptionsDef,
 -    SoundMenu,
 -    M_DrawSound,
 -    80,64,
 -    0
--};
--
++    {"High utilization", NULL,         NULL, mode_simdiskutil},
++    {"Shallow queue",    "Saturation", NULL, mode_simdisksat},
++    {"Deep queue",       NULL,         NULL, mode_simdisksatdeep}
+ };
+ 
 -//
 -// LOAD GAME MENU
 -//
 -enum
--{
++static dprow_t DpNetRows[] =
+ {
 -    load1,
 -    load2,
 -    load3,
@@ -426,18 +511,25 @@
 -    {1,"", M_LoadSelect,'4'},
 -    {1,"", M_LoadSelect,'5'},
 -    {1,"", M_LoadSelect,'6'}
--};
--
++    {"High utilization", NULL,         NULL, mode_simnetutil},
++    {"Receive",          "Saturation", NULL, mode_simnetsatrx},
++    {"Transmit",         NULL,         NULL, mode_simnetsattx}
+ };
+ 
 -menu_t  LoadDef =
--{
++static dprow_t DpResRows[] =
+ {
 -    load_end,
 -    &MainDef,
 -    LoadMenu,
 -    M_DrawLoad,
 -    80,54,
 -    0
--};
--
++    {"Low 320x200",     NULL, NULL, 320},
++    {"Regular 640x400", NULL, NULL, 640},
++    {"High 960x600",    NULL, NULL, 960}
+ };
+ 
 -//
 -// SAVE GAME MENU
 -//
@@ -450,18 +542,29 @@
 -    {1,"", M_SaveSelect,'5'},
 -    {1,"", M_SaveSelect,'6'}
 -};
--
++static dpscreen_t DpRoot = {NULL,                DpRootRows, DP_ROWS(DpRootRows), NULL,              NULL};
++static dpscreen_t DpMode = {"Mode",              DpModeRows, DP_ROWS(DpModeRows), M_DpStartMode,     NULL};
++static dpscreen_t DpSim  = {"Simulated",         DpSimRows,  DP_ROWS(DpSimRows),  NULL,              NULL};
++static dpscreen_t DpCpu  = {"CPU",               DpCpuRows,  DP_ROWS(DpCpuRows),  M_DpStartMode,     NULL};
++static dpscreen_t DpMem  = {"Memory",            DpMemRows,  DP_ROWS(DpMemRows),  M_DpStartMode,     NULL};
++static dpscreen_t DpDisk = {"Disk",              DpDiskRows, DP_ROWS(DpDiskRows), M_DpStartMode,     NULL};
++static dpscreen_t DpNet  = {"Network",           DpNetRows,  DP_ROWS(DpNetRows),  M_DpStartMode,     NULL};
++static dpscreen_t DpRes  = {"Screen resolution", DpResRows,  DP_ROWS(DpResRows),  M_DpSetResolution, M_DpResolutionNote};
+ 
 -menu_t  SaveDef =
--{
++static dpscreen_t* DpScreens[] =
+ {
 -    load_end,
 -    &MainDef,
 -    SaveMenu,
 -    M_DrawSave,
 -    80,54,
 -    0
--};
--
--
++    &DpRoot, &DpMode, &DpSim, &DpCpu, &DpMem, &DpDisk, &DpNet, &DpRes
+ };
+ 
++enum { DP_ITEM, DP_SMALL };
+ 
 -//
 -// M_ReadSaveStrings
 -//  read the strings from the savegame files
@@ -535,7 +638,8 @@
 -// User wants to load this game
 -//
 -void M_LoadSelect(int choice)
--{
++static void M_DpText(int x, int y, int style, int muted, char* string)
+ {
 -    char    name[256];
 -	
 -    if (M_CheckParm("-cdrom"))
@@ -543,95 +647,21 @@
 -    else
 -	sprintf(name,SAVEGAMENAME"%d.dsg",choice);
 -    G_LoadGame (name);
-+//
-+// Doom Perf: scenario title for the automap heads-up, derived from the active
-+// data-source label (ModeLabels[doomperf_sim_mode]). The "SIM: " prefix is
-+// dropped so the map reads as the condition it is showing ("HIGH CPU
-+// UTILIZATION"); live telemetry stays "LIVE STATS". Reusing ModeLabels keeps
-+// the scenario names in one place as wings are added.
-+//
-+char* M_DoomPerfModeTitle(int mode)
-+{
-+    char* label;
-+
-+    if (mode < 0 || mode >= mode_end)
-+	mode = mode_live;
-+    label = ModeLabels[mode];
-+    if (!strncmp(label, "SIM: ", 5))
-+	label += 5;
-+    return label;
-+}
-+
-+#define MODE_TITLE_Y  56
-+#define MODE_FIRST_Y  80
-+#define MODE_PER_PAGE 5
-+
-+void M_DrawMode(void)
-+{
-+    int   page;
-+    int   pages;
-+    int   start;
-+    int   stop;
-+    int   i;
-+    char  hint[40];
-+
-+    pages = (mode_end + MODE_PER_PAGE - 1) / MODE_PER_PAGE;
-+    page  = itemOn / MODE_PER_PAGE;
-+    start = page * MODE_PER_PAGE;
-+    stop  = start + MODE_PER_PAGE;
-+    if (stop > mode_end)
-+        stop = mode_end;
-+
-+    // Slide ModeDef.y so the shared skull cursor (M_Drawer draws it at
-+    // ModeDef.y + itemOn*LINEHEIGHT) lands on the visible slot for itemOn even
-+    // though only the current page is painted, starting at MODE_FIRST_Y.
-+    ModeDef.y = MODE_FIRST_Y - start * LINEHEIGHT;
-+
-+    // Recolour this menu's HUD-font text to high-contrast cool white so it reads
-+    // over the flame-graph title background (Freedoom's red font was red-on-red).
-+    // The remap is scoped to these draws only; the skull cursor (M_Drawer, after
-+    // this routine) and all other menus keep the stock font. See i_video_ems.c.
-+    DoomPerf_EnsureMenuLut();
-+    doomperf_menu_remap = 1;
-+
-+    M_WriteText(60, MODE_TITLE_Y, "SELECT DATA SOURCE");
-+    for (i = start; i < stop; i++)
-+        M_WriteText(ModeDef.x, MODE_FIRST_Y + (i - start) * LINEHEIGHT, ModeLabels[i]);
-+
-+    if (pages > 1)
-+    {
-+        sprintf(hint, "PAGE %d/%d - UP/DOWN WRAPS", page + 1, pages);
-+        M_WriteText(ModeDef.x, MODE_FIRST_Y + MODE_PER_PAGE * LINEHEIGHT + 4, hint);
-+    }
-+
-+    doomperf_menu_remap = 0;
-+}
-+
-+void M_ChooseMode(int choice)
-+{
-+    // 0 = live telemetry; 1/2 = simulated high CPU utilization/saturation
-+    // (read by the CPU room renderer); 3/4/5 disk, 6/7/8 memory, 9/10/11 network
-+    // (read by the browser's USE terminal scenarios). Network has THREE: 9
-+    // utilization, 10 receive saturation, 11 transmit saturation; the rx/tx modes
-+    // rotate the hot bottleneck through the socket/kernel/ring stages, and the
-+    // socket stage fires the socket-bay overflow flashover as part of the cycle.
-+    doomperf_sim_mode = choice;
-+    // sk_medium was the local NewGame enum's "hurtme" before that menu was
-+    // deleted; the lab map always starts at skill 2, episode 1, map 1.
-+    G_DeferedInitNew(sk_medium,1,1);
-     M_ClearMenus ();
- }
- 
+-    M_ClearMenus ();
+-}
+-
 -//
 -// Selected from DOOM menu
 -//
 -void M_LoadGame (int choice)
 -{
 -    if (netgame)
--    {
++    if (DoomPerf_MenuFontAvailable())
+     {
 -	M_StartMessage(LOADNET,NULL,false);
--	return;
--    }
++	DoomPerf_MenuDrawText(x, y, style, muted, string);
+ 	return;
+     }
 -	
 -    M_SetupNextMenu(&LoadDef);
 -    M_ReadSaveStrings();
@@ -657,26 +687,36 @@
 -	i = M_StringWidth(savegamestrings[saveSlot]);
 -	M_WriteText(LoadDef.x + i,LoadDef.y+LINEHEIGHT*saveSlot,"_");
 -    }
--}
--
++    DoomPerf_SetMenuTone(muted);
++    if (style == DP_ITEM)
++	M_WriteTextLarge(x, y, string);
++    else
++	M_WriteText(x, y, string);
+ }
+ 
 -//
 -// M_Responder calls this when user is finished
 -//
 -void M_DoSave(int slot)
--{
++static int M_DpTextWidth(int style, char* string)
+ {
 -    G_SaveGame (slot,savegamestrings[slot]);
 -    M_ClearMenus ();
 -
 -    // PICK QUICKSAVE SLOT YET?
 -    if (quickSaveSlot == -2)
 -	quickSaveSlot = slot;
--}
--
++    if (DoomPerf_MenuFontAvailable())
++	return DoomPerf_MenuTextWidth(style, string);
++    return M_StringWidth(string) * (style == DP_ITEM ? 2 : 1);
+ }
+ 
 -//
 -// User wants to save. Start string input for M_Responder
 -//
 -void M_SaveSelect(int choice)
--{
++void M_DpInitMenus(void)
+ {
 -    // we are going to be intercepting all chars
 -    saveStringEnter = 1;
 -    
@@ -711,24 +751,47 @@
 -//      M_QuickSave
 -//
 -char    tempstring[80];
--
++    int i, r;
++    dpscreen_t* s;
+ 
 -void M_QuickSaveResponse(int ch)
 -{
 -    if (ch == 'y')
--    {
++    for (i = 0; i < (int)DP_ROWS(DpScreens); i++)
+     {
 -	M_DoSave(quickSaveSlot);
 -	S_StartSound(NULL,sfx_swtchx);
--    }
--}
--
++	s = DpScreens[i];
++	if (s->numrows > DP_MAX_ROWS)
++	    I_Error("M_DpInitMenus: %s has too many rows", s->title);
++	s->def.numitems = s->numrows;
++	s->def.menuitems = s->items;
++	s->def.routine = M_DpDraw;
++	s->def.x = DP_X;
++	s->def.y = DP_LIST_Y;
++	for (r = 0; r < s->numrows; r++)
++	{
++	    s->items[r].status = 1;
++	    s->items[r].routine = M_DpChoose;
++	    if (s->rows[r].next)
++	    {
++		s->rows[r].next->parent = s;
++		s->rows[r].next->def.prevMenu = &s->def;
++	    }
++	}
+     }
+ }
+ 
 -void M_QuickSave(void)
--{
++static dpscreen_t* M_DpCurrent(void)
+ {
 -    if (!usergame)
 -    {
 -	S_StartSound(NULL,sfx_oof);
 -	return;
 -    }
--
++    int i;
+ 
 -    if (gamestate != GS_LEVEL)
 -	return;
 -	
@@ -742,15 +805,21 @@
 -    }
 -    sprintf(tempstring,QSPROMPT,savegamestrings[quickSaveSlot]);
 -    M_StartMessage(tempstring,M_QuickSaveResponse,true);
--}
--
++    for (i = 0; i < (int)DP_ROWS(DpScreens); i++)
++	if (&DpScreens[i]->def == currentMenu)
++	    return DpScreens[i];
++    return &DpRoot;
+ }
+ 
 -
 -
 -//
 -// M_QuickLoad
 -//
 -void M_QuickLoadResponse(int ch)
--{
++// Text top of row `index`, following the group gaps and captions above it.
++static int M_DpRowY(dpscreen_t* s, int index)
+ {
 -    if (ch == 'y')
 -    {
 -	M_LoadSelect(quickSaveSlot);
@@ -758,14 +827,23 @@
 -    }
 -}
 -
--
++    int y = DP_LIST_Y;
++    int r;
+ 
 -void M_QuickLoad(void)
 -{
 -    if (netgame)
--    {
++    for (r = 0; r <= index && r < s->numrows; r++)
+     {
 -	M_StartMessage(QLOADNET,NULL,false);
 -	return;
--    }
++	if (r > 0)
++	    y += DP_ROW;
++	if (r > 0 && s->rows[r].group)
++	    y += DP_GROUP_GAP;
++	if (s->rows[r].group && s->rows[r].group[0])
++	    y += DP_CAPTION_GAP;
+     }
 -	
 -    if (quickSaveSlot < 0)
 -    {
@@ -774,8 +852,9 @@
 -    }
 -    sprintf(tempstring,QLPROMPT,savegamestrings[quickSaveSlot]);
 -    M_StartMessage(tempstring,M_QuickLoadResponse,true);
--}
--
++    return y;
+ }
+ 
 -
 -
 -
@@ -784,7 +863,11 @@
 -// Had a "quick hack to fix romero bug"
 -//
 -void M_DrawReadThis1(void)
--{
++// Dim the flame-graph title under the menu so the text reads at any row. Title
++// screen only: the page is repainted every frame there, whereas in a level the
++// status bar is only redrawn when it changes and the dim would compound.
++static void M_DpScrim(void)
+ {
 -    inhelpscreens = true;
 -    switch ( gamemode )
 -    {
@@ -803,7 +886,13 @@
 -}
 -
 -
--
++    int scale = doomperf_ui_scale ? SCREENWIDTH / 320 : 1;
++    int y0 = DP_SCRIM_Y * scale;
++    int ramp = 8 * scale;
++    int x, y, level;
++    byte* row;
++    lighttable_t* map;
+ 
 -//
 -// Read This Menus - optional second page.
 -//
@@ -811,7 +900,10 @@
 -{
 -    inhelpscreens = true;
 -    switch ( gamemode )
--    {
++    if (gamestate != GS_DEMOSCREEN || !colormaps)
++	return;
++    for (y = y0; y < SCREENHEIGHT; y++)
+     {
 -      case retail:
 -      case commercial:
 -	// This hack keeps us from having to change menus.
@@ -823,16 +915,23 @@
 -	break;
 -      default:
 -	break;
--    }
++	level = y - y0 < ramp ? DP_SCRIM_LEVEL * (y - y0 + 1) / ramp : DP_SCRIM_LEVEL;
++	map = colormaps + level * 256;
++	row = screens[0] + y * SCREENWIDTH;
++	for (x = 0; x < SCREENWIDTH; x++)
++	    row[x] = map[row[x]];
+     }
 -    return;
--}
--
+ }
+ 
 -
 -//
 -// Change Sfx & Music volumes
 -//
 -void M_DrawSound(void)
--{
++// Breadcrumb: ancestors muted, the current screen bright.
++static void M_DpDrawBreadcrumb(dpscreen_t* s)
+ {
 -    V_DrawPatchDirect (60,38,0,W_CacheLumpName("M_SVOL",PU_CACHE));
 -
 -    M_DrawThermo(SoundDef.x,SoundDef.y+LINEHEIGHT*(sfx_vol+1),
@@ -863,11 +962,17 @@
 -	
 -    S_SetSfxVolume(snd_SfxVolume /* *8 */);
 -}
--
++    dpscreen_t* path[DP_ROWS(DpScreens)];
++    int n = 0;
++    int x = DP_X;
+ 
 -void M_MusicVol(int choice)
 -{
 -    switch(choice)
--    {
++    for (; s && s->title && n < (int)DP_ROWS(path); s = s->parent)
++	path[n++] = s;
++    while (n--)
+     {
 -      case 0:
 -	if (snd_MusicVolume)
 -	    snd_MusicVolume--;
@@ -876,11 +981,18 @@
 -	if (snd_MusicVolume < 15)
 -	    snd_MusicVolume++;
 -	break;
--    }
++	M_DpText(x, DP_HEAD_Y, DP_SMALL, n > 0, path[n]->title);
++	x += M_DpTextWidth(DP_SMALL, path[n]->title);
++	if (n > 0)
++	{
++	    M_DpText(x, DP_HEAD_Y, DP_SMALL, 1, " / ");
++	    x += M_DpTextWidth(DP_SMALL, " / ");
++	}
+     }
 -	
 -    S_SetMusicVolume(snd_MusicVolume /* *8 */);
--}
--
+ }
+ 
 -
 -
 -
@@ -888,13 +1000,25 @@
 -// M_DrawMainMenu
 -//
 -void M_DrawMainMenu(void)
--{
++void M_DpDraw(void)
+ {
 -    V_DrawPatchDirect (94,2,0,W_CacheLumpName("M_DOOM",PU_CACHE));
 -}
--
--
--
--
++    dpscreen_t* s = M_DpCurrent();
++    dprow_t* row;
++    int r, y;
+ 
++    M_DpScrim();
+ 
++    // Recolour the HUD font to high-contrast cool white (bright) or slate
++    // (muted) so it reads over the flame-graph title background (Freedoom's
++    // red font was red-on-red). The remap is scoped to these draws; the caret
++    // (M_Drawer, after this routine) keeps its own colours. See i_video_ems.c.
++    DoomPerf_EnsureMenuLut();
++    doomperf_menu_remap = 1;
+ 
++    M_DpDrawBreadcrumb(s);
+ 
 -//
 -// M_NewGame
 -//
@@ -907,18 +1031,30 @@
 -void M_NewGame(int choice)
 -{
 -    if (netgame && !demoplayback)
--    {
++    for (r = 0; r < s->numrows; r++)
+     {
 -	M_StartMessage(NEWGAME,NULL,false);
 -	return;
--    }
++	row = &s->rows[r];
++	y = M_DpRowY(s, r);
++	if (row->group && row->group[0])
++	    M_DpText(DP_X, y - DP_CAPTION_GAP, DP_SMALL, 1, row->group);
++	M_DpText(DP_X, y, DP_ITEM, 0, row->label);
+     }
 -	
 -    if ( gamemode == commercial )
 -	M_SetupNextMenu(&NewDef);
 -    else
 -	M_SetupNextMenu(&EpiDef);
 -}
--
--
+ 
++    if (s->note)
++	M_DpText(DP_X, M_DpRowY(s, s->numrows - 1) + DP_ROW + DP_NOTE_GAP, DP_SMALL, 1, s->note());
++    // Named to match the touch controls' SELECT / BACK buttons. On the root,
++    // back just closes the menu, so only select is worth a hint.
++    M_DpText(DP_X, DP_HINT_Y, DP_SMALL, 1,
++	     s == &DpRoot ? "Enter select" : "Enter select    Backspace back");
+ 
 -//
 -//      M_Episode
 -//
@@ -927,31 +1063,47 @@
 -void M_DrawEpisode(void)
 -{
 -    V_DrawPatchDirect (54,38,0,W_CacheLumpName("M_EPISOD",PU_CACHE));
--}
--
++    DoomPerf_SetMenuTone(0);
++    doomperf_menu_remap = 0;
+ }
+ 
 -void M_VerifyNightmare(int ch)
--{
++// The >_ prompt caret on the current row. With the typeface it is set in the
++// item style, ending a fixed gap before the labels; the underscore blinks on
++// the skull-animation clock. The HUD-font fallback keeps the M_SKULL1/2 caret
++// patches (scripts/lib/menu-cursor.mjs), 12 tall, centred on the 14-tall 2x text.
++void M_DpDrawCaret(int blink)
+ {
 -    if (ch != 'y')
 -	return;
 -		
 -    G_DeferedInitNew(nightmare,epi+1,1);
 -    M_ClearMenus ();
 -}
--
++    int y = M_DpRowY(M_DpCurrent(), itemOn);
+ 
 -void M_ChooseSkill(int choice)
 -{
 -    if (choice == nightmare)
--    {
++    if (DoomPerf_MenuFontAvailable())
+     {
 -	M_StartMessage(NIGHTMARE,M_VerifyNightmare,true);
--	return;
--    }
++	int x = DP_X - 10 - M_DpTextWidth(DP_ITEM, ">_");
++	DoomPerf_MenuDrawText(x, y, DP_ITEM, 0, ">");
++	if (!blink)
++	    DoomPerf_MenuDrawText(x + M_DpTextWidth(DP_ITEM, ">"), y, DP_ITEM, 0, "_");
+ 	return;
+     }
 -	
 -    G_DeferedInitNew(choice,epi+1,1);
 -    M_ClearMenus ();
--}
--
++    V_DrawPatchDirect(DP_X + SKULLXOFF, y + 1, 0,
++		      W_CacheLumpName(blink ? "M_SKULL2" : "M_SKULL1", PU_CACHE));
+ }
+ 
 -void M_Episode(int choice)
--{
++void M_DpChoose(int choice)
+ {
 -    if ( (gamemode == shareware)
 -	 && choice)
 -    {
@@ -959,20 +1111,33 @@
 -	M_SetupNextMenu(&ReadDef1);
 -	return;
 -    }
--
++    dpscreen_t* s = M_DpCurrent();
++    dprow_t* row = &s->rows[choice];
++    int r;
+ 
 -    // Yet another hack...
 -    if ( (gamemode == registered)
 -	 && (choice > 2))
--    {
++    if (row->next)
+     {
 -      fprintf( stderr,
 -	       "M_Episode: 4th episode requires UltimateDOOM\n");
 -      choice = 0;
--    }
++	// The resolution screen opens on the resolution in use; every other
++	// submenu reopens where it was last left.
++	if (row->next == &DpRes)
++	    for (r = 0; r < DpRes.numrows; r++)
++		if (DpRes.rows[r].value == SCREENWIDTH)
++		    DpRes.def.lastOn = r;
++	M_SetupNextMenu(&row->next->def);
+     }
 -	 
 -    epi = choice;
 -    M_SetupNextMenu(&NewDef);
--}
--
++    else if (s->choose)
++	s->choose(row->value);
+ }
+ 
 -
 -
 -//
@@ -983,7 +1148,8 @@
 -
 -
 -void M_DrawOptions(void)
--{
++char* M_DpResolutionNote(void)
+ {
 -    V_DrawPatchDirect (108,15,0,W_CacheLumpName("M_OPTTTL",PU_CACHE));
 -	
 -    V_DrawPatchDirect (OptionsDef.x + 175,OptionsDef.y+LINEHEIGHT*detail,0,
@@ -1023,7 +1189,8 @@
 -    message_dontfuckwithme = true;
 -}
 -
--
++    static char note[64];
+ 
 -//
 -// M_EndGame
 -//
@@ -1035,13 +1202,19 @@
 -    currentMenu->lastOn = itemOn;
 -    M_ClearMenus ();
 -    D_StartTitle ();
--}
--
++    sprintf(note, "Currently %dx%d\nChanging restarts the game", SCREENWIDTH, SCREENHEIGHT);
++    return note;
+ }
+ 
 -void M_EndGame(int choice)
--{
++void M_DpSetResolution(int width)
+ {
 -    choice = 0;
 -    if (!usergame)
--    {
++    // Picking the resolution already in use changes nothing: resume play in a
++    // level, or step back to the root on the title screen.
++    if (width == SCREENWIDTH)
+     {
 -	S_StartSound(NULL,sfx_oof);
 -	return;
 -    }
@@ -1049,15 +1222,38 @@
 -    if (netgame)
 -    {
 -	M_StartMessage(NETEND,NULL,false);
--	return;
--    }
++	if (gamestate == GS_LEVEL)
++	    M_ClearMenus();
++	else
++	    M_GoBack();
+ 	return;
+     }
 -	
 -    M_StartMessage(ENDGAME,M_EndGameResponse,true);
--}
--
--
--
--
++    // src/index.ts reloads the matching engine and, if a level was running,
++    // restarts it in the same mode (src/resolution.ts).
++    doomperf_resolution_request = width;
++    M_ClearMenus();
++}
++
++void M_DpStartMode(int mode)
++{
++    // 0 = live telemetry; 1/2 = simulated high CPU utilization/saturation
++    // (read by the CPU room renderer); 3/4/5 disk, 6/7/8 memory, 9/10/11 network
++    // (read by the browser's USE terminal scenarios). Network has THREE: 9
++    // utilization, 10 receive saturation, 11 transmit saturation; the rx/tx modes
++    // rotate the hot bottleneck through the socket/kernel/ring stages, and the
++    // socket stage fires the socket-bay overflow flashover as part of the cycle.
++    doomperf_sim_mode = mode;
++    // sk_medium was the local NewGame enum's "hurtme" before that menu was
++    // deleted; the lab map always starts at skill 2, episode 1, map 1.
++    G_DeferedInitNew(sk_medium,1,1);
++    M_ClearMenus ();
+ }
+ 
+ 
+ 
+ 
 -//
 -// M_ReadThis
 -//
@@ -1066,22 +1262,22 @@
 -    choice = 0;
 -    M_SetupNextMenu(&ReadDef1);
 -}
--
+ 
 -void M_ReadThis2(int choice)
 -{
 -    choice = 0;
 -    M_SetupNextMenu(&ReadDef2);
 -}
--
+ 
 -void M_FinishReadThis(int choice)
 -{
 -    choice = 0;
 -    M_SetupNextMenu(&MainDef);
 -}
--
--
--
--
+ 
+ 
+ 
+ 
 -//
 -// M_QuitDOOM
 -//
@@ -1096,7 +1292,7 @@
 -    sfx_posit3,
 -    sfx_sgtatk
 -};
--
+ 
 -int     quitsounds2[8] =
 -{
 -    sfx_vilact,
@@ -1108,9 +1304,9 @@
 -    sfx_bspact,
 -    sfx_sgtatk
 -};
--
--
--
+ 
+ 
+ 
 -void M_QuitResponse(int ch)
 -{
 -    if (ch != 'y')
@@ -1125,10 +1321,10 @@
 -    }
 -    I_Quit ();
 -}
--
--
--
--
+ 
+ 
+ 
+ 
 -void M_QuitDOOM(int choice)
 -{
 -  // We pick index 0 which is language sensitive,
@@ -1140,10 +1336,10 @@
 -  
 -  M_StartMessage(endstring,M_QuitResponse,true);
 -}
--
--
--
--
+ 
+ 
+ 
+ 
 -void M_ChangeSensitivity(int choice)
 -{
 -    switch(choice)
@@ -1158,10 +1354,10 @@
 -	break;
 -    }
 -}
--
--
--
--
+ 
+ 
+ 
+ 
 -void M_ChangeDetail(int choice)
 -{
 -    choice = 0;
@@ -1179,35 +1375,10 @@
 -    else
 -	players[consoleplayer].message = DETAILLO;*/
 -}
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
-+
  
  
  
-@@ -1176,52 +427,6 @@
+@@ -1176,52 +723,6 @@
  
  
  
@@ -1260,7 +1431,40 @@
  
  
  void
-@@ -1449,47 +654,6 @@
+@@ -1337,6 +838,32 @@
+     }
+ }
+ 
++// Double the menu font in the two short menus. Positions stay in Doom's
++// 320x200 UI coordinates; V_DrawPatch enlarges only the glyph pixels.
++void M_WriteTextLarge(int x, int y, char* string)
++{
++    int cx = x;
++    int c, w;
++    char* ch = string;
++
++    doomperf_patch_scale = 2;
++    while ((c = *ch++))
++    {
++        c = toupper(c) - HU_FONTSTART;
++        if (c < 0 || c >= HU_FONTSIZE)
++        {
++            cx += 8;
++            continue;
++        }
++        w = SHORT(hu_font[c]->width);
++        if (cx + w * 2 > 320)
++            break;
++        V_DrawPatchDirect(cx, y, 0, hu_font[c]);
++        cx += w * 2;
++    }
++    doomperf_patch_scale = 1;
++}
++
+ 
+ 
+ //
+@@ -1449,47 +976,6 @@
  	return false;
  
      
@@ -1308,7 +1512,7 @@
      
      // Take care of any messages that need input
      if (messageToPrint)
-@@ -1508,14 +672,10 @@
+@@ -1508,14 +994,10 @@
  	return true;
      }
  	
@@ -1327,7 +1531,7 @@
      if (!menuactive)
  	switch(ch)
  	{
-@@ -1533,75 +693,6 @@
+@@ -1533,75 +1015,6 @@
  	    S_StartSound(NULL,sfx_stnmov);
  	    return true;
  				
@@ -1403,30 +1607,90 @@
  	}
  
      
-@@ -1727,7 +818,11 @@
+@@ -1642,6 +1055,11 @@
+ 	return true;
+ 
+       case KEY_LEFTARROW:
++	if (currentMenu->prevMenu && currentMenu->menuitems[itemOn].status != 2)
++	{
++	    M_GoBack();
++	    return true;
++	}
+ 	if (currentMenu->menuitems[itemOn].routine &&
+ 	    currentMenu->menuitems[itemOn].status == 2)
+ 	{
+@@ -1684,13 +1102,7 @@
+ 	return true;
+ 		
+       case KEY_BACKSPACE:
+-	currentMenu->lastOn = itemOn;
+-	if (currentMenu->prevMenu)
+-	{
+-	    currentMenu = currentMenu->prevMenu;
+-	    itemOn = currentMenu->lastOn;
+-	    S_StartSound(NULL,sfx_swtchn);
+-	}
++	M_GoBack();
+ 	return true;
+ 	
+       default:
+@@ -1727,7 +1139,9 @@
  	return;
      
      menuactive = 1;
 -    currentMenu = &MainDef;         // JDC
-+    // Doom Perf: open straight on the data-source list. The classic NEW GAME /
-+    // OPTIONS main menu (MainDef) was deleted, so ModeDef is the root; always
-+    // start at the top item / first page.
-+    currentMenu = &ModeDef;
++    // Keep the native menu over the animated title or current game frame.
++    currentMenu = &DpRoot.def;
 +    currentMenu->lastOn = 0;
      itemOn = currentMenu->lastOn;   // JDC
  }
  
-@@ -1846,7 +941,8 @@
+@@ -1798,9 +1212,8 @@
+     }
+ 
+     
+-    // DRAW SKULL
+-    V_DrawPatchDirect(x + SKULLXOFF,currentMenu->y - 5 + itemOn*LINEHEIGHT, 0,
+-		      W_CacheLumpName(skullName[whichSkull],PU_CACHE));
++    // DRAW SKULL (the >_ prompt caret)
++    M_DpDrawCaret(whichSkull);
+ 
+ }
+ 
+@@ -1808,6 +1221,22 @@
+ //
+ // M_ClearMenus
+ //
++void M_GoBack(void)
++{
++    currentMenu->lastOn = itemOn;
++    if (currentMenu->prevMenu)
++    {
++	currentMenu = currentMenu->prevMenu;
++	itemOn = currentMenu->lastOn;
++	S_StartSound(NULL,sfx_swtchn);
++    }
++    else
++    {
++	M_ClearMenus();
++	S_StartSound(NULL,sfx_swtchx);
++    }
++}
++
+ void M_ClearMenus (void)
+ {
+     menuactive = 0;
+@@ -1846,7 +1275,8 @@
  //
  void M_Init (void)
  {
 -    currentMenu = &MainDef;
-+    // Doom Perf: the data-source list is the root menu (NEW GAME / OPTIONS removed).
-+    currentMenu = &ModeDef;
++    M_DpInitMenus();
++    currentMenu = &DpRoot.def;
      menuactive = 0;
      itemOn = currentMenu->lastOn;
      whichSkull = 0;
-@@ -1857,37 +953,6 @@
+@@ -1857,37 +1287,5 @@
      messageLastMenuActive = menuactive;
      quickSaveSlot = -1;
  
@@ -1461,9 +1725,6 @@
 -      default:
 -	break;
 -    }
--    
--}
+     
+ }
 -
-+    
-+}
-+
