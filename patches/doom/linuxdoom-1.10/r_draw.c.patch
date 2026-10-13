@@ -214,7 +214,7 @@
 +// instantaneous runnable queue and sustained load overcommit. build-doomperf-map.mjs aligns the display
 +// sectors to these grids; r_plane.c selects one special span path at a time.
 +#define DOOMPERF_CPU_GRID_X0		-128
-+#define DOOMPERF_CPU_GRID_Y0		992
++#define DOOMPERF_CPU_GRID_Y0		1040
 +#define DOOMPERF_CPU_GRID_COLUMNS	8
 +#define DOOMPERF_CPU_GRID_CELL_SIZE	32
 +
@@ -504,7 +504,7 @@
 +// World-space centres of the 8 ring pillars (north wing, identity rotation),
 +// matching ringOrder in build-doomperf-map.mjs so pad i sits under pillar i.
 +static const int doomperf_pad_u[8] = { -96, 0, 96, 96, 96, 0, -96, -96 };
-+static const int doomperf_pad_v[8] = { 1024, 1024, 1024, 1120, 1216, 1216, 1216, 1120 };
++static const int doomperf_pad_v[8] = { 1072, 1072, 1072, 1168, 1264, 1264, 1264, 1168 };
 +
 +// The core-ring floor now shows only the per-core UTILISATION pads. Run-queue
 +// SATURATION used to well up here as a radial heat pool, but it is now carried

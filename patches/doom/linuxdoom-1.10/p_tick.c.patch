@@ -66,8 +66,8 @@
 +// Doom Perf: the CPU core ring has 8 physical pillars (sector tags 201..208).
 +// Each tic we raise a pillar into a solid column if its core exists and sink
 +// it flush with the walkway otherwise, so exactly N pillars are visible (one
-+// per logical CPU in live mode, or 8 in the simulations). The heights match
-+// the pillar/walkway floors emitted by build-doomperf-map.mjs.
++// per logical CPU in live mode, or 8 in the simulations). Keep all eight
++// visible until per-core telemetry arrives. Heights match the map builder.
 +#define DOOMPERF_PILLAR_TAG_BASE	201
 +#define DOOMPERF_PILLAR_COUNT		8
 +#define DOOMPERF_PILLAR_TOP		(288 * FRACUNIT)
@@ -83,7 +83,7 @@
 +	effective = DOOMPERF_PILLAR_COUNT;
 +    else
 +    {
-+	effective = doomperf_cpu_core_count;
++	effective = doomperf_cpu_core_count > 0 ? doomperf_cpu_core_count : DOOMPERF_PILLAR_COUNT;
 +	if (effective > DOOMPERF_PILLAR_COUNT)
 +	    effective = DOOMPERF_PILLAR_COUNT;
 +    }

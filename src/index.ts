@@ -548,7 +548,14 @@ const pushTelemetryToEngine = (
   engine = cachedTelemetryEngine(engine, force);
   const displayCores = telemetry.cpu.cores.filter(({ id }) => id < doomPerfCpuCoreCapacity);
   const lastDisplayCore = displayCores.reduce((largest, { id }) => Math.max(largest, id), -1);
-  engine?._DoomPerf_SetCpuCoreCount?.(lastDisplayCore + 1);
+  // Some telemetry sources report aggregate CPU data before per-core samples.
+  // Keep the physical columns visible using the reported logical CPU count;
+  // when even that is unknown, show the room's full eight-column layout.
+  const reportedCores = Math.min(
+    doomPerfCpuCoreCapacity,
+    Math.max(0, Math.floor(telemetry.cpu.logicalCpus || 0))
+  );
+  engine?._DoomPerf_SetCpuCoreCount?.(Math.max(lastDisplayCore + 1, reportedCores) || 8);
   displayCores.forEach(({ id, utilization }) => {
     engine?._DoomPerf_SetCpuCore?.(id, Math.round(utilization * 1000));
   });

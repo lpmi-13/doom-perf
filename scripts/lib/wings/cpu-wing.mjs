@@ -35,9 +35,9 @@ import {
 
 const cpuCoreDisplay = {
   u1: -128,
-  v1: 992,
+  v1: 1040,
   u2: 128,
-  v2: 1248,
+  v2: 1296,
   light: 160,
 };
 const cpuCoreWallTexture = "DPCOLM";
@@ -54,7 +54,8 @@ const cpuCoreWallTexture = "DPCOLM";
 const ringCell = 48;
 const ringCells = 5;
 const ringU0 = -120;
-const ringV0 = 1000;
+const frameFrontV = 1000;
+const ringV0 = frameFrontV + ringCell;
 const ringOrder = [];
 for (let c = 0; c <= 4; c += 2) ringOrder.push([c, 0]);
 ringOrder.push([4, 2]);
@@ -200,13 +201,13 @@ const build = (ctx) => {
     // columns are seen rising into the sky from the raised overlook. STARTAN2 walls
     // keep the big courtyard surfaces varied against the COMPUTE1 core frame.
     const openSky = { ...frame, wall: "STARTAN2", ceiling: 288, ceilingFlat: "F_SKY1" };
-    areaRect(direction, "main-frame-south", { u1: cpuRoomBounds.main.u1, v1: cpuRoomBounds.main.v1, u2: cpuRoomBounds.main.u2, v2: ringV0 }, frame);
+    areaRect(direction, "main-frame-south", { u1: cpuRoomBounds.main.u1, v1: cpuRoomBounds.main.v1, u2: cpuRoomBounds.main.u2, v2: frameFrontV }, frame);
     // Behind the cores the chamber flares wider (rearU vs the +/-320 core area)
     // and leaves a flat breathing space before the stairs, so the overlook feels
     // open and the stairs aren't crammed up against the columns.
     const rearU = 368;                                    // rear half-width (core area stays +/-320)
-    const coreRearV = ringV0 + ringCells * ringCell;      // 1240: cores' north edge
-    const coreGap = 128;                                  // flat space between cores and stairs
+    const coreRearV = ringV0 + ringCells * ringCell;      // 1288: cores' north edge
+    const coreGap = 80;                                   // keep the stairs at their original position
     const stairBaseV = coreRearV + coreGap;               // 1368: foot of the stairs
     const stairCount = 8, stairRun = 24, stairRise = 16;
     const stairTopV = stairBaseV + stairCount * stairRun; // 1560: top landing / platform
@@ -239,8 +240,13 @@ const build = (ctx) => {
     });
     // West & east flanks beside the cores stay at ground level (no raised balcony)
     // so the cores aren't crowded and the side doorways + entrance stay reachable.
-    areaRect(direction, "core-flank-w", { u1: cpuRoomBounds.main.u1, v1: ringV0, u2: ringU0, v2: coreRearV }, openSky);
-    areaRect(direction, "core-flank-e", { u1: ringU0 + ringCells * ringCell, v1: ringV0, u2: cpuRoomBounds.main.u2, v2: coreRearV }, openSky);
+    areaRect(direction, "core-flank-w", { u1: cpuRoomBounds.main.u1, v1: frameFrontV, u2: ringU0, v2: coreRearV }, openSky);
+    areaRect(direction, "core-flank-e", { u1: ringU0 + ringCells * ringCell, v1: frameFrontV, u2: cpuRoomBounds.main.u2, v2: coreRearV }, openSky);
+    // A full pillar-width of clear floor separates the first row from the
+    // lower ceiling's wall band at the chamber entrance. This STARTAN2 sector
+    // also supplies the band's upper texture; a core-column here would put its
+    // DPCOLM streak texture onto the wall above the entrance.
+    areaRect(direction, "core-front-gap", { u1: ringU0, v1: frameFrontV, u2: ringU0 + ringCells * ringCell, v2: ringV0 }, openSky);
     // 5x5 platform grid: pillar cells (solid streak columns, tagged 101+i for
     // the renderer and 201+i for the sink hook) and walkway/gap cells.
     const ringFloor = {
