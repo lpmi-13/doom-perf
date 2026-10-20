@@ -3,7 +3,7 @@ name: doom-perf-c0bd32e1
 base: flexbox
 title: Doom Perf Lab
 description: Explore live host CPU/Memory/Disk/Network telemetry as an interactive Doom diagnostics lab. All the elements in the game react to system signals (eg, the cpu cores glow red when there's high utilization).
-cover: /content/files/playgrounds/doom-perf-c0bd32e1/__static__/title-screen.png?v=1789051139671
+cover: /content/files/playgrounds/doom-perf-c0bd32e1/__static__/title-screen.png?v=1790974845249
 categories:
     - linux
     - observability
@@ -94,7 +94,7 @@ playground:
                 You can also run checks via use-tool:
                   use-tool practice system
           drives:
-            - source: oci://ghcr.io/lpmi-13/doom-perf-rootfs:v19
+            - source: oci://ghcr.io/lpmi-13/doom-perf-rootfs:v20
               mount: /
               size: 20GiB
           network:
